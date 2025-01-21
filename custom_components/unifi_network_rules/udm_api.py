@@ -66,13 +66,24 @@ class UDMAPI:
             
             try:
                 session = await self._get_session()
-                async with session.post(url, json=data, ssl=False) as response:
+                _LOGGER.debug(f"Attempting login to {url}")
+                async with session.post(url, json=data, ssl=False, verify_ssl=False) as response:
+                    response_text = await response.text()
+                    _LOGGER.debug(f"Login response status: {response.status}, body: {response_text}")
+                    
                     if response.status == 200:
                         self.cookies = response.cookies
                         self.csrf_token = response.headers.get('x-csrf-token')
+                        
+                        if not self.csrf_token:
+                            _LOGGER.error("Login succeeded but no CSRF token received")
+                            return False, "No CSRF token in response"
+                            
+                        _LOGGER.debug(f"Received cookies: {self.cookies}")
+                        _LOGGER.debug(f"Received CSRF token: {self.csrf_token}")
+                        
                         self.last_login = datetime.now()
-                        _LOGGER.debug("Successfully logged in to UDM")
-                        return True, None
+                        _LOGGER.info("Successfully logged in to UDM")
                     elif response.status == 429:
                         error_message = "Rate limit exceeded. Waiting before retry."
                         _LOGGER.warning(error_message)
@@ -97,7 +108,12 @@ class UDMAPI:
 
         for attempt in range(self.max_retries):
             if not await self.ensure_logged_in():
+                _LOGGER.error(f"Failed to ensure logged in state before {method} request to {url}")
                 return False, None, "Failed to login"
+                
+            _LOGGER.debug(f"Making {method} request to {url} (attempt {attempt + 1}/{self.max_retries})")
+            _LOGGER.debug(f"Using CSRF token: {self.csrf_token}")
+            _LOGGER.debug(f"Using cookies: {self.cookies}")
 
             headers['x-csrf-token'] = self.csrf_token
             session = await self._get_session()
