@@ -4,10 +4,10 @@
     "codeowners": ["@sirkirby"],
     "config_flow": true,
     "dependencies": [],
-    "documentation": "https://github.com/sirkirby/ha_udm_rule_manager",
+    "documentation": "https://github.com/sirkirby/unifi-network-rules",
     "integration_type": "hub",
     "iot_class": "local_polling",    
-    "issue_tracker": "https://github.com/sirkirby/ha_udm_rule_manager/issues",
+    "issue_tracker": "https://github.com/sirkirby/unifi-network-rules/issues",
     "requirements": ["aiohttp"],
-    "version": "1.0.1"
+    "version": "1.0.2"
 }
