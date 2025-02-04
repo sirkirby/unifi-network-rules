@@ -17,13 +17,20 @@ class UDMAPI:
         self.retry_delay = retry_delay
         self.cookies = None
         self.csrf_token = None
-        self.device_token = None  # Added for UniFi OS 9.x auth
+        self.device_token = None
         self.last_login = None
         self.session_timeout = timedelta(minutes=30)
         self._login_lock = asyncio.Lock()
         self._session = None
         self._last_request_time = None
-        self._min_request_interval = 0.5
+        self._min_request_interval = 2.0  # Increased to 2 seconds
+        self._rate_limit_backoff = 5.0  # 5 second backoff for rate limits
+
+    def _is_session_expired(self):
+        """Check if the current session has expired."""
+        if not self.last_login:
+            return True
+        return datetime.now() - self.last_login > self.session_timeout
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create an aiohttp session."""
@@ -33,18 +40,20 @@ class UDMAPI:
         return self._session
 
     async def _rate_limit(self):
-        """Implement rate limiting between requests."""
+        """Implement rate limiting between requests with exponential backoff."""
         if self._last_request_time is not None:
             elapsed = datetime.now() - self._last_request_time
             if elapsed.total_seconds() < self._min_request_interval:
-                await asyncio.sleep(self._min_request_interval - elapsed.total_seconds())
+                wait_time = self._min_request_interval - elapsed.total_seconds()
+                _LOGGER.debug(f"Rate limiting: waiting {wait_time:.2f} seconds")
+                await asyncio.sleep(wait_time)
         self._last_request_time = datetime.now()
 
-    def _is_session_expired(self):
-        """Check if the current session has expired."""
-        if not self.last_login:
-            return True
-        return datetime.now() - self.last_login > self.session_timeout
+    async def _handle_rate_limit(self, attempt: int):
+        """Handle rate limit with exponential backoff."""
+        wait_time = self._rate_limit_backoff * (2 ** attempt)
+        _LOGGER.warning(f"Rate limit hit, waiting {wait_time:.2f} seconds before retry")
+        await asyncio.sleep(wait_time)
 
     async def ensure_logged_in(self) -> bool:
         """Ensure the API is logged in, refreshing the session if necessary."""
@@ -56,124 +65,100 @@ class UDMAPI:
         return True
 
     async def login(self):
-        """Log in to the UDM with UniFi OS 9.x compatible authentication."""
+        """Log in to the UDM with improved rate limit handling."""
         async with self._login_lock:
             if not self._is_session_expired() and self.device_token:
                 return True, None
 
-            await self._rate_limit()
-            
-            url = f"https://{self.host}/api/auth/login"
-            data = {"username": self.username, "password": self.password}
-            
-            try:
-                session = await self._get_session()
-                _LOGGER.debug(f"Attempting login to {url}")
+            for attempt in range(self.max_retries):
+                await self._rate_limit()
                 
-                async with session.post(url, json=data, ssl=False) as response:
-                    response_text = await response.text()
-                    _LOGGER.debug(f"Login response status: {response.status}")
-                    _LOGGER.debug(f"Login response headers: {dict(response.headers)}")
+                url = f"https://{self.host}/api/auth/login"
+                data = {"username": self.username, "password": self.password}
+                
+                try:
+                    session = await self._get_session()
+                    _LOGGER.debug(f"Attempting login (attempt {attempt + 1}/{self.max_retries})")
                     
-                    if response.status == 200:
-                        try:
-                            response_data = json.loads(response_text)
-                            self.device_token = response_data.get('deviceToken')
-                            if not self.device_token:
-                                _LOGGER.error("Login succeeded but no deviceToken in response")
-                                return False, "No deviceToken in response"
+                    async with session.post(url, json=data, ssl=False) as response:
+                        if response.status == 429:
+                            await self._handle_rate_limit(attempt)
+                            continue
                             
-                            _LOGGER.debug(f"Successfully obtained deviceToken")
-                            
-                            # Store cookies if needed
-                            self.cookies = {cookie.key: cookie.value for cookie in response.cookies.values()}
-                            
-                            # Store CSRF token if provided
-                            self.csrf_token = response.headers.get('x-csrf-token')
-                            
-                            self.last_login = datetime.now()
-                            _LOGGER.info("Successfully logged in to UDM")
-                            return True, None
-                            
-                        except json.JSONDecodeError:
-                            _LOGGER.error(f"Failed to parse login response: {response_text}")
-                            return False, "Invalid login response format"
-                            
-                    elif response.status == 429:
-                        error_message = "Rate limit exceeded. Waiting before retry."
-                        _LOGGER.warning(error_message)
-                        await asyncio.sleep(5)
-                        return False, error_message
-                    else:
-                        error_message = f"Login failed with status {response.status}"
-                        _LOGGER.error(f"{error_message}: {response_text}")
-                        return False, error_message
+                        response_text = await response.text()
                         
-            except aiohttp.ClientError as e:
-                error_message = f"Connection error during login: {str(e)}"
-                _LOGGER.error(error_message)
-                return False, error_message
-            except Exception as e:
-                error_message = f"Unexpected error during login: {str(e)}"
-                _LOGGER.exception(error_message)
-                return False, error_message
+                        if response.status == 200:
+                            try:
+                                response_data = json.loads(response_text)
+                                self.device_token = response_data.get('deviceToken')
+                                if not self.device_token:
+                                    return False, "No deviceToken in response"
+                                
+                                self.cookies = {cookie.key: cookie.value for cookie in response.cookies.values()}
+                                self.csrf_token = response.headers.get('x-csrf-token')
+                                self.last_login = datetime.now()
+                                
+                                _LOGGER.info("Successfully logged in to UDM")
+                                return True, None
+                                
+                            except json.JSONDecodeError as e:
+                                _LOGGER.error(f"Failed to parse login response: {str(e)}")
+                                return False, "Invalid login response format"
+                        
+                        error_message = f"Login failed with status {response.status}: {response_text}"
+                        _LOGGER.error(error_message)
+                        
+                        if response.status == 401:
+                            return False, "Invalid credentials"
+                            
+                except Exception as e:
+                    _LOGGER.error(f"Login attempt {attempt + 1} failed: {str(e)}")
+                    if attempt < self.max_retries - 1:
+                        await asyncio.sleep(self.retry_delay * (2 ** attempt))
+                        continue
+                    return False, f"Login failed after {self.max_retries} attempts"
+
+            return False, "Max retries reached"
 
     async def _make_authenticated_request(self, method: str, url: str, headers: Dict[str, str], json_data: Optional[Dict[str, Any]] = None) -> Tuple[bool, Any, Optional[str]]:
-        """Make an authenticated request with UniFi OS 9.x authentication."""
-        await self._rate_limit()
-
+        """Make authenticated request with improved error handling."""
         for attempt in range(self.max_retries):
-            if not await self.ensure_logged_in():
-                _LOGGER.error(f"Failed to ensure logged in state before {method} request to {url}")
-                return False, None, "Failed to login"
-                
-            _LOGGER.debug(f"Making {method} request to {url} (attempt {attempt + 1}/{self.max_retries})")
+            await self._rate_limit()
             
-            # Add authentication headers
+            if not await self.ensure_logged_in():
+                return False, None, "Failed to ensure logged in state"
+            
             headers['Authorization'] = f'Bearer {self.device_token}'
             if self.csrf_token:
                 headers['x-csrf-token'] = self.csrf_token
             
             if json_data:
                 headers['Content-Type'] = 'application/json'
-                
-            session = await self._get_session()
             
             try:
-                _LOGGER.debug(f"Request headers: {headers}")
-                
+                session = await self._get_session()
                 async with getattr(session, method)(url, headers=headers, json=json_data, cookies=self.cookies, ssl=False) as response:
                     if response.status == 200:
                         return True, await response.json(), None
-                    elif response.status == 401:
-                        _LOGGER.warning(f"Authentication failed (attempt {attempt + 1})")
-                        # Clear tokens to force new login
-                        self.device_token = None
-                        self.csrf_token = None
-                        if attempt < self.max_retries - 1:
-                            await asyncio.sleep(self.retry_delay)
-                            continue
-                    elif response.status == 429:
-                        _LOGGER.warning("Rate limit hit, waiting before retry")
-                        await asyncio.sleep(5)
+                        
+                    if response.status == 429:
+                        await self._handle_rate_limit(attempt)
                         continue
+                        
+                    if response.status == 401:
+                        self.device_token = None  # Force re-auth
+                        if attempt < self.max_retries - 1:
+                            continue
                     
                     error_text = await response.text()
-                    error_message = f"Request failed. Status: {response.status}, Response: {error_text}"
-                    _LOGGER.error(error_message)
-                    return False, None, error_message
-
-            except aiohttp.ClientError as e:
-                error_message = f"Connection error: {str(e)}"
-                _LOGGER.error(error_message)
-                if attempt < self.max_retries - 1:
-                    await asyncio.sleep(self.retry_delay)
-                    continue
-                return False, None, error_message
+                    return False, None, f"Request failed. Status: {response.status}, Response: {error_text}"
+                    
             except Exception as e:
-                error_message = f"Unexpected error: {str(e)}"
-                _LOGGER.exception(error_message)
-                return False, None, error_message
+                _LOGGER.error(f"Request attempt {attempt + 1} failed: {str(e)}")
+                if attempt < self.max_retries - 1:
+                    await asyncio.sleep(self.retry_delay * (2 ** attempt))
+                    continue
+                return False, None, str(e)
 
         return False, None, "Max retries reached"
 
