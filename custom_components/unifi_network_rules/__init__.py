@@ -1,7 +1,7 @@
 """Support for UniFi Network Rules."""
 import asyncio
 import logging
-from datetime import timedelta
+from datetime import timedelta, datetime
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -30,115 +30,102 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the UniFi Network Rules component."""
+    _LOGGER.debug("Starting async_setup")
     hass.data.setdefault(DOMAIN, {})
     return True
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up UniFi Network Rules from a config entry."""
-    _LOGGER.debug("Setting up UniFi Network Rules config entry")
+    _LOGGER.debug("Starting async_setup_entry")
     
     host = entry.data[CONF_HOST]
     username = entry.data[CONF_USERNAME]
     password = entry.data[CONF_PASSWORD]
     update_interval = entry.data.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
-    max_retries = entry.data.get(CONF_MAX_RETRIES, DEFAULT_MAX_RETRIES)
-    retry_delay = entry.data.get(CONF_RETRY_DELAY, DEFAULT_RETRY_DELAY)
 
-    api = UDMAPI(host, username, password, max_retries=max_retries, retry_delay=retry_delay)
+    _LOGGER.debug("Creating UDMAPI instance")
+    api = UDMAPI(host, username, password)
     
-    # Test the connection with quick auth check
+    # Basic login check
     try:
-        success, error = await api.quick_auth_check()
+        _LOGGER.debug("Attempting initial login")
+        success, error = await api.login()
         if not success:
+            _LOGGER.error(f"Initial login failed: {error}")
             await api.cleanup()
-            _LOGGER.error(f"Failed to connect to UDM: {error}")
-            raise ConfigEntryNotReady(f"Failed to connect to UDM: {error}")
+            raise ConfigEntryNotReady(f"Login failed: {error}")
     except Exception as e:
+        _LOGGER.exception("Exception during login")
         await api.cleanup()
-        _LOGGER.exception("Error during setup")
-        raise ConfigEntryNotReady(f"Setup failed: {str(e)}") from e
+        raise ConfigEntryNotReady(f"Login failed: {str(e)}") from e
 
     async def async_update_data():
         """Fetch data from API."""
+        _LOGGER.debug("Starting data update")
         try:
-            # Add delay between requests
             policies_success, policies, policies_error = await api.get_firewall_policies()
             if not policies_success:
-                raise Exception(f"Failed to fetch firewall policies: {policies_error}")
-                
-            await asyncio.sleep(2)  # Wait between requests
-            
-            routes_success, traffic_routes, routes_error = await api.get_traffic_routes()
+                _LOGGER.error(f"Failed to fetch policies: {policies_error}")
+                raise Exception(f"Failed to fetch policies: {policies_error}")
+
+            routes_success, routes, routes_error = await api.get_traffic_routes()
             if not routes_success:
-                raise Exception(f"Failed to fetch traffic routes: {routes_error}")
+                _LOGGER.error(f"Failed to fetch routes: {routes_error}")
+                raise Exception(f"Failed to fetch routes: {routes_error}")
 
             return {
                 "firewall_policies": policies,
-                "traffic_routes": traffic_routes
+                "traffic_routes": routes
             }
         except Exception as e:
-            _LOGGER.error(f"Error updating data: {str(e)}")
+            _LOGGER.exception("Error in update_data")
             raise
 
+    _LOGGER.debug("Creating coordinator")
     coordinator = DataUpdateCoordinator(
         hass,
         _LOGGER,
         name="udm_rule_manager",
         update_method=async_update_data,
-        update_interval=timedelta(minutes=max(update_interval, 15)),
+        update_interval=timedelta(minutes=update_interval),
     )
 
-    # Store api and coordinator
+    # Store API and coordinator
+    _LOGGER.debug("Storing API and coordinator")
     hass.data[DOMAIN][entry.entry_id] = {
         'api': api,
         'coordinator': coordinator,
     }
 
-    # Register cleanup for config entry
+    # Set up platform first
+    _LOGGER.debug("Setting up platform")
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Register cleanup
+    _LOGGER.debug("Registering cleanup")
     entry.async_on_unload(
         lambda: hass.async_create_task(cleanup_api(hass, entry))
     )
-
-    # Set up platforms
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    # Initial data fetch
-    try:
-        _LOGGER.debug("Performing initial data refresh")
-        await coordinator.async_config_entry_first_refresh()
-    except Exception as err:
-        _LOGGER.error(f"Initial data refresh failed: {err}")
-        await cleanup_api(hass, entry)
-        raise ConfigEntryNotReady from err
 
     return True
 
 async def cleanup_api(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Clean up API resources."""
+    _LOGGER.debug("Starting cleanup")
     if DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
         api = hass.data[DOMAIN][entry.entry_id].get('api')
         if api is not None:
-            try:
-                await api.cleanup()
-            except Exception as e:
-                _LOGGER.error(f"Error during API cleanup: {e}")
+            await api.cleanup()
+    _LOGGER.debug("Cleanup complete")
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    _LOGGER.debug("Unloading UniFi Network Rules config entry")
-    
-    # Unload platforms
+    _LOGGER.debug("Starting unload")
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     
     if unload_ok:
-        # Clean up API
         await cleanup_api(hass, entry)
-        # Remove entry data
         hass.data[DOMAIN].pop(entry.entry_id)
-
+    
+    _LOGGER.debug("Unload complete")
     return unload_ok
-
-async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload config entry."""
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
