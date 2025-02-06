@@ -49,7 +49,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Basic login check
     try:
         _LOGGER.debug("Attempting initial login")
-        success, error = await api.login()
+        success, error = await api.authenticate_session()
         if not success:
             _LOGGER.error(f"Initial login failed: {error}")
             await api.cleanup()
@@ -103,20 +103,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Register cleanup
     _LOGGER.debug("Registering cleanup")
-    entry.async_on_unload(
-        lambda: hass.async_create_task(cleanup_api(hass, entry))
-    )
+    entry.async_on_unload(cleanup_api(hass, entry))
 
     return True
 
-async def cleanup_api(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Clean up API resources."""
-    _LOGGER.debug("Starting cleanup")
-    if DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
-        api = hass.data[DOMAIN][entry.entry_id].get('api')
-        if api is not None:
-            await api.cleanup()
-    _LOGGER.debug("Cleanup complete")
+def cleanup_api(hass: HomeAssistant, entry: ConfigEntry):
+    """Create cleanup callback that can be used as an on_unload handler."""
+    async def _async_cleanup():
+        """Clean up API resources."""
+        _LOGGER.debug("Starting cleanup")
+        if DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
+            api = hass.data[DOMAIN][entry.entry_id].get('api')
+            if api is not None:
+                await api.cleanup()
+        _LOGGER.debug("Cleanup complete")
+
+    return _async_cleanup
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
@@ -124,8 +126,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     
     if unload_ok:
-        await cleanup_api(hass, entry)
-        hass.data[DOMAIN].pop(entry.entry_id)
+        if DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
+            api = hass.data[DOMAIN][entry.entry_id].get('api')
+            if api is not None:
+                await api.cleanup()
+            hass.data[DOMAIN].pop(entry.entry_id)
     
     _LOGGER.debug("Unload complete")
     return unload_ok
