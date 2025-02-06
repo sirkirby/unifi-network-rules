@@ -32,7 +32,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             entities.append(UDMTrafficRouteSwitch(coordinator, api, route))
 
     async_add_entities(entities)
-
+    
 class UDMTrafficRouteSwitch(CoordinatorEntity, SwitchEntity):
     """Representation of a UDM Traffic Route Switch."""
 
@@ -149,6 +149,7 @@ class UDMFirewallPolicySwitch(CoordinatorEntity, SwitchEntity):
     """Representation of a UDM Firewall Policy Switch."""
 
     def __init__(self, coordinator, api, policy):
+        """Initialize the UDM Firewall Policy Switch."""
         super().__init__(coordinator)
         self._api = api
         self._attr_unique_id = f"firewall_policy_{policy['_id']}"
@@ -220,23 +221,37 @@ class UDMFirewallPolicySwitch(CoordinatorEntity, SwitchEntity):
         """Verify that the state change was successful."""
         for attempt in range(max_attempts):
             await self.coordinator.async_request_refresh()
-            if self._policy.get('enabled') == target_state:
-                _LOGGER.info("State change verified for %s", self._attr_name)
+            current_state = self._policy.get('enabled', False)
+            
+            if current_state == target_state:
+                _LOGGER.info("State change verified for %s - Target: %s, Current: %s", 
+                           self._attr_name, target_state, current_state)
                 return True
+                
             _LOGGER.warning(
-                "State verification attempt %d failed for %s. Expected: %s, Got: %s",
+                "State verification attempt %d/%d failed for %s. Expected: %s, Got: %s",
                 attempt + 1,
+                max_attempts,
                 self._attr_name,
                 target_state,
-                self._policy.get('enabled')
+                current_state
             )
             await asyncio.sleep(2)
+        
+        # Only return False if we've exhausted all attempts and the states don't match
         return False
 
     async def _toggle(self, new_state: bool) -> None:
         """Toggle the policy state."""
         try:
-            _LOGGER.info("Current policy state: %s", self._policy)
+            _LOGGER.info("Attempting to toggle %s to %s", self._attr_name, new_state)
+            current_state = self._policy.get('enabled', False)
+            
+            # If the current state already matches the target state, no need to toggle
+            if current_state == new_state:
+                _LOGGER.info("%s is already in desired state: %s", self._attr_name, new_state)
+                return
+            
             self._pending_state = new_state
             self.async_write_ha_state()
 
@@ -251,8 +266,7 @@ class UDMFirewallPolicySwitch(CoordinatorEntity, SwitchEntity):
                 else:
                     self._pending_state = None
                     raise HomeAssistantError(
-                        f"Failed to verify state change for {self._attr_name}. "
-                        f"Target state: {new_state}, Current state: {self._policy.get('enabled')}"
+                        f"Failed to verify state change for {self._attr_name} after multiple attempts"
                     )
             else:
                 self._pending_state = None

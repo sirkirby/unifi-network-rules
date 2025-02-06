@@ -81,7 +81,7 @@ class UDMAPI:
             _LOGGER.debug("Session expired: Timed out")
             return True
 
-        _LOGGER.debug("Session is no longer valid")
+        _LOGGER.debug("Session is valid")
         return False
 
 
