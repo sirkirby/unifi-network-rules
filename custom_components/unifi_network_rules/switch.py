@@ -44,14 +44,29 @@ class UDMTrafficRouteSwitch(CoordinatorEntity, SwitchEntity):
         self._attr_name = f"Traffic Route: {route.get('description', 'Unnamed')}"
         self._route_id = route['_id']
         self._route = route
+        self._pending_state = None
+        self._state_update_time = None
         _LOGGER.info("Initialized traffic route switch: %s (ID: %s)", self._attr_name, self._route_id)
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         routes = self.coordinator.data.get('traffic_routes', [])
-        self._route = next((r for r in routes if r['_id'] == self._route_id), None)
-        _LOGGER.debug("Updated route data for %s: %s", self._attr_name, self._route)
+        new_route = next((r for r in routes if r.get('_id') == self._route_id), None)
+        
+        if new_route:
+            if self._route.get('enabled') != new_route.get('enabled'):
+                _LOGGER.info(
+                    "State change detected for %s: %s -> %s", 
+                    self._attr_name, 
+                    self._route.get('enabled'), 
+                    new_route.get('enabled')
+                )
+            self._route = new_route
+            self._pending_state = None
+        else:
+            _LOGGER.warning("Route %s not found in coordinator data", self._route_id)
+            
         self.async_write_ha_state()
 
     @property
@@ -64,6 +79,8 @@ class UDMTrafficRouteSwitch(CoordinatorEntity, SwitchEntity):
     @property
     def is_on(self) -> bool:
         """Return true if the switch is on."""
+        if self._pending_state is not None:
+            return self._pending_state
         if not self._route:
             _LOGGER.warning("No route data available for %s", self._attr_name)
             return False
@@ -79,19 +96,52 @@ class UDMTrafficRouteSwitch(CoordinatorEntity, SwitchEntity):
         _LOGGER.info("Turning off switch: %s", self._attr_name)
         await self._toggle(False)
 
+    async def _verify_state_change(self, target_state: bool, max_attempts: int = 3) -> bool:
+        """Verify that the state change was successful."""
+        for attempt in range(max_attempts):
+            await self.coordinator.async_request_refresh()
+            if self._route.get('enabled') == target_state:
+                _LOGGER.info("State change verified for %s", self._attr_name)
+                return True
+            _LOGGER.warning(
+                "State verification attempt %d failed for %s. Expected: %s, Got: %s",
+                attempt + 1,
+                self._attr_name,
+                target_state,
+                self._route.get('enabled')
+            )
+            await asyncio.sleep(2)
+        return False
+
     async def _toggle(self, new_state: bool) -> None:
         """Toggle the route state."""
         try:
-            _LOGGER.info("Attempting to toggle %s to %s", self._attr_name, new_state)
+            _LOGGER.info("Current route state: %s", self._route)
+            self._pending_state = new_state
+            self.async_write_ha_state()
+
             success, error_message = await self._api.toggle_traffic_route(self._route_id, new_state)
             
             if success:
-                _LOGGER.info("Successfully toggled %s to %s", self._attr_name, new_state)
-                await self.coordinator.async_request_refresh()
+                _LOGGER.info("API reports successful toggle for %s", self._attr_name)
+                
+                # Verify the state change
+                if await self._verify_state_change(new_state):
+                    _LOGGER.info("Successfully verified state change for %s", self._attr_name)
+                else:
+                    self._pending_state = None
+                    raise HomeAssistantError(
+                        f"Failed to verify state change for {self._attr_name}. "
+                        f"Target state: {new_state}, Current state: {self._route.get('enabled')}"
+                    )
             else:
-                _LOGGER.error("Failed to toggle %s: %s", self._attr_name, error_message)
+                self._pending_state = None
+                self.async_write_ha_state()
                 raise HomeAssistantError(f"Failed to toggle traffic route: {error_message}")
+                
         except Exception as e:
+            self._pending_state = None
+            self.async_write_ha_state()
             _LOGGER.exception("Error toggling %s", self._attr_name)
             raise HomeAssistantError(f"Error toggling traffic route: {str(e)}")
 
@@ -105,6 +155,8 @@ class UDMFirewallPolicySwitch(CoordinatorEntity, SwitchEntity):
         self._attr_name = f"Firewall Policy: {policy.get('name', 'Unnamed')}"
         self._policy_id = policy['_id']
         self._policy = policy
+        self._pending_state = None
+        self._state_update_time = None
         _LOGGER.info("Initialized firewall policy switch: %s (ID: %s)", self._attr_name, self._policy_id)
 
     def get_policy(self):
@@ -121,8 +173,20 @@ class UDMFirewallPolicySwitch(CoordinatorEntity, SwitchEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        self._policy = self.get_policy()
-        _LOGGER.debug("Updated policy data for %s: %s", self._attr_name, self._policy)
+        new_policy = self.get_policy()
+        if new_policy:
+            if self._policy.get('enabled') != new_policy.get('enabled'):
+                _LOGGER.info(
+                    "State change detected for %s: %s -> %s", 
+                    self._attr_name, 
+                    self._policy.get('enabled'), 
+                    new_policy.get('enabled')
+                )
+            self._policy = new_policy
+            self._pending_state = None
+        else:
+            _LOGGER.warning("Policy %s not found in coordinator data", self._policy_id)
+            
         self.async_write_ha_state()
 
     @property
@@ -135,6 +199,8 @@ class UDMFirewallPolicySwitch(CoordinatorEntity, SwitchEntity):
     @property
     def is_on(self) -> bool:
         """Return true if the switch is on."""
+        if self._pending_state is not None:
+            return self._pending_state
         if not self._policy:
             _LOGGER.warning("No policy data available for %s", self._attr_name)
             return False
@@ -150,27 +216,51 @@ class UDMFirewallPolicySwitch(CoordinatorEntity, SwitchEntity):
         _LOGGER.info("Turning off switch: %s", self._attr_name)
         await self._toggle(False)
 
+    async def _verify_state_change(self, target_state: bool, max_attempts: int = 3) -> bool:
+        """Verify that the state change was successful."""
+        for attempt in range(max_attempts):
+            await self.coordinator.async_request_refresh()
+            if self._policy.get('enabled') == target_state:
+                _LOGGER.info("State change verified for %s", self._attr_name)
+                return True
+            _LOGGER.warning(
+                "State verification attempt %d failed for %s. Expected: %s, Got: %s",
+                attempt + 1,
+                self._attr_name,
+                target_state,
+                self._policy.get('enabled')
+            )
+            await asyncio.sleep(2)
+        return False
+
     async def _toggle(self, new_state: bool) -> None:
         """Toggle the policy state."""
         try:
             _LOGGER.info("Current policy state: %s", self._policy)
-            _LOGGER.info("Attempting to toggle %s to %s", self._attr_name, new_state)
+            self._pending_state = new_state
+            self.async_write_ha_state()
+
             success, error_message = await self._api.toggle_firewall_policy(self._policy_id, new_state)
             
             if success:
-                _LOGGER.info("Successfully toggled %s to %s", self._attr_name, new_state)
-                await self.coordinator.async_request_refresh()
+                _LOGGER.info("API reports successful toggle for %s", self._attr_name)
                 
-                await asyncio.sleep(1)  # Give time for refresh
-                updated_policy = self.get_policy()
-                _LOGGER.info("Post-refresh policy state: %s", updated_policy)
-                
-                if not updated_policy or updated_policy.get('enabled') != new_state:
-                    _LOGGER.error("State mismatch after coordinator refresh")
-                    raise HomeAssistantError(f"State verification failed for {self._attr_name}")
+                # Verify the state change
+                if await self._verify_state_change(new_state):
+                    _LOGGER.info("Successfully verified state change for %s", self._attr_name)
+                else:
+                    self._pending_state = None
+                    raise HomeAssistantError(
+                        f"Failed to verify state change for {self._attr_name}. "
+                        f"Target state: {new_state}, Current state: {self._policy.get('enabled')}"
+                    )
             else:
-                _LOGGER.error("Failed to toggle %s: %s", self._attr_name, error_message)
+                self._pending_state = None
+                self.async_write_ha_state()
                 raise HomeAssistantError(f"Failed to toggle firewall policy: {error_message}")
+                
         except Exception as e:
+            self._pending_state = None
+            self.async_write_ha_state()
             _LOGGER.exception("Error toggling %s", self._attr_name)
             raise HomeAssistantError(f"Error toggling firewall policy: {str(e)}")

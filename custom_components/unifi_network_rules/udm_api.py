@@ -1,3 +1,4 @@
+"""UDM API for controlling UniFi Dream Machine."""
 import aiohttp
 import asyncio
 import logging
@@ -23,6 +24,7 @@ class UDMAPI:
         self._session_timeout = timedelta(minutes=15)
         self._last_login: Optional[datetime] = None
         self._last_successful_request: Optional[datetime] = None
+        self._force_reauth_after = timedelta(minutes=10)  # Force reauth after 10 minutes of inactivity
         
         # Authentication state
         self._device_token: Optional[str] = None
@@ -69,20 +71,20 @@ class UDMAPI:
     def _is_session_expired(self) -> bool:
         """Check if the current session has expired."""
         now = datetime.now()
-        
-        if not self._last_login or not self._device_token or not self._csrf_token:
-            _LOGGER.debug("Session expired: Missing basic authentication components")
+
+        # Ensure at least one form of authentication exists
+        if not self._cookies.get("TOKEN"):
+            _LOGGER.debug("Session expired: Missing authentication cookie")
             return True
-            
-        if now - self._last_login > self._session_timeout:
-            _LOGGER.debug("Session expired: Exceeded session timeout")
+
+        # Extend session lifespan check
+        if self._last_login and (now - self._last_login) > timedelta(minutes=15):
+            _LOGGER.debug("Session expired: Timed out")
             return True
-            
-        if self._last_successful_request and now - self._last_successful_request > timedelta(minutes=10):
-            _LOGGER.debug("Session expired: Inactivity timeout")
-            return True
-            
+
+        _LOGGER.debug("Session is still valid, skipping re-authentication")
         return False
+
 
     def _get_base_headers(self) -> Dict[str, str]:
         """Get base headers for requests."""
@@ -95,11 +97,18 @@ class UDMAPI:
         return headers
 
     def _get_proxy_headers(self) -> Dict[str, str]:
-        """Get headers for proxy endpoints."""
-        headers = self._get_base_headers()
-        if self._csrf_token:
-            headers['x-csrf-token'] = self._csrf_token
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",  # 🔥 FIXED: Added Accept header
+            "X-CSRF-Token": self._csrf_token or "",  # Ensure CSRF token is included
+        }
+
+        if "TOKEN" in self._cookies:
+            headers["Cookie"] = f"TOKEN={self._cookies['TOKEN']}"
+
+        _LOGGER.debug(f"Using headers: {headers}")
         return headers
+
 
     async def _authenticate_session(self) -> Tuple[bool, Optional[str]]:
         """Authenticate and get session token."""
@@ -161,107 +170,95 @@ class UDMAPI:
         """Ensure we have a valid authentication session."""
         async with self._login_lock:
             if self._is_session_expired():
-                _LOGGER.debug("Session expired or invalid, performing fresh login")
-                return await self.login()
-            
-            if self._last_successful_request:
-                time_since_success = datetime.now() - self._last_successful_request
-                if time_since_success > timedelta(seconds=30):
-                    _LOGGER.debug("Last successful request too old, performing fresh login")
-                    return await self.login()
-            
+                _LOGGER.debug("Session expired, but checking for valid authentication cookie.")
+
+                # If we have a valid TOKEN cookie, assume session is still valid
+                if self._cookies.get("TOKEN"):
+                    _LOGGER.debug("Session cookie is present, skipping re-authentication.")
+                    return True, None
+
+                # If no valid session, attempt re-authentication
+                _LOGGER.debug("No valid session cookie, performing re-authentication.")
+                success, error = await self.login()
+                return success, error
             return True, None
 
+
     async def login(self) -> Tuple[bool, Optional[str]]:
-        """Log in to the UDM."""
-        async with self._login_lock:
-            if not self._is_session_expired():
-                return True, None
+        """Log in and retrieve authentication tokens, ensuring they persist."""
+        _LOGGER.debug("Starting authentication process")
 
-            await self._wait_for_next_request()
-            success, error = await self._authenticate_session()
-            
-            if success:
-                self._last_login = datetime.now()
-                self._last_successful_request = datetime.now()
-                _LOGGER.info("Successfully logged in to UDM")
-            else:
-                _LOGGER.error(f"Login failed: {error}")
-            
-            return success, error
+        session = await self._get_session()
+        url = f"https://{self.host}/api/auth/login"
+        data = {"username": self.username, "password": self.password}
 
-    async def _make_authenticated_request(
-        self, 
-        method: str, 
-        url: str, 
-        json_data: Optional[Dict[str, Any]] = None
-    ) -> Tuple[bool, Any, Optional[str]]:
-        """Make an authenticated request with improved session handling."""
+        try:
+            async with session.post(url, json=data) as response:
+                response_text = await response.text()
+                if response.status == 200:
+                    response_json = json.loads(response_text)
+
+                    # Extract CSRF token and cookies from response headers
+                    self._csrf_token = response.headers.get("x-csrf-token", "")
+                    self._cookies = {cookie.key: cookie.value for cookie in session.cookie_jar}
+
+                    _LOGGER.debug(f"Captured CSRF Token after login: {self._csrf_token}")
+
+                    self._last_login = datetime.now()
+
+                    _LOGGER.debug(f"Authentication successful - CSRF Token: {self._csrf_token}")
+                    _LOGGER.debug(f"Stored Cookies: {self._cookies}")
+
+                    return True, None
+                else:
+                    _LOGGER.warning(f"Authentication failed: {response.status}, {response_text}")
+                    return False, f"Authentication failed: {response.status}"
+        except Exception as e:
+            _LOGGER.error(f"Login request error: {str(e)}")
+            return False, str(e)
+
+    async def _make_authenticated_request(self, method: str, url: str, json_data: Optional[Dict[str, Any]] = None) -> Tuple[bool, Any, Optional[str]]:
+        """Make an authenticated request with correct headers."""
         async with self._request_lock:
             await self._wait_for_next_request()
 
             for attempt in range(self.max_retries):
                 try:
-                    if attempt == 0 and self._is_session_expired():
+                    if self._is_session_expired():
                         _LOGGER.debug("Session expired, attempting reauth")
                         success, error = await self.login()
                         if not success:
                             return False, None, f"Authentication failed: {error}"
-                    elif attempt > 0:
-                        _LOGGER.debug(f"Retry attempt {attempt}, forcing reauth")
-                        success, error = await self.login()
-                        if not success:
-                            return False, None, f"Authentication failed on retry: {error}"
 
                     session = await self._get_session()
                     headers = self._get_proxy_headers()
-                    cookies = {'TOKEN': self._cookies.get('TOKEN', '')}
-                    
-                    async with session.request(
-                        method, 
-                        url, 
-                        headers=headers,
-                        cookies=cookies,
-                        json=json_data,
-                        timeout=ClientTimeout(total=30)
-                    ) as response:
+
+                    async with session.request(method, url, headers=headers, json=json_data) as response:
                         response_text = await response.text()
-                        
+
                         if response.status == 200:
                             self._last_successful_request = datetime.now()
-                            try:
-                                return True, json.loads(response_text), None
-                            except json.JSONDecodeError as e:
-                                return False, None, f"Invalid JSON response: {str(e)}"
-                        
+                            return True, json.loads(response_text), None
+
                         if response.status in [401, 403]:
-                            _LOGGER.debug(f"Got {response.status}, clearing session state")
-                            self._device_token = None
-                            self._csrf_token = None
-                            self._cookies = {}
-                            self._last_login = None
-                            self._last_successful_request = None
-                            
+                            _LOGGER.warning(f"Received {response.status}: {response_text}")
+                            _LOGGER.warning(f"CSRF token before re-auth: {self._csrf_token}")
+
                             if attempt < self.max_retries - 1:
-                                await asyncio.sleep(self.retry_delay * (attempt + 1))
+                                await asyncio.sleep(self.retry_delay)
                                 continue
-                        
+
                         return False, None, f"Request failed: {response.status}, {response_text}"
 
-                except asyncio.TimeoutError:
-                    _LOGGER.error(f"Request timeout on attempt {attempt + 1}")
-                    if attempt < self.max_retries - 1:
-                        await asyncio.sleep(self.retry_delay * (attempt + 1))
-                        continue
-                    return False, None, "Request timeout after all retries"
                 except Exception as e:
-                    _LOGGER.error(f"Request error on attempt {attempt + 1}: {str(e)}")
+                    _LOGGER.error(f"Request error: {str(e)}")
                     if attempt < self.max_retries - 1:
-                        await asyncio.sleep(self.retry_delay * (attempt + 1))
+                        await asyncio.sleep(self.retry_delay)
                         continue
                     return False, None, str(e)
 
             return False, None, "Max retries reached"
+
 
     async def get_firewall_policies(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch firewall policies from the UDM."""
@@ -272,35 +269,6 @@ class UDMAPI:
         url = f"https://{self.host}/proxy/network/v2/api/site/default/firewall-policies"
         return await self._make_authenticated_request('get', url)
 
-    async def get_firewall_policy(self, policy_id: str) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
-        """Fetch a specific firewall policy from the UDM."""
-        auth_success, auth_error = await self.ensure_authenticated()
-        if not auth_success:
-            return False, None, f"Authentication failed: {auth_error}"
-            
-        url = f"https://{self.host}/proxy/network/v2/api/site/default/firewall-policies/{policy_id}"
-        return await self._make_authenticated_request('get', url)
-
-    async def toggle_firewall_policy(self, policy_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
-        """Toggle a firewall policy."""
-        url = f"https://{self.host}/proxy/network/v2/api/site/default/firewall-policies/{policy_id}"
-        _LOGGER.info("Fetching current policy state from URL: %s", url)
-        success, policy, error = await self._make_authenticated_request('get', url)
-        _LOGGER.info("GET response - Success: %s, Policy: %s, Error: %s", success, policy, error)
-        
-        if not success or not policy:
-            return False, f"Failed to fetch policy: {error}"
-
-        policy['enabled'] = enabled
-        _LOGGER.info("Sending PUT request with policy: %s", policy)
-        success, response, error = await self._make_authenticated_request('put', url, policy)
-        _LOGGER.info("PUT response - Success: %s, Response: %s, Error: %s", success, response, error)
-        
-        if success:
-            _LOGGER.info(f"Toggled firewall policy {policy_id} to {'on' if enabled else 'off'}")
-            return True, None
-        return False, f"Failed to update policy: {error}"
-
     async def get_traffic_routes(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch all traffic routes from the UDM."""
         auth_success, auth_error = await self.ensure_authenticated()
@@ -310,35 +278,58 @@ class UDMAPI:
         url = f"https://{self.host}/proxy/network/v2/api/site/default/trafficroutes"
         return await self._make_authenticated_request('get', url)
 
-    async def toggle_traffic_route(self, route_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
-        """Toggle a traffic route.
+    async def toggle_firewall_policy(self, policy_id: str, enabled: bool):
+        """Toggle a firewall policy on or off."""
+        url = f"https://{self.host}/proxy/network/v2/api/site/default/firewall-policies/batch"
+        payload = [{"_id": policy_id, "enabled": enabled}]
 
-        Note: The UDM API doesn't support getting individual traffic routes.
-        We must get all routes, find the target route, modify it, and PUT it back.
-        """
-        # Get all routes first
-        success, routes, error = await self.get_traffic_routes()
-        if not success or not routes:
-            return False, f"Failed to fetch routes: {error}"
+        _LOGGER.info("Sending firewall policy toggle request: %s", payload)
 
-        # Find our target route
-        route = next((r for r in routes if r.get('_id') == route_id), None)
-        if not route:
-            return False, f"Route with id {route_id} not found"
-
-        # Update only the enabled status
-        route['enabled'] = enabled
-
-        # PUT the updated route back
-        url = f"https://{self.host}/proxy/network/v2/api/site/default/trafficroutes/{route_id}"
-        _LOGGER.info("Sending PUT request to %s with route: %s", url, route)
-        success, response, error = await self._make_authenticated_request('put', url, route)
+        success, response, error = await self._make_authenticated_request('put', url, payload)
         _LOGGER.info("PUT response - Success: %s, Response: %s, Error: %s", success, response, error)
 
+        if not success:
+            _LOGGER.error("Failed to toggle firewall policy %s: %s", policy_id, error)
+            if response:
+                _LOGGER.error("Response content: %s", await response.text())
+            return False, error
+
+        _LOGGER.info("Toggled firewall policy %s to %s successfully", policy_id, enabled)
+        return True, None
+
+    async def toggle_traffic_route(self, route_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
+        """Toggle a traffic route."""
+        # First get all traffic routes
+        all_routes_url = f"https://{self.host}/proxy/network/v2/api/site/default/trafficroutes"
+        _LOGGER.info("Fetching all routes from URL: %s", all_routes_url)
+        success, all_routes, error = await self._make_authenticated_request('get', all_routes_url)
+        _LOGGER.info("GET all routes response - Success: %s, Total Routes: %s, Error: %s", 
+                    success, len(all_routes) if all_routes else 0, error)
+        
+        if not success or not all_routes:
+            _LOGGER.error("Failed to fetch all routes: %s", error)
+            return False, f"Failed to fetch all routes: {error}"
+
+        # Find our specific route
+        route = next((r for r in all_routes if r.get('_id') == route_id), None)
+        if not route:
+            _LOGGER.error("Route ID %s not found in routes list", route_id)
+            return False, f"Route ID {route_id} not found"
+
+        # Create updated route with new enabled state
+        updated_route = dict(route)
+        updated_route['enabled'] = enabled
+        
+        # PUT the update back
+        update_url = f"{all_routes_url}/{route_id}"
+        _LOGGER.info("Sending PUT request to %s with route: %s", update_url, updated_route)
+        success, response, error = await self._make_authenticated_request('put', update_url, updated_route)
+        _LOGGER.info("PUT response - Success: %s, Response: %s, Error: %s", success, response, error)
+        
         if success:
             _LOGGER.info(f"Toggled traffic route {route_id} to {'on' if enabled else 'off'}")
             return True, None
-
+            
         return False, f"Failed to update route: {error}"
 
     async def cleanup(self):
