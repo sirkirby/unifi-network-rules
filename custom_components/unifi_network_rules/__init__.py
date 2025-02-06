@@ -49,7 +49,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Basic login check
     try:
         _LOGGER.debug("Attempting initial login")
-        success, error = await api.login()
+        success, error = await api.authenticate_session()
         if not success:
             _LOGGER.error(f"Initial login failed: {error}")
             await api.cleanup()

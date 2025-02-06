@@ -21,10 +21,9 @@ class UDMAPI:
         # Session management
         self._session: Optional[aiohttp.ClientSession] = None
         self._login_lock = asyncio.Lock()
-        self._session_timeout = timedelta(minutes=15)
+        self._session_timeout = timedelta(minutes=30)
         self._last_login: Optional[datetime] = None
         self._last_successful_request: Optional[datetime] = None
-        self._force_reauth_after = timedelta(minutes=10)  # Force reauth after 10 minutes of inactivity
         
         # Authentication state
         self._device_token: Optional[str] = None
@@ -78,11 +77,11 @@ class UDMAPI:
             return True
 
         # Extend session lifespan check
-        if self._last_login and (now - self._last_login) > timedelta(minutes=15):
+        if self._last_login and (now - self._last_login) > timedelta(minutes=30):
             _LOGGER.debug("Session expired: Timed out")
             return True
 
-        _LOGGER.debug("Session is still valid, skipping re-authentication")
+        _LOGGER.debug("Session is no longer valid")
         return False
 
 
@@ -99,8 +98,8 @@ class UDMAPI:
     def _get_proxy_headers(self) -> Dict[str, str]:
         headers = {
             "Content-Type": "application/json",
-            "Accept": "application/json",  # 🔥 FIXED: Added Accept header
-            "X-CSRF-Token": self._csrf_token or "",  # Ensure CSRF token is included
+            "Accept": "application/json",
+            "X-CSRF-Token": self._csrf_token or "", 
         }
 
         if "TOKEN" in self._cookies:
@@ -110,7 +109,7 @@ class UDMAPI:
         return headers
 
 
-    async def _authenticate_session(self) -> Tuple[bool, Optional[str]]:
+    async def authenticate_session(self) -> Tuple[bool, Optional[str]]:
         """Authenticate and get session token."""
         url = f"https://{self.host}/api/auth/login"
         data = {
@@ -179,43 +178,9 @@ class UDMAPI:
 
                 # If no valid session, attempt re-authentication
                 _LOGGER.debug("No valid session cookie, performing re-authentication.")
-                success, error = await self.login()
+                success, error = await self.authenticate_session()
                 return success, error
             return True, None
-
-
-    async def login(self) -> Tuple[bool, Optional[str]]:
-        """Log in and retrieve authentication tokens, ensuring they persist."""
-        _LOGGER.debug("Starting authentication process")
-
-        session = await self._get_session()
-        url = f"https://{self.host}/api/auth/login"
-        data = {"username": self.username, "password": self.password}
-
-        try:
-            async with session.post(url, json=data) as response:
-                response_text = await response.text()
-                if response.status == 200:
-                    response_json = json.loads(response_text)
-
-                    # Extract CSRF token and cookies from response headers
-                    self._csrf_token = response.headers.get("x-csrf-token", "")
-                    self._cookies = {cookie.key: cookie.value for cookie in session.cookie_jar}
-
-                    _LOGGER.debug(f"Captured CSRF Token after login: {self._csrf_token}")
-
-                    self._last_login = datetime.now()
-
-                    _LOGGER.debug(f"Authentication successful - CSRF Token: {self._csrf_token}")
-                    _LOGGER.debug(f"Stored Cookies: {self._cookies}")
-
-                    return True, None
-                else:
-                    _LOGGER.warning(f"Authentication failed: {response.status}, {response_text}")
-                    return False, f"Authentication failed: {response.status}"
-        except Exception as e:
-            _LOGGER.error(f"Login request error: {str(e)}")
-            return False, str(e)
 
     async def _make_authenticated_request(self, method: str, url: str, json_data: Optional[Dict[str, Any]] = None) -> Tuple[bool, Any, Optional[str]]:
         """Make an authenticated request with correct headers."""
@@ -226,7 +191,7 @@ class UDMAPI:
                 try:
                     if self._is_session_expired():
                         _LOGGER.debug("Session expired, attempting reauth")
-                        success, error = await self.login()
+                        success, error = await self.authenticate_session()
                         if not success:
                             return False, None, f"Authentication failed: {error}"
 
