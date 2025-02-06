@@ -7,7 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.const import CONF_HOST, CONF_USERNAME, CONF_PASSWORD
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers import config_validation as cv
 from homeassistant.exceptions import ConfigEntryNotReady
 
@@ -63,23 +63,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         """Fetch data from API."""
         _LOGGER.debug("Starting data update")
         try:
+            # Get firewall policies
             policies_success, policies, policies_error = await api.get_firewall_policies()
             if not policies_success:
                 _LOGGER.error(f"Failed to fetch policies: {policies_error}")
-                raise Exception(f"Failed to fetch policies: {policies_error}")
+                raise UpdateFailed(f"Failed to fetch policies: {policies_error}")
+            
+            _LOGGER.debug(f"Retrieved {len(policies) if policies else 0} firewall policies")
 
+            # Get traffic routes
             routes_success, routes, routes_error = await api.get_traffic_routes()
             if not routes_success:
                 _LOGGER.error(f"Failed to fetch routes: {routes_error}")
-                raise Exception(f"Failed to fetch routes: {routes_error}")
+                raise UpdateFailed(f"Failed to fetch routes: {routes_error}")
+            
+            _LOGGER.debug(f"Retrieved {len(routes) if routes else 0} traffic routes")
 
             return {
-                "firewall_policies": policies,
-                "traffic_routes": routes
+                "firewall_policies": policies or [],
+                "traffic_routes": routes or []
             }
         except Exception as e:
             _LOGGER.exception("Error in update_data")
-            raise
+            raise UpdateFailed(f"Data update failed: {str(e)}")
 
     _LOGGER.debug("Creating coordinator")
     coordinator = DataUpdateCoordinator(
@@ -90,6 +96,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         update_interval=timedelta(minutes=update_interval),
     )
 
+    # Perform initial data fetch
+    _LOGGER.debug("Performing initial data fetch")
+    await coordinator.async_config_entry_first_refresh()
+
+    # Verify we have data before proceeding
+    if not coordinator.data:
+        error_msg = "No data received from UniFi Network during setup"
+        _LOGGER.error(error_msg)
+        await api.cleanup()
+        raise ConfigEntryNotReady(error_msg)
+
+    # Log the initial data for debugging
+    _LOGGER.debug("Initial coordinator data:")
+    _LOGGER.debug("Firewall Policies: %d", len(coordinator.data.get("firewall_policies", [])))
+    _LOGGER.debug("Traffic Routes: %d", len(coordinator.data.get("traffic_routes", [])))
+
     # Store API and coordinator
     _LOGGER.debug("Storing API and coordinator")
     hass.data[DOMAIN][entry.entry_id] = {
@@ -97,7 +119,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         'coordinator': coordinator,
     }
 
-    # Set up platform first
+    # Set up platform
     _LOGGER.debug("Setting up platform")
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
