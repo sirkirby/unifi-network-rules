@@ -296,6 +296,15 @@ class UDMAPI:
             return True, None
             
         return False, f"Failed to update route: {error}"
+    
+    async def get_firewall_zone_matrix(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
+        """Fetch firewall zone matrix from the UDM."""
+        auth_success, auth_error = await self.ensure_authenticated()
+        if not auth_success:
+            return False, None, f"Authentication failed: {auth_error}"
+            
+        url = f"https://{self.host}/proxy/network/v2/api/site/default/firewall/zone-matrix"
+        return await self._make_authenticated_request('get', url)
 
     async def cleanup(self):
         """Cleanup resources."""
