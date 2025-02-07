@@ -1,7 +1,7 @@
 """Support for UniFi Network Rules."""
 import asyncio
 import logging
-from datetime import timedelta, datetime
+from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -46,7 +46,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.debug("Creating UDMAPI instance")
     api = UDMAPI(host, username, password)
     
-    # Basic login check
+    # Basic login check and capability detection
     try:
         _LOGGER.debug("Attempting initial login")
         success, error = await api.authenticate_session()
@@ -54,35 +54,65 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.error(f"Initial login failed: {error}")
             await api.cleanup()
             raise ConfigEntryNotReady(f"Login failed: {error}")
+
+        # Detect UDM capabilities
+        _LOGGER.debug("Detecting UDM capabilities")
+        if not await api.detect_capabilities():
+            _LOGGER.error("Failed to detect UDM capabilities")
+            await api.cleanup()
+            raise ConfigEntryNotReady("Failed to detect UDM capabilities")
+
     except Exception as e:
-        _LOGGER.exception("Exception during login")
+        _LOGGER.exception("Exception during setup")
         await api.cleanup()
-        raise ConfigEntryNotReady(f"Login failed: {str(e)}") from e
+        raise ConfigEntryNotReady(f"Setup failed: {str(e)}") from e
 
     async def async_update_data():
         """Fetch data from API."""
         _LOGGER.debug("Starting data update")
         try:
-            # Get firewall policies
-            policies_success, policies, policies_error = await api.get_firewall_policies()
-            if not policies_success:
-                _LOGGER.error(f"Failed to fetch policies: {policies_error}")
-                raise UpdateFailed(f"Failed to fetch policies: {policies_error}")
-            
-            _LOGGER.debug(f"Retrieved {len(policies) if policies else 0} firewall policies")
+            data = {}
 
-            # Get traffic routes
-            routes_success, routes, routes_error = await api.get_traffic_routes()
-            if not routes_success:
-                _LOGGER.error(f"Failed to fetch routes: {routes_error}")
-                raise UpdateFailed(f"Failed to fetch routes: {routes_error}")
-            
-            _LOGGER.debug(f"Retrieved {len(routes) if routes else 0} traffic routes")
+            # Traffic routes are always available
+            if api.capabilities.traffic_routes:
+                routes_success, routes, routes_error = await api.get_traffic_routes()
+                if not routes_success:
+                    _LOGGER.error(f"Failed to fetch traffic routes: {routes_error}")
+                    raise UpdateFailed(f"Failed to fetch traffic routes: {routes_error}")
+                
+                _LOGGER.debug(f"Retrieved {len(routes) if routes else 0} traffic routes")
+                data['traffic_routes'] = routes or []
 
-            return {
-                "firewall_policies": policies or [],
-                "traffic_routes": routes or []
-            }
+            if api.capabilities.zone_based_firewall:
+                # Get firewall policies for zone-based firewall
+                policies_success, policies, policies_error = await api.get_firewall_policies()
+                if not policies_success:
+                    _LOGGER.error(f"Failed to fetch policies: {policies_error}")
+                    raise UpdateFailed(f"Failed to fetch policies: {policies_error}")
+                
+                _LOGGER.debug(f"Retrieved {len(policies) if policies else 0} firewall policies")
+                data['firewall_policies'] = policies or []
+
+            if api.capabilities.legacy_firewall:
+                # Get legacy firewall rules
+                rules_success, rules, rules_error = await api.get_legacy_firewall_rules()
+                if not rules_success:
+                    _LOGGER.error(f"Failed to fetch legacy firewall rules: {rules_error}")
+                    raise UpdateFailed(f"Failed to fetch legacy firewall rules: {rules_error}")
+                
+                _LOGGER.debug(f"Retrieved legacy firewall rules")
+                data['firewall_rules'] = rules or {'data': []}
+
+                # Get legacy traffic rules
+                traffic_success, traffic, traffic_error = await api.get_legacy_traffic_rules()
+                if not traffic_success:
+                    _LOGGER.error(f"Failed to fetch legacy traffic rules: {traffic_error}")
+                    raise UpdateFailed(f"Failed to fetch legacy traffic rules: {traffic_error}")
+                
+                _LOGGER.debug(f"Retrieved {len(traffic) if traffic else 0} legacy traffic rules")
+                data['traffic_rules'] = traffic or []
+
+            return data
         except Exception as e:
             _LOGGER.exception("Error in update_data")
             raise UpdateFailed(f"Data update failed: {str(e)}")
@@ -101,7 +131,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
 
     # Verify we have data before proceeding
-    if not coordinator.data:
+    if coordinator.data is None:
         error_msg = "No data received from UniFi Network during setup"
         _LOGGER.error(error_msg)
         await api.cleanup()
@@ -109,9 +139,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Log the initial data for debugging
     _LOGGER.debug("Initial coordinator data:")
-    _LOGGER.debug("Firewall Policies: %d", len(coordinator.data.get("firewall_policies", [])))
-    _LOGGER.debug("Traffic Routes: %d", len(coordinator.data.get("traffic_routes", [])))
-
+    if api.capabilities.zone_based_firewall:
+        _LOGGER.debug("Firewall Policies: %d", len(coordinator.data.get("firewall_policies", [])))
+    if api.capabilities.legacy_firewall:
+        _LOGGER.debug("Legacy Firewall Rules: %d", len(coordinator.data.get("firewall_rules", {}).get("data", [])))
+        _LOGGER.debug("Legacy Traffic Rules: %d", len(coordinator.data.get("traffic_rules", [])))
+    
     # Store API and coordinator
     _LOGGER.debug("Storing API and coordinator")
     hass.data[DOMAIN][entry.entry_id] = {
@@ -145,6 +178,7 @@ def cleanup_api(hass: HomeAssistant, entry: ConfigEntry):
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     _LOGGER.debug("Starting unload")
+    
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     
     if unload_ok:

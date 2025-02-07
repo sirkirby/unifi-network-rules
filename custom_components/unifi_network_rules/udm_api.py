@@ -9,7 +9,15 @@ from aiohttp import ClientTimeout, ClientError, CookieJar
 
 _LOGGER = logging.getLogger(__name__)
 
+class UDMCapabilities:
+    """Class to store UDM capabilities."""
+    def __init__(self):
+        self.zone_based_firewall = False
+        self.legacy_firewall = False
+        self.traffic_routes = False  # This should be checked independently
+
 class UDMAPI:
+    """Class to interact with UniFi Dream Machine API."""
     def __init__(self, host: str, username: str, password: str, max_retries: int = 3, retry_delay: int = 1):
         """Initialize the UDMAPI."""
         self.host = host
@@ -17,13 +25,13 @@ class UDMAPI:
         self.password = password
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        self.capabilities = UDMCapabilities()
         
         # Session management
         self._session: Optional[aiohttp.ClientSession] = None
         self._login_lock = asyncio.Lock()
         self._session_timeout = timedelta(minutes=30)
         self._last_login: Optional[datetime] = None
-        self._last_successful_request: Optional[datetime] = None
         
         # Authentication state
         self._device_token: Optional[str] = None
@@ -35,6 +43,39 @@ class UDMAPI:
         self._last_request_time: Optional[datetime] = None
         self._min_request_interval = 2.0
 
+    async def detect_capabilities(self) -> bool:
+        """Detect UDM capabilities by checking endpoints."""
+        try:
+            # Check zone-based firewall
+            zone_success, zone_data, _ = await self.get_firewall_zone_matrix()
+            self.capabilities.zone_based_firewall = zone_success and zone_data is not None
+
+            # Check legacy firewall
+            rules_success, rules_data, _ = await self.get_legacy_firewall_rules()
+            routes_success, routes_data, _ = await self.get_legacy_traffic_rules()
+
+            self.capabilities.legacy_firewall = (
+                (rules_success and isinstance(rules_data, dict)) or
+                (routes_success and isinstance(routes_data, list))
+            )
+
+            # Check traffic routes (available in both modes)
+            routes_success, routes_data, _ = await self.get_traffic_routes()
+            self.capabilities.traffic_routes = routes_success and isinstance(routes_data, list)
+
+            _LOGGER.info(
+                "UDM Capabilities: zone_based_firewall=%s, legacy_firewall=%s, traffic_routes=%s",
+                self.capabilities.zone_based_firewall,
+                self.capabilities.legacy_firewall,
+                self.capabilities.traffic_routes
+            )
+
+            return True
+
+        except Exception as e:
+            _LOGGER.error("Error detecting UDM capabilities: %s", str(e))
+            return False
+    
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create an aiohttp session."""
         if self._session is None or self._session.closed:
@@ -305,6 +346,53 @@ class UDMAPI:
             
         url = f"https://{self.host}/proxy/network/v2/api/site/default/firewall/zone-matrix"
         return await self._make_authenticated_request('get', url)
+    
+    async def get_legacy_firewall_rules(self) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
+        """Fetch legacy firewall rules from the UDM."""
+        url = f"https://{self.host}/proxy/network/api/s/default/rest/firewallrule"
+        return await self._make_authenticated_request('get', url)
+
+    async def get_legacy_traffic_rules(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
+        """Fetch legacy traffic rules from the UDM."""
+        url = f"https://{self.host}/proxy/network/v2/api/site/default/trafficrules"
+        return await self._make_authenticated_request('get', url)
+    
+    async def toggle_legacy_firewall_rule(self, rule_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
+        """Toggle a legacy firewall rule."""
+        url = f"https://{self.host}/proxy/network/api/s/default/rest/firewallrule/{rule_id}"
+        
+        # First get the current rule
+        success, rule_data, error = await self._make_authenticated_request('get', url)
+        if not success:
+            return False, f"Failed to fetch rule: {error}"
+
+        # Update the enabled state
+        rule_data['enabled'] = enabled
+        
+        # Send the update
+        return await self._make_authenticated_request('put', url, rule_data)
+
+    async def toggle_legacy_traffic_rule(self, rule_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
+        """Toggle a legacy traffic rule."""
+        url = f"https://{self.host}/proxy/network/v2/api/site/default/trafficrules/{rule_id}"
+        
+        # First get all traffic rules to find the one we want to update
+        all_rules_url = f"https://{self.host}/proxy/network/v2/api/site/default/trafficrules"
+        success, rules, error = await self._make_authenticated_request('get', all_rules_url)
+        
+        if not success:
+            return False, f"Failed to fetch rules: {error}"
+
+        rule = next((r for r in rules if r['_id'] == rule_id), None)
+        if not rule:
+            return False, f"Rule {rule_id} not found"
+
+        # Update the rule
+        rule['enabled'] = enabled
+        
+        # Send the update
+        return await self._make_authenticated_request('put', url, rule)
+
 
     async def cleanup(self):
         """Cleanup resources."""
