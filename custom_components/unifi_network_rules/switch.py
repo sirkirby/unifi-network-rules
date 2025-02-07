@@ -85,82 +85,6 @@ class UDMBaseSwitch(CoordinatorEntity, SwitchEntity):
 
         return False
 
-class UDMLegacyFirewallRuleSwitch(UDMBaseSwitch):
-    """Representation of a UDM Legacy Firewall Rule Switch."""
-
-    def __init__(self, coordinator, api, rule: Dict[str, Any], name: str = None):
-        """Initialize the UDM Legacy Firewall Rule Switch."""
-        super().__init__(coordinator, api, rule)
-        self._attr_unique_id = f"legacy_firewall_rule_{rule['_id']}"
-        self._attr_name = name or f"Firewall Rule: {rule.get('name', 'Unnamed')}"
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the switch on."""
-        await self._toggle(True)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn the switch off."""
-        await self._toggle(False)
-
-    async def _toggle(self, new_state: bool) -> None:
-        """Toggle the rule state."""
-        try:
-            self._pending_state = new_state
-            self.async_write_ha_state()
-
-            success, error = await self._api.toggle_legacy_firewall_rule(self._item_id, new_state)
-            
-            if success:
-                if await self._verify_state_change(new_state, self._api.get_legacy_firewall_rules):
-                    return
-                
-            self._pending_state = None
-            self.async_write_ha_state()
-            raise HomeAssistantError(f"Failed to toggle firewall rule: {error}")
-                
-        except Exception as e:
-            self._pending_state = None
-            self.async_write_ha_state()
-            raise HomeAssistantError(f"Error toggling firewall rule: {str(e)}")
-
-class UDMLegacyTrafficRuleSwitch(UDMBaseSwitch):
-    """Representation of a UDM Legacy Traffic Rule Switch."""
-
-    def __init__(self, coordinator, api, rule: Dict[str, Any], name: str = None):
-        """Initialize the UDM Legacy Traffic Rule Switch."""
-        super().__init__(coordinator, api, rule)
-        self._attr_unique_id = f"legacy_traffic_rule_{rule['_id']}"
-        self._attr_name = name or f"Traffic Rule: {rule.get('description', 'Unnamed')}"
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the switch on."""
-        await self._toggle(True)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn the switch off."""
-        await self._toggle(False)
-
-    async def _toggle(self, new_state: bool) -> None:
-        """Toggle the rule state."""
-        try:
-            self._pending_state = new_state
-            self.async_write_ha_state()
-
-            success, error = await self._api.toggle_legacy_traffic_rule(self._item_id, new_state)
-            
-            if success:
-                if await self._verify_state_change(new_state, self._api.get_legacy_traffic_rules):
-                    return
-                
-            self._pending_state = None
-            self.async_write_ha_state()
-            raise HomeAssistantError(f"Failed to toggle traffic rule: {error}")
-                
-        except Exception as e:
-            self._pending_state = None
-            self.async_write_ha_state()
-            raise HomeAssistantError(f"Error toggling traffic rule: {str(e)}")
-
 class UDMFirewallPolicySwitch(UDMBaseSwitch):
     """Representation of a UDM Firewall Policy Switch."""
 
@@ -172,13 +96,14 @@ class UDMFirewallPolicySwitch(UDMBaseSwitch):
             _LOGGER.debug("Skipping predefined policy: %s", policy.get('name'))
             return
 
-        self._attr_unique_id = f"firewall_policy_{policy['_id']}"
+        self._attr_unique_id = f"network_policy_{policy['_id']}"
         if name:
             self._attr_name = name
         else:
             source_zone = _get_zone_name(policy.get('source', {}).get('zone_id'), zones_data)
             dest_zone = _get_zone_name(policy.get('destination', {}).get('zone_id'), zones_data)
-            self._attr_name = f"Policy: {source_zone}->{dest_zone}: {policy.get('name', 'Unnamed')}"
+            base_name = policy.get('name', 'Unnamed')
+            self._attr_name = f"Network Policy: {source_zone}->{dest_zone}: {base_name} ({policy['_id'][-4:]})"
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the switch on."""
@@ -209,14 +134,98 @@ class UDMFirewallPolicySwitch(UDMBaseSwitch):
             self.async_write_ha_state()
             raise HomeAssistantError(f"Error toggling firewall policy: {str(e)}")
 
+class UDMLegacyRuleSwitch(UDMBaseSwitch):
+    """Base class for legacy rule switches."""
+
+    def __init__(self, coordinator, api, rule: Dict[str, Any], rule_type: str):
+        """Initialize the legacy rule switch."""
+        super().__init__(coordinator, api, rule)
+        self._rule_type = rule_type
+        rule_name = rule.get('name', rule.get('description', 'Unnamed'))
+        self._attr_unique_id = f"network_rule_{rule_type}_{rule['_id']}"
+        self._attr_name = f"Network Rule: {rule_name} ({rule['_id'][-4:]})"
+
+class UDMLegacyFirewallRuleSwitch(UDMLegacyRuleSwitch):
+    """Representation of a UDM Legacy Firewall Rule Switch."""
+
+    def __init__(self, coordinator, api, rule: Dict[str, Any]):
+        """Initialize the UDM Legacy Firewall Rule Switch."""
+        super().__init__(coordinator, api, rule, "firewall")
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn the switch on."""
+        await self._toggle(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the switch off."""
+        await self._toggle(False)
+
+    async def _toggle(self, new_state: bool) -> None:
+        """Toggle the rule state."""
+        try:
+            self._pending_state = new_state
+            self.async_write_ha_state()
+
+            success, error = await self._api.toggle_legacy_firewall_rule(self._item_id, new_state)
+            
+            if success:
+                if await self._verify_state_change(new_state, self._api.get_legacy_firewall_rules):
+                    return
+                
+            self._pending_state = None
+            self.async_write_ha_state()
+            raise HomeAssistantError(f"Failed to toggle firewall rule: {error}")
+                
+        except Exception as e:
+            self._pending_state = None
+            self.async_write_ha_state()
+            raise HomeAssistantError(f"Error toggling firewall rule: {str(e)}")
+
+class UDMLegacyTrafficRuleSwitch(UDMLegacyRuleSwitch):
+    """Representation of a UDM Legacy Traffic Rule Switch."""
+
+    def __init__(self, coordinator, api, rule: Dict[str, Any]):
+        """Initialize the UDM Legacy Traffic Rule Switch."""
+        super().__init__(coordinator, api, rule, "traffic")
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn the switch on."""
+        await self._toggle(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the switch off."""
+        await self._toggle(False)
+
+    async def _toggle(self, new_state: bool) -> None:
+        """Toggle the rule state."""
+        try:
+            self._pending_state = new_state
+            self.async_write_ha_state()
+
+            success, error = await self._api.toggle_legacy_traffic_rule(self._item_id, new_state)
+            
+            if success:
+                if await self._verify_state_change(new_state, self._api.get_legacy_traffic_rules):
+                    return
+                
+            self._pending_state = None
+            self.async_write_ha_state()
+            raise HomeAssistantError(f"Failed to toggle traffic rule: {error}")
+                
+        except Exception as e:
+            self._pending_state = None
+            self.async_write_ha_state()
+            raise HomeAssistantError(f"Error toggling traffic rule: {str(e)}")
+
 class UDMTrafficRouteSwitch(UDMBaseSwitch):
     """Representation of a UDM Traffic Route Switch."""
 
-    def __init__(self, coordinator, api, route: Dict[str, Any], name: str = None):
+    def __init__(self, coordinator, api, route: Dict[str, Any]):
         """Initialize the UDM Traffic Route Switch."""
         super().__init__(coordinator, api, route)
-        self._attr_unique_id = f"traffic_route_{route['_id']}"
-        self._attr_name = name or f"Traffic Route: {route.get('description', 'Unnamed')}"
+        self._attr_unique_id = f"network_route_{route['_id']}"
+        desc = route.get('description', 'Unnamed')
+        self._attr_name = f"Network Route: {desc} ({route['_id'][-4:]})"
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the switch on."""
@@ -275,7 +284,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         """Update entities."""
         new_entities = []
         existing_ids = set()
-        name_map = {}  # Track names to detect duplicates
         
         # Track entities that should exist
         valid_entity_ids = set()
@@ -284,18 +292,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         if coordinator.data and 'traffic_routes' in coordinator.data:
             routes = coordinator.data['traffic_routes']
             for route in routes:
-                entity_id = f"traffic_route_{route['_id']}"
-                desc = route.get('description', 'Unnamed')
-                
-                # Check for duplicate names
-                if desc in name_map:
-                    # Add a unique suffix
-                    desc = f"{desc} (Route {route['_id'][-4:]})"
-                name_map[desc] = entity_id
-                
+                entity_id = f"network_route_{route['_id']}"
                 valid_entity_ids.add(f"{DOMAIN}.{entity_id}")
                 if entity_id not in existing_ids:
-                    new_entities.append(UDMTrafficRouteSwitch(coordinator, api, route, desc))
+                    new_entities.append(UDMTrafficRouteSwitch(coordinator, api, route))
                     existing_ids.add(entity_id)
         
         if api.capabilities.zone_based_firewall:
@@ -304,19 +304,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                 policies = coordinator.data['firewall_policies']
                 for policy in policies:
                     if not policy.get('predefined', False):
-                        entity_id = f"firewall_policy_{policy['_id']}"
-                        source_zone = _get_zone_name(policy.get('source', {}).get('zone_id'), zones_data)
-                        dest_zone = _get_zone_name(policy.get('destination', {}).get('zone_id'), zones_data)
-                        name = f"{source_zone}->{dest_zone}: {policy.get('name', 'Unnamed')}"
-                        
-                        # Check for duplicate names
-                        if name in name_map:
-                            name = f"{name} (Policy {policy['_id'][-4:]})"
-                        name_map[name] = entity_id
-                        
+                        entity_id = f"network_policy_{policy['_id']}"
                         valid_entity_ids.add(f"{DOMAIN}.{entity_id}")
                         if entity_id not in existing_ids:
-                            new_entities.append(UDMFirewallPolicySwitch(coordinator, api, policy, zones_data, name))
+                            new_entities.append(UDMFirewallPolicySwitch(coordinator, api, policy, zones_data))
                             existing_ids.add(entity_id)
 
         if api.capabilities.legacy_firewall:
@@ -324,34 +315,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             if coordinator.data and 'firewall_rules' in coordinator.data:
                 rules = coordinator.data['firewall_rules'].get('data', [])
                 for rule in rules:
-                    entity_id = f"legacy_firewall_rule_{rule['_id']}"
-                    name = f"[Legacy] {rule.get('name', 'Unnamed')}"
-                    
-                    # Check for duplicate names
-                    if name in name_map:
-                        name = f"{name} (Rule {rule['_id'][-4:]})"
-                    name_map[name] = entity_id
-                    
+                    entity_id = f"network_rule_firewall_{rule['_id']}"
                     valid_entity_ids.add(f"{DOMAIN}.{entity_id}")
                     if entity_id not in existing_ids:
-                        new_entities.append(UDMLegacyFirewallRuleSwitch(coordinator, api, rule, name))
+                        new_entities.append(UDMLegacyFirewallRuleSwitch(coordinator, api, rule))
                         existing_ids.add(entity_id)
 
             # Handle legacy traffic rules
             if coordinator.data and 'traffic_rules' in coordinator.data:
                 rules = coordinator.data['traffic_rules']
                 for rule in rules:
-                    entity_id = f"legacy_traffic_rule_{rule['_id']}"
-                    name = f"[Legacy] {rule.get('description', 'Unnamed')}"
-                    
-                    # Check for duplicate names
-                    if name in name_map:
-                        name = f"{name} (Rule {rule['_id'][-4:]})"
-                    name_map[name] = entity_id
-                    
+                    entity_id = f"network_rule_traffic_{rule['_id']}"
                     valid_entity_ids.add(f"{DOMAIN}.{entity_id}")
                     if entity_id not in existing_ids:
-                        new_entities.append(UDMLegacyTrafficRuleSwitch(coordinator, api, rule, name))
+                        new_entities.append(UDMLegacyTrafficRuleSwitch(coordinator, api, rule))
                         existing_ids.add(entity_id)
 
         # Clean up old entities from the registry
