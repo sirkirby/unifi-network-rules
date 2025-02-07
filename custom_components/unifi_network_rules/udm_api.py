@@ -347,30 +347,60 @@ class UDMAPI:
         url = f"https://{self.host}/proxy/network/v2/api/site/default/firewall/zone-matrix"
         return await self._make_authenticated_request('get', url)
     
-    async def get_legacy_firewall_rules(self) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
+    async def get_legacy_firewall_rules(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch legacy firewall rules from the UDM."""
         url = f"https://{self.host}/proxy/network/api/s/default/rest/firewallrule"
-        return await self._make_authenticated_request('get', url)
+        success, response, error = await self._make_authenticated_request('get', url)
+        
+        if not success:
+            return False, None, error
+            
+        if not response or not isinstance(response, dict) or 'data' not in response:
+            return False, None, "Invalid response format"
+            
+        return True, response['data'], None
 
     async def get_legacy_traffic_rules(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch legacy traffic rules from the UDM."""
         url = f"https://{self.host}/proxy/network/v2/api/site/default/trafficrules"
-        return await self._make_authenticated_request('get', url)
+        success, rules, error = await self._make_authenticated_request('get', url)
+        
+        if not success:
+            return False, None, error
+            
+        if not rules or not isinstance(rules, list):
+            return False, None, "Invalid response format"
+            
+        return True, rules, None
     
     async def toggle_legacy_firewall_rule(self, rule_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
         """Toggle a legacy firewall rule."""
         url = f"https://{self.host}/proxy/network/api/s/default/rest/firewallrule/{rule_id}"
         
         # First get the current rule
-        success, rule_data, error = await self._make_authenticated_request('get', url)
+        success, response, error = await self._make_authenticated_request('get', url)
         if not success:
             return False, f"Failed to fetch rule: {error}"
 
-        # Update the enabled state
-        rule_data['enabled'] = enabled
+        if not response or not isinstance(response, dict) or 'data' not in response:
+            return False, "Invalid rule data received"
+
+        # For legacy firewall rules, the response includes a data array
+        rules = response.get('data', [])
+        rule = next((r for r in rules if r['_id'] == rule_id), None)
+        if not rule:
+            return False, f"Rule {rule_id} not found"
+
+        # Create a copy and update
+        updated_rule = dict(rule)
+        updated_rule['enabled'] = enabled
         
         # Send the update
-        return await self._make_authenticated_request('put', url, rule_data)
+        success, response, error = await self._make_authenticated_request('put', url, updated_rule)
+        if not success:
+            return False, f"Failed to update rule: {error}"
+            
+        return True, None
 
     async def toggle_legacy_traffic_rule(self, rule_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
         """Toggle a legacy traffic rule."""
@@ -383,15 +413,23 @@ class UDMAPI:
         if not success:
             return False, f"Failed to fetch rules: {error}"
 
+        if not rules or not isinstance(rules, list):
+            return False, "Invalid rules data received"
+
         rule = next((r for r in rules if r['_id'] == rule_id), None)
         if not rule:
             return False, f"Rule {rule_id} not found"
 
-        # Update the rule
-        rule['enabled'] = enabled
+        # Create a copy and update
+        updated_rule = dict(rule)
+        updated_rule['enabled'] = enabled
         
         # Send the update
-        return await self._make_authenticated_request('put', url, rule)
+        success, response, error = await self._make_authenticated_request('put', url, updated_rule)
+        if not success:
+            return False, f"Failed to update rule: {error}"
+            
+        return True, None
 
 
     async def cleanup(self):
