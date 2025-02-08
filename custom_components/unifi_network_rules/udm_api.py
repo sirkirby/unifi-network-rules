@@ -253,7 +253,7 @@ class UDMAPI:
             return True, None
 
     async def _make_authenticated_request(self, method: str, url: str, json_data: Optional[Dict[str, Any]] = None) -> Tuple[bool, Any, Optional[str]]:
-        """Make an authenticated request with correct headers."""
+        """Make an authenticated request with correct headers and enhanced logging."""
         async with self._request_lock:
             await self._wait_for_next_request()
 
@@ -267,18 +267,26 @@ class UDMAPI:
 
                     session = await self._get_session()
                     headers = self._get_proxy_headers()
+                    
+                    _LOGGER.debug(f"Making {method.upper()} request to {url}")
+                    if json_data:
+                        _LOGGER.debug(f"Request payload: {json.dumps(json_data, indent=2)}")
 
                     async with session.request(method, url, headers=headers, json=json_data) as response:
                         response_text = await response.text()
+                        self._log_response_data(method, url, response.status, response_text)
 
                         if response.status == 200:
-                            self._last_successful_request = datetime.now()
-                            return True, json.loads(response_text), None
+                            try:
+                                parsed_response = json.loads(response_text)
+                                self._last_successful_request = datetime.now()
+                                return True, parsed_response, None
+                            except json.JSONDecodeError as e:
+                                _LOGGER.error(f"Failed to parse JSON response: {e}")
+                                return False, None, f"Invalid JSON response: {str(e)}"
 
                         if response.status in [401, 403]:
                             _LOGGER.warning(f"Received {response.status}: {response_text}")
-                            _LOGGER.warning(f"CSRF token before re-auth: {self._csrf_token}")
-
                             if attempt < self.max_retries - 1:
                                 await asyncio.sleep(self.retry_delay)
                                 continue
@@ -375,7 +383,7 @@ class UDMAPI:
             
         url = f"https://{self.host}/proxy/network/v2/api/site/default/firewall/zone-matrix"
         return await self._make_authenticated_request('get', url)
-    
+
     async def get_legacy_firewall_rules(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch legacy firewall rules from the UDM."""
         auth_success, auth_error = await self.ensure_authenticated()
@@ -388,10 +396,29 @@ class UDMAPI:
         if not success:
             return False, None, error
             
-        if not response or not isinstance(response, dict) or 'data' not in response:
-            return False, None, "Invalid response format"
+        try:
+            if not isinstance(response, dict):
+                _LOGGER.error(f"Unexpected response type: {type(response)}")
+                return False, None, "Invalid response format - not a dictionary"
+                
+            if 'data' not in response:
+                _LOGGER.error(f"No 'data' key in response: {response}")
+                return False, None, "Invalid response format - missing data key"
+                
+            rules = response['data']
+            if not isinstance(rules, list):
+                _LOGGER.error(f"Rules data is not a list: {type(rules)}")
+                return False, None, "Invalid rules format"
+                
+            _LOGGER.debug(f"Successfully fetched {len(rules)} legacy firewall rules")
+            for rule in rules:
+                _LOGGER.debug(f"Rule: {rule.get('name', 'Unnamed')} - Enabled: {rule.get('enabled', False)}")
+                
+            return True, rules, None
             
-        return True, response['data'], None
+        except Exception as e:
+            _LOGGER.exception("Error processing legacy firewall rules")
+            return False, None, f"Error processing response: {str(e)}"
 
     async def get_legacy_traffic_rules(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch legacy traffic rules from the UDM."""
@@ -400,15 +427,29 @@ class UDMAPI:
             return False, None, f"Authentication failed: {auth_error}"
         
         url = f"https://{self.host}/proxy/network/v2/api/site/default/trafficrules"
-        success, rules, error = await self._make_authenticated_request('get', url)
+        success, response, error = await self._make_authenticated_request('get', url)
         
         if not success:
             return False, None, error
             
-        if not rules or not isinstance(rules, list):
-            return False, None, "Invalid response format"
+        try:
+            if response is None:
+                _LOGGER.error("Empty response received")
+                return False, None, "Empty response"
+                
+            if not isinstance(response, list):
+                _LOGGER.error(f"Unexpected response type: {type(response)}")
+                return False, None, f"Invalid response format - expected list, got {type(response)}"
+                
+            _LOGGER.debug(f"Successfully fetched {len(response)} legacy traffic rules")
+            for rule in response:
+                _LOGGER.debug(f"Traffic Rule: {rule.get('description', 'Unnamed')} - Enabled: {rule.get('enabled', False)}")
+                
+            return True, response, None
             
-        return True, rules, None
+        except Exception as e:
+            _LOGGER.exception("Error processing legacy traffic rules")
+            return False, None, f"Error processing response: {str(e)}"
     
     async def toggle_legacy_firewall_rule(self, rule_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
         """Toggle a legacy firewall rule."""
@@ -468,6 +509,20 @@ class UDMAPI:
             
         return True, None
 
+    def _log_response_data(self, method: str, url: str, response_status: int, response_text: str):
+        """Log response data in a structured way."""
+        try:
+            # Try to parse as JSON for pretty printing
+            response_data = json.loads(response_text)
+            formatted_response = json.dumps(response_data, indent=2)
+        except json.JSONDecodeError:
+            formatted_response = response_text
+
+        _LOGGER.debug(f"API Response Details:")
+        _LOGGER.debug(f"Method: {method}")
+        _LOGGER.debug(f"URL: {url}")
+        _LOGGER.debug(f"Status: {response_status}")
+        _LOGGER.debug(f"Response Body:\n{formatted_response}")
 
     async def cleanup(self):
         """Cleanup resources."""
