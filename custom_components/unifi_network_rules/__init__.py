@@ -75,6 +75,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
             # Traffic routes are always available
             if api.capabilities.traffic_routes:
+                _LOGGER.debug("Fetching traffic routes")
                 routes_success, routes, routes_error = await api.get_traffic_routes()
                 if not routes_success:
                     _LOGGER.error(f"Failed to fetch traffic routes: {routes_error}")
@@ -84,7 +85,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 data['traffic_routes'] = routes or []
 
             if api.capabilities.zone_based_firewall:
-                # Get firewall policies for zone-based firewall
+                _LOGGER.debug("Fetching zone-based firewall policies")
                 policies_success, policies, policies_error = await api.get_firewall_policies()
                 if not policies_success:
                     _LOGGER.error(f"Failed to fetch policies: {policies_error}")
@@ -95,23 +96,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
             if api.capabilities.legacy_firewall:
                 # Get legacy firewall rules
+                _LOGGER.debug("Fetching legacy firewall rules")
                 rules_success, rules, rules_error = await api.get_legacy_firewall_rules()
                 if not rules_success:
                     _LOGGER.error(f"Failed to fetch legacy firewall rules: {rules_error}")
                     raise UpdateFailed(f"Failed to fetch legacy firewall rules: {rules_error}")
-                
-                _LOGGER.debug(f"Retrieved legacy firewall rules")
-                data['firewall_rules'] = rules or {'data': []}
 
-                # Get legacy traffic rules
+                _LOGGER.debug(f"Retrieved legacy firewall rules: {len(rules) if rules else 0} rules")
+                data['firewall_rules'] = {'data': rules or []}
+
+                # Get legacy traffic rules 
+                _LOGGER.debug("Fetching legacy traffic rules")
                 traffic_success, traffic, traffic_error = await api.get_legacy_traffic_rules()
                 if not traffic_success:
                     _LOGGER.error(f"Failed to fetch legacy traffic rules: {traffic_error}")
                     raise UpdateFailed(f"Failed to fetch legacy traffic rules: {traffic_error}")
-                
+
                 _LOGGER.debug(f"Retrieved {len(traffic) if traffic else 0} legacy traffic rules")
                 data['traffic_rules'] = traffic or []
 
+            _LOGGER.debug(f"Final data structure keys: {list(data.keys())}")
             return data
         except Exception as e:
             _LOGGER.exception("Error in update_data")
