@@ -46,18 +46,30 @@ class UDMAPI:
     async def detect_capabilities(self) -> bool:
         """Detect UDM capabilities by checking endpoints."""
         try:
-            # Check zone-based firewall
-            zone_success, zone_data, _ = await self.get_firewall_zone_matrix()
-            self.capabilities.zone_based_firewall = zone_success and zone_data is not None
+            # Check feature migration status first
+            url = f"https://{self.host}/proxy/network/v2/api/site/default/site-feature-migration"
+            success, migrations, error = await self._make_authenticated_request('get', url)
+            
+            _LOGGER.debug("Feature migration check: success=%s, data=%s, error=%s", 
+                        success, migrations, error)
 
-            # Check legacy firewall
-            rules_success, rules_data, _ = await self.get_legacy_firewall_rules()
-            routes_success, routes_data, _ = await self.get_legacy_traffic_rules()
+            if success and isinstance(migrations, list):
+                self.capabilities.zone_based_firewall = any(
+                    m.get("feature") == "ZONE_BASED_FIREWALL" 
+                    for m in migrations
+                )
+            else:
+                # If migration check fails, check policies endpoint
+                success, policies, error = await self.get_firewall_policies()
+                _LOGGER.debug("Firewall policies check: success=%s, has_data=%s, error=%s",
+                            success, bool(policies), error)
+                self.capabilities.zone_based_firewall = success
 
-            self.capabilities.legacy_firewall = (
-                (rules_success and isinstance(rules_data, dict)) or
-                (routes_success and isinstance(routes_data, list))
-            )
+            # If not zone-based, check legacy endpoints
+            if not self.capabilities.zone_based_firewall:
+                self.capabilities.legacy_firewall = await self._check_legacy_endpoints()
+            else:
+                self.capabilities.legacy_firewall = False
 
             # Check traffic routes (available in both modes)
             routes_success, routes_data, _ = await self.get_traffic_routes()
@@ -76,6 +88,23 @@ class UDMAPI:
             _LOGGER.error("Error detecting UDM capabilities: %s", str(e))
             return False
     
+    async def _check_legacy_endpoints(self) -> bool:
+        """Check if legacy endpoints return data."""
+        # Try legacy firewall rules endpoint
+        success, rules, error = await self.get_legacy_firewall_rules()
+        _LOGGER.debug("Legacy firewall check: success=%s, has_data=%s, error=%s",
+                    success, bool(rules), error)
+        
+        if success and rules:
+            return True
+
+        # Try legacy traffic rules endpoint as backup
+        success, rules, error = await self.get_legacy_traffic_rules()
+        _LOGGER.debug("Legacy traffic check: success=%s, has_data=%s, error=%s",
+                    success, bool(rules), error)
+        
+        return success and bool(rules)
+
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create an aiohttp session."""
         if self._session is None or self._session.closed:
@@ -349,6 +378,10 @@ class UDMAPI:
     
     async def get_legacy_firewall_rules(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch legacy firewall rules from the UDM."""
+        auth_success, auth_error = await self.ensure_authenticated()
+        if not auth_success:
+            return False, None, f"Authentication failed: {auth_error}"
+        
         url = f"https://{self.host}/proxy/network/api/s/default/rest/firewallrule"
         success, response, error = await self._make_authenticated_request('get', url)
         
@@ -362,6 +395,10 @@ class UDMAPI:
 
     async def get_legacy_traffic_rules(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch legacy traffic rules from the UDM."""
+        auth_success, auth_error = await self.ensure_authenticated()
+        if not auth_success:
+            return False, None, f"Authentication failed: {auth_error}"
+        
         url = f"https://{self.host}/proxy/network/v2/api/site/default/trafficrules"
         success, rules, error = await self._make_authenticated_request('get', url)
         
