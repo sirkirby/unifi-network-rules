@@ -2,8 +2,8 @@
 name: Bug report
 about: Create a report to help us improve
 title: ''
-labels: ''
-assignees: ''
+labels: 'bug'
+assignees: '@sirkirby'
 
 ---
 
@@ -11,12 +11,18 @@ assignees: ''
 
 [ ] debug logging is enabled in the configuration.
 
+Click the "Enable Debug Logging" button in the integration configuration.
+
+or manually add the following to your `configuration.yaml` file:
+
 ```yaml
 logger:
   default: error
   logs:
     custom_components.unifi_network_rules: debug
 ```
+
+Then restart Home Assistant.
 
 ## Describe the bug
 
@@ -36,7 +42,7 @@ If applicable, add screenshots to help explain your problem.
 
 ## Home Assistant Logs
 
-Paste the relevant logs from the Home Assistant log file here.
+Paste or attach the relevant logs from the Home Assistant log file here.
 
 ## Additional context
 
