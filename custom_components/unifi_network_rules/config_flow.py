@@ -46,7 +46,7 @@ async def validate_input(hass: core.HomeAssistant, data: dict):
         if not re.match(r'^[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*\.[a-zA-Z]{2,}$', host):
             raise InvalidHost
 
-    return {"title": f"Unifi Network Manager ({host})"}
+    return {"title": f"Unifi Device ({host})"}
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """
