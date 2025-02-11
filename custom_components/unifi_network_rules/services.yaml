@@ -1,0 +1,4 @@
+refresh:
+  name: Refresh Data
+  description: "Refresh UniFi Network Rules data"
+  fields: {}
