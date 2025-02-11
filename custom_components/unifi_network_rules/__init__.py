@@ -50,6 +50,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up UniFi Network Rules from a config entry."""
     logger.debug("Starting async_setup_entry")
+    # If coordinator is already set up for this entry, skip reinitialization to prevent redundant API calls.
+    if entry.entry_id in hass.data[DOMAIN]:
+        logger.debug("Coordinator already exists for entry %s, skipping setup_entry", entry.entry_id)
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        return True
     
     host = entry.data[CONF_HOST]
     username = entry.data[CONF_USERNAME]

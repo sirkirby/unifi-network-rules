@@ -1,18 +1,20 @@
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.const import ATTR_ENTITY_ID
 from .utils import logger
+import asyncio
 
 async def async_refresh_service(hass: HomeAssistant, call: ServiceCall) -> None:
     """Service to refresh UniFi data."""
     domain_data = hass.data.get("unifi_network_rules", {})
-    coordinator = None
+    tasks = []
 
     for entry in domain_data.values():
         coordinator = entry.get("coordinator")
-        break
-    if coordinator:
-        await coordinator.async_request_refresh()
-        logger.debug("Coordinator refresh triggered via service")
+        if coordinator:
+            tasks.append(coordinator.async_request_refresh())
+    if tasks:
+        await asyncio.gather(*tasks)
+        logger.debug(f"Coordinator refresh triggered via service for {len(tasks)} coordinator(s)")
     else:
         logger.debug("Coordinator not found during service call")
 
