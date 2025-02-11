@@ -10,6 +10,5 @@
     "issue_tracker": "https://github.com/sirkirby/unifi-network-rules/issues",
     "requirements": ["aiohttp"],
     "version": "1.2.1",
-    "homeassistant": ">=2021.9.0",
     "quality_scale": "platinum"
 }

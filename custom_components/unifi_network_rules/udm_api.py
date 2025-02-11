@@ -303,6 +303,13 @@ class UDMAPI:
 
                         if response.status in [401, 403]:
                             logger.warning(f"Received {response.status}: {response_text}")
+                            # Clear stored session tokens to force a new login.
+                            self._last_login = None
+                            self._cookies = {}
+                            # Try to log in again
+                            success, auth_error = await self.authenticate_session()
+                            if not success:
+                                return False, None, f"Authentication failed: {auth_error}"
                             if attempt < self.max_retries - 1:
                                 await asyncio.sleep(self.retry_delay)
                                 continue

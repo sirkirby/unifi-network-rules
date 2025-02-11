@@ -17,5 +17,6 @@
       "abort": {
         "already_configured": "UDM Rule Manager is already configured"
       }
-    }
+    },
+    "title": "UniFi Network Rules"
   }
