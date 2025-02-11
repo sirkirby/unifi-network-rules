@@ -25,3 +25,15 @@ def log_call(func):
 def debug(msg, *args, **kwargs):
     """Simple wrapper for _LOG.debug."""
     _LOG.debug(msg, *args, **kwargs)
+
+def info(msg, *args, **kwargs):
+    """Simple wrapper for _LOG.info."""
+    _LOG.info(msg, *args, **kwargs)
+
+def error(msg, *args, **kwargs):
+    """Simple wrapper for _LOG.error."""
+    _LOG.error(msg, *args, **kwargs)
+
+def warning(msg, *args, **kwargs):
+    """Simple wrapper for _LOG.warning."""
+    _LOG.warning(msg, *args, **kwargs)

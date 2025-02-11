@@ -2,6 +2,7 @@
 import json
 import logging
 from datetime import timedelta
+import os
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -33,10 +34,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the UniFi Network Rules component."""
     logger.debug("Starting async_setup")
     hass.data.setdefault(DOMAIN, {})
-    # Load strings from strings.json for later use
     try:
-        with open(f"{hass.config.path()}/{DOMAIN}/strings.json", "r") as f:
-            hass.data[DOMAIN]["strings"] = json.load(f)
+        import functools
+        # Load the strings file from the integration's directory asynchronously
+        strings_path = os.path.join(os.path.dirname(__file__), "strings.json")
+        def read_json_file(path: str):
+            with open(path, "r") as f:
+                return json.load(f)
+
+        hass.data[DOMAIN]["strings"] = await hass.async_add_executor_job(read_json_file, strings_path)
     except Exception as e:
         _LOGGER.error("Error loading strings: %s", e)
     return True
