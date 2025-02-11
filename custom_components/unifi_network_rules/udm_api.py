@@ -1,7 +1,6 @@
 """UDM API for controlling UniFi Dream Machine."""
 from __future__ import annotations
 import asyncio
-import logging
 from typing import Any, Dict, List, Tuple, Optional
 from datetime import datetime, timedelta
 import aiohttp
@@ -24,7 +23,6 @@ from .const import (
     COOKIE_TOKEN
 )
 from .utils import logger
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .utils.logger import log_call
 
 @dataclass
@@ -48,7 +46,7 @@ class UDMAPI:
         # Session management
         self._session: Optional[aiohttp.ClientSession] = None
         self._login_lock = asyncio.Lock()
-        self._session_timeout = timedelta(minutes=30)
+        self._session_timeout = timedelta(minutes=30)  # Initialize the session timeout (30 minutes)
         self._last_login: Optional[datetime] = None
         
         # Authentication state
@@ -255,15 +253,7 @@ class UDMAPI:
         """Ensure we have a valid authentication session."""
         async with self._login_lock:
             if self._is_session_expired():
-                logger.debug("Session expired, but checking for valid authentication cookie.")
-
-                # If we have a valid TOKEN cookie, assume session is still valid
-                if self._cookies.get("TOKEN"):
-                    logger.debug("Session cookie is present, skipping re-authentication.")
-                    return True, None
-
-                # If no valid session, attempt re-authentication
-                logger.debug("No valid session cookie, performing re-authentication.")
+                logger.debug("Session expired, performing re-authentication.")
                 success, error = await self.authenticate_session()
                 return success, error
             return True, None
