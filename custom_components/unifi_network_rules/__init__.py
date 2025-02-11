@@ -37,7 +37,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     try:
         import functools
         # Load the strings file from the integration's directory asynchronously
-        strings_path = os.path.join(os.path.dirname(__file__), "strings.json")
+        strings_path = os.path.join(os.path.dirname(__file__), "custom_strings.json")
         def read_json_file(path: str):
             with open(path, "r") as f:
                 return json.load(f)
