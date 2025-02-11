@@ -359,9 +359,8 @@ class UDMAPI:
     async def toggle_traffic_route(self, route_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
         """Toggle a traffic route."""
         # First get all traffic routes
-        all_routes_url = f"https://{self.host}{TRAFFIC_ROUTES_ENDPOINT}"
-        logger.info("Fetching all routes from URL: %s", all_routes_url)
-        success, all_routes, error = await self._make_authenticated_request('get', all_routes_url)
+        logger.info("Fetching all routes from URL: %s", TRAFFIC_ROUTES_ENDPOINT)
+        success, all_routes, error = await self.get_traffic_routes()
         logger.info("GET all routes response - Success: %s, Total Routes: %s, Error: %s", 
                     success, len(all_routes) if all_routes else 0, error)
         
@@ -380,7 +379,7 @@ class UDMAPI:
         updated_route['enabled'] = enabled
         
         # PUT the update back
-        update_url = f"{all_routes_url}/{route_id}"
+        update_url = f"https://{self.host}{TRAFFIC_ROUTES_ENDPOINT}/{route_id}"
         logger.info("Sending PUT request to %s with route: %s", update_url, updated_route)
         success, response, error = await self._make_authenticated_request('put', update_url, updated_route)
         logger.info("PUT response - Success: %s, Response: %s, Error: %s", success, response, error)
@@ -467,29 +466,39 @@ class UDMAPI:
             logger.exception("Error processing legacy traffic rules")
             return False, None, f"Error processing response: {str(e)}"
     
-    async def toggle_legacy_firewall_rule(self, rule_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
-        """Toggle a legacy firewall rule."""
-        url = f"https://{self.host}{LEGACY_FIREWALL_RULES_ENDPOINT}/{rule_id}"
+    async def get_legacy_firewall_rule(self, rule_id: str) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
+        """Fetch a single legacy firewall rule by its rule_id.
         
-        # First get the current rule
+        Returns a tuple (success, rule, error) where rule is the rule dictionary.
+        """
+        url = f"https://{self.host}{LEGACY_FIREWALL_RULES_ENDPOINT}/{rule_id}"
         success, response, error = await self._make_authenticated_request('get', url)
+        
         if not success:
-            return False, f"Failed to fetch rule: {error}"
-
+            return False, None, f"Failed to fetch rule: {error}"
+            
         if not response or not isinstance(response, dict) or 'data' not in response:
-            return False, "Invalid rule data received"
-
-        # For legacy firewall rules, the response includes a data array
+            return False, None, "Invalid rule data received"
+        
         rules = response.get('data', [])
         rule = next((r for r in rules if r['_id'] == rule_id), None)
         if not rule:
-            return False, f"Rule {rule_id} not found"
-
-        # Create a copy and update
+            return False, None, f"Rule {rule_id} not found"
+        
+        return True, rule, None
+    
+    async def toggle_legacy_firewall_rule(self, rule_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
+        """Toggle a legacy firewall rule."""
+        # Use the new helper method to fetch the rule.
+        success, rule, error = await self.get_legacy_firewall_rule(rule_id)
+        if not success:
+            return False, error
+        
+        # Create a copy and update the enabled state.
         updated_rule = dict(rule)
         updated_rule['enabled'] = enabled
         
-        # Send the update
+        url = f"https://{self.host}{LEGACY_FIREWALL_RULES_ENDPOINT}/{rule_id}"
         success, response, error = await self._make_authenticated_request('put', url, updated_rule)
         if not success:
             return False, f"Failed to update rule: {error}"
