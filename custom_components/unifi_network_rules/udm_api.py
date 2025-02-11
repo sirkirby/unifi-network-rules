@@ -334,6 +334,21 @@ class UDMAPI:
             
         url = f"https://{self.host}{FIREWALL_POLICIES_ENDPOINT}"
         return await self._make_authenticated_request('get', url)
+    
+    async def get_firewall_policy(self, policy_id: str) -> tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
+        """Fetch a single firewall policy by its policy_id.
+        
+        Returns a tuple (success, policy, error) where policy is the policy dictionary.
+        """
+        success, policies, error = await self.get_firewall_policies()
+        if not success:
+            return False, None, error
+        if policies is None:
+            return False, None, "No policies returned"
+        policy = next((p for p in policies if p.get('_id') == policy_id), None)
+        if policy is None:
+            return False, None, f"Policy with id {policy_id} not found"
+        return True, policy, None
 
     async def get_traffic_routes(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch all traffic routes from the UDM."""
@@ -371,7 +386,7 @@ class UDMAPI:
         logger.info("GET all routes response - Success: %s, Total Routes: %s, Error: %s", 
                     success, len(all_routes) if all_routes else 0, error)
         
-        if not success or not all_routes:
+        if not success:
             logger.error("Failed to fetch all routes: %s", error)
             return False, f"Failed to fetch all routes: {error}"
 

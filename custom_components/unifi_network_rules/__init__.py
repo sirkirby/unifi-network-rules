@@ -18,10 +18,10 @@ from .const import (
     DEFAULT_UPDATE_INTERVAL
 )
 from .udm_api import UDMAPI
-from .coordinator import UDMUpdateCoordinator  # New import for coordinator
-from . import services  # New import for services
-from .utils import logger  # New import for our logger helper
-from .utils.logger import log_call  # New import
+from .coordinator import UDMUpdateCoordinator
+from . import services
+from .utils import logger
+from .utils.logger import log_call
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,7 +36,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.data.setdefault(DOMAIN, {})
     try:
         import functools
-        # Load the strings file from the integration's directory asynchronously
         strings_path = os.path.join(os.path.dirname(__file__), "custom_strings.json")
         def read_json_file(path: str):
             with open(path, "r") as f:
@@ -60,7 +59,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     logger.debug("Creating UDMAPI instance")
     api = UDMAPI(host, username, password)
     
-    # Basic login check and capability detection
     try:
         logger.debug("Attempting initial login")
         success, error = await api.authenticate_session()
@@ -69,7 +67,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await api.cleanup()
             raise ConfigEntryNotReady(f"Login failed: {error}")
 
-        # Detect UDM capabilities
         logger.debug("Detecting UDM capabilities")
         if not await api.detect_capabilities():
             _LOGGER.error("Failed to detect UDM capabilities")
@@ -84,40 +81,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     logger.debug("Creating coordinator")
     coordinator = UDMUpdateCoordinator(hass, api, update_interval)
 
-    # Perform initial data fetch
     logger.debug("Performing initial data fetch")
     await coordinator.async_config_entry_first_refresh()
 
-    # Verify we have data before proceeding
     if coordinator.data is None:
         error_msg = "No data received from UniFi Network during setup"
         _LOGGER.error(error_msg)
         await api.cleanup()
         raise ConfigEntryNotReady(error_msg)
 
-    # Log the initial data for debugging
     logger.debug("Initial coordinator data:")
     if api.capabilities.zone_based_firewall:
         logger.debug("Firewall Policies: %d", len(coordinator.data.get("firewall_policies", [])))
     if api.capabilities.legacy_firewall:
         logger.debug("Legacy Firewall Rules: %d", len(coordinator.data.get("firewall_rules", {}).get("data", [])))
         logger.debug("Legacy Traffic Rules: %d", len(coordinator.data.get("traffic_rules", [])))
-    
-    # Store API and coordinator
+
     logger.debug("Storing API and coordinator")
     hass.data[DOMAIN][entry.entry_id] = {
         'api': api,
         'coordinator': coordinator,
     }
 
-    # Setup services
     await services.async_setup_services(hass)
 
-    # Set up platform
     logger.debug("Setting up platform")
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Register cleanup
     logger.debug("Registering cleanup")
     entry.async_on_unload(cleanup_api(hass, entry))
 
