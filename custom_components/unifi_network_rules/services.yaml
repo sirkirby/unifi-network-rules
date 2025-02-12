@@ -1,4 +1,32 @@
 refresh:
-  name: Refresh Data
-  description: "Refresh UniFi Network Rules data"
+  name: Refresh Rules
+  description: "Refresh the state of all network rules"
   fields: {}
+  selector:
+    action: {}
+
+backup_rules:
+  name: Backup Rules
+  description: "Backup all firewall and traffic rules to a file"
+  fields:
+    filename:
+      name: Filename
+      description: "Name of the backup file (will be stored in Home Assistant's config directory)"
+      required: true
+      example: "unifi_rules_backup_2024.json"
+      selector:
+        text:
+          placeholder: "unifi_rules_backup.json"
+
+restore_rules:
+  name: Restore Rules
+  description: "Restore firewall and traffic rules from a backup file"
+  fields:
+    filename:
+      name: Filename
+      description: "Name of the backup file to restore from (must exist in Home Assistant's config directory)"
+      required: true
+      example: "unifi_rules_backup_2024.json"
+      selector:
+        text:
+          placeholder: "unifi_rules_backup.json"

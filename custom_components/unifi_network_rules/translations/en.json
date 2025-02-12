@@ -18,5 +18,31 @@
         "already_configured": "UDM Rule Manager is already configured"
       }
     },
+    "services": {
+      "refresh": {
+        "name": "Refresh Rules",
+        "description": "Refresh the state of all network rules"
+      },
+      "backup_rules": {
+        "name": "Backup Rules",
+        "description": "Backup all firewall and traffic rules to a file",
+        "fields": {
+          "filename": {
+            "name": "Filename",
+            "description": "Name of the backup file (will be stored in Home Assistant's config directory)"
+          }
+        }
+      },
+      "restore_rules": {
+        "name": "Restore Rules",
+        "description": "Restore firewall and traffic rules from a backup file",
+        "fields": {
+          "filename": {
+            "name": "Filename",
+            "description": "Name of the backup file to restore from (must exist in Home Assistant's config directory)"
+          }
+        }
+      }
+    },
     "title": "UniFi Network Rules"
   }

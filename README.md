@@ -39,6 +39,59 @@ THEN
 
 Once you have configured the integration, you will be able to see the firewall policies (or traffic rules and network rules if you have not migrated to zone-based firewall), and traffic routes configured on your Unifi Network as switches in Home Assistant. Add the switch to a custom dashboard or use it in automations just like any other Home Assistant switch.
 
+## Services
+
+The integration provides several services that can be used as buttons in your dashboards or in automations:
+
+### Refresh Rules
+
+Manually refresh the state of all network rules. Useful if you've made changes directly in the UniFi interface.
+
+Example button card configuration:
+```yaml
+type: button
+name: Refresh Rules
+tap_action:
+  action: call-service
+  service: unifi_network_rules.refresh
+```
+
+### Backup Rules
+
+Create a backup of all your firewall and traffic rules. The backup will be stored in your Home Assistant config directory.
+
+Example button card configuration:
+```yaml
+type: button
+name: Backup Rules
+tap_action:
+  action: call-service
+  service: unifi_network_rules.backup_rules
+  data:
+    filename: "unifi_rules_backup.json"
+```
+
+### Restore Rules
+
+Restore rules from a previously created backup file.
+
+Example button card configuration:
+```yaml
+type: button
+name: Restore Rules
+tap_action:
+  action: call-service
+  service: unifi_network_rules.restore_rules
+  data:
+    filename: "unifi_rules_backup.json"
+```
+
+You can add these buttons to your dashboard by:
+1. Edit your dashboard
+2. Click the + button to add a card
+3. Choose "Button"
+4. Configure using the examples above
+
 ## Local Development
 
 ### Testing

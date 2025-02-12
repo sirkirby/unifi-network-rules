@@ -536,6 +536,42 @@ class UDMAPI:
             
         return True, None
 
+    async def update_firewall_policy(self, policy_id: str, policy_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Update a firewall policy with complete state data."""
+        url = f"https://{self.host}{FIREWALL_POLICIES_ENDPOINT}/{policy_id}"
+        success, response, error = await self._make_authenticated_request('put', url, policy_data)
+        if not success:
+            logger.error(f"Failed to update firewall policy {policy_id}: {error}")
+            return False, error
+        return True, None
+
+    async def update_traffic_route(self, route_id: str, route_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Update a traffic route with complete state data."""
+        url = f"https://{self.host}{TRAFFIC_ROUTES_ENDPOINT}/{route_id}"
+        success, response, error = await self._make_authenticated_request('put', url, route_data)
+        if not success:
+            logger.error(f"Failed to update traffic route {route_id}: {error}")
+            return False, error
+        return True, None
+
+    async def update_legacy_firewall_rule(self, rule_id: str, rule_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Update a legacy firewall rule with complete state data."""
+        url = f"https://{self.host}{LEGACY_FIREWALL_RULES_ENDPOINT}/{rule_id}"
+        success, response, error = await self._make_authenticated_request('put', url, rule_data)
+        if not success:
+            logger.error(f"Failed to update legacy firewall rule {rule_id}: {error}")
+            return False, error
+        return True, None
+
+    async def update_legacy_traffic_rule(self, rule_id: str, rule_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Update a legacy traffic rule with complete state data."""
+        url = f"https://{self.host}{LEGACY_TRAFFIC_RULES_ENDPOINT}/{rule_id}"
+        success, response, error = await self._make_authenticated_request('put', url, rule_data)
+        if not success:
+            logger.error(f"Failed to update legacy traffic rule {rule_id}: {error}")
+            return False, error
+        return True, None
+
     def _log_response_data(self, method: str, url: str, response_status: int, response_text: str):
         """Log response data in a structured way."""
         try:
