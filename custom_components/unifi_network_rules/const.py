@@ -6,7 +6,7 @@ DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_DELAY = 1
 
 CONF_UPDATE_INTERVAL = "update_interval"
-DEFAULT_UPDATE_INTERVAL = 5
+DEFAULT_UPDATE_INTERVAL = 1  # Changed from 5 to 1 minute for more responsive updates
 SESSION_TIMEOUT = 30
 
 # API Endpoints
