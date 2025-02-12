@@ -2,8 +2,6 @@ refresh:
   name: Refresh Rules
   description: "Refresh the state of all network rules"
   fields: {}
-  selector:
-    action: {}
 
 backup_rules:
   name: Backup Rules
@@ -15,8 +13,7 @@ backup_rules:
       required: true
       example: "unifi_rules_backup_2024.json"
       selector:
-        text:
-          placeholder: "unifi_rules_backup.json"
+        text: {}
 
 restore_rules:
   name: Restore Rules
@@ -28,5 +25,4 @@ restore_rules:
       required: true
       example: "unifi_rules_backup_2024.json"
       selector:
-        text:
-          placeholder: "unifi_rules_backup.json"
+        text: {}
