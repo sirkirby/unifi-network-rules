@@ -20,7 +20,8 @@ from .const import (
     DEFAULT_HEADERS,
     MIN_REQUEST_INTERVAL,
     ZONE_BASED_FIREWALL_FEATURE,
-    COOKIE_TOKEN
+    COOKIE_TOKEN,
+    SESSION_TIMEOUT
 )
 from .utils import logger
 from .utils.logger import log_call
@@ -46,7 +47,7 @@ class UDMAPI:
         # Session management
         self._session: Optional[aiohttp.ClientSession] = None
         self._login_lock = asyncio.Lock()
-        self._session_timeout = timedelta(minutes=30)  # Initialize the session timeout (30 minutes)
+        self._session_timeout = timedelta(minutes=SESSION_TIMEOUT)
         self._last_login: Optional[datetime] = None
         
         # Authentication state
@@ -153,38 +154,33 @@ class UDMAPI:
         return None
 
     def _is_session_expired(self) -> bool:
-        """Check if the current session has expired.
-        
-        The session is considered expired if:
-          - The authentication cookie is missing.
-          - The elapsed time since the last successful login exceeds the session timeout.
-        """
+        """Check if the current session has expired."""
         now = datetime.now()
- 
-        # Check if the authentication cookie exists.
-        if not self._cookies.get(COOKIE_TOKEN):
+
+        # Ensure at least one form of authentication exists
+        if not self._cookies.get("TOKEN"):
             logger.debug("Session expired: Missing authentication cookie")
             return True
- 
-        # Check if the last login time exceeds the configured session timeout.
-        if self._last_login and (now - self._last_login) > self._session_timeout:
-            logger.debug("Session expired: Timed out (elapsed: %s, timeout: %s)", now - self._last_login, self._session_timeout)
+
+        # Extend session lifespan check
+        if self._last_login and (now - self._last_login) > timedelta(minutes=30):
+            logger.debug("Session expired: Timed out")
             return True
- 
+
         logger.debug("Session is valid")
         return False
 
     def _get_base_headers(self) -> Dict[str, str]:
-        """Get base headers for requests using constants from const.py."""
         headers = DEFAULT_HEADERS.copy()  # use constant default headers
-        if self._device_token:
+        # Only add Authorization header if the cookie is not present.
+        if not self._cookies.get(COOKIE_TOKEN) and self._device_token:
             headers['Authorization'] = f'Bearer {self._device_token}'
         return headers
 
     def _get_proxy_headers(self) -> Dict[str, str]:
-        """Get proxy headers for requests using constants from const.py."""
-        headers = DEFAULT_HEADERS.copy()
-        headers["X-CSRF-Token"] = self._csrf_token or ""
+        headers = self._get_base_headers()  # Use base headers that contain "Authorization"
+        if self._csrf_token:
+            headers["X-CSRF-Token"] = self._csrf_token
         if COOKIE_TOKEN in self._cookies:
             headers["Cookie"] = f"{COOKIE_TOKEN}={self._cookies[COOKIE_TOKEN]}"
         logger.debug(f"Using headers: {headers}")
@@ -202,7 +198,7 @@ class UDMAPI:
 
         try:
             session = await self._get_session()
-            async with session.post(url, json=data, timeout=ClientTimeout(total=30)) as response:
+            async with session.post(url, json=data, headers=DEFAULT_HEADERS, timeout=ClientTimeout(total=30)) as response:
                 logger.debug(f"Auth response status: {response.status}")
                 
                 if response.status != 200:
@@ -253,11 +249,11 @@ class UDMAPI:
         """Ensure we have a valid authentication session."""
         async with self._login_lock:
             if self._is_session_expired():
-                logger.debug("Session expired, performing re-authentication.")
-                success, error = await self.authenticate_session()
-                return success, error
+                logger.debug("Session expired, re-authenticating")
+                return await self.authenticate_session()
             return True, None
 
+    @log_call
     async def _make_authenticated_request(self, method: str, url: str, json_data: Optional[Dict[str, Any]] = None) -> Tuple[bool, Any, Optional[str]]:
         """Make an authenticated request with correct headers and enhanced logging."""
         async with self._request_lock:
@@ -265,44 +261,56 @@ class UDMAPI:
 
             for attempt in range(self.max_retries):
                 try:
-                    if self._is_session_expired():
-                        logger.debug("Session expired, attempting reauth")
-                        success, error = await self.authenticate_session()
-                        if not success:
-                            return False, None, f"Authentication failed: {error}"
-
                     session = await self._get_session()
                     headers = self._get_proxy_headers()
                     
-                    logger.debug(f"Making {method.upper()} request to {url}")
+                    logger.debug(f"Making {method.upper()} request to {url} with headers: {headers}")
                     if json_data:
                         logger.debug(f"Request payload: {json.dumps(json_data, indent=2)}")
 
                     async with session.request(method, url, headers=headers, json=json_data) as response:
                         response_text = await response.text()
-                        self._log_response_data(method, url, response.status, response_text)
+                        
+                        # Handle authentication errors
+                        if response.status in [401, 403]:
+                            logger.warning(f"Authentication error ({response.status}): {response_text}")
+                            # Force complete re-authentication by clearing all auth state
+                            self._cookies.clear()
+                            self._csrf_token = None
+                            self._device_token = None
+                            self._last_login = None
+                            
+                            # Try to re-authenticate immediately
+                            auth_success, auth_error = await self.authenticate_session()
+                            if not auth_success:
+                                logger.error(f"Re-authentication failed: {auth_error}")
+                                if attempt < self.max_retries - 1:
+                                    await asyncio.sleep(self.retry_delay)
+                                    continue
+                                return False, None, f"Authentication failed after {self.max_retries} attempts"
+                            
+                            # Retry the request immediately with new auth
+                            continue
+
+                        # Update CSRF token if provided
+                        new_csrf = response.headers.get("x-csrf-token") or response.headers.get("x-updated-csrf-token")
+                        if new_csrf:
+                            logger.debug(f"Updating CSRF token to: {new_csrf}")
+                            self._csrf_token = new_csrf
+
+                        # Update cookies from response
+                        for cookie in response.cookies.values():
+                            if cookie.key == COOKIE_TOKEN:
+                                self._cookies[COOKIE_TOKEN] = cookie.value
+                                logger.debug(f"Updated {COOKIE_TOKEN} cookie from response")
 
                         if response.status == 200:
                             try:
                                 parsed_response = json.loads(response_text)
-                                self._last_successful_request = datetime.now()
                                 return True, parsed_response, None
                             except json.JSONDecodeError as e:
                                 logger.error(f"Failed to parse JSON response: {e}")
                                 return False, None, f"Invalid JSON response: {str(e)}"
-
-                        if response.status in [401, 403]:
-                            logger.warning(f"Received {response.status}: {response_text}")
-                            # Clear stored session tokens to force a new login.
-                            self._last_login = None
-                            self._cookies = {}
-                            # Try to log in again
-                            success, auth_error = await self.authenticate_session()
-                            if not success:
-                                return False, None, f"Authentication failed: {auth_error}"
-                            if attempt < self.max_retries - 1:
-                                await asyncio.sleep(self.retry_delay)
-                                continue
 
                         return False, None, f"Request failed: {response.status}, {response_text}"
 
@@ -315,21 +323,13 @@ class UDMAPI:
 
             return False, None, "Max retries reached"
 
-
     async def get_firewall_policies(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch firewall policies from the UDM."""
-        auth_success, auth_error = await self.ensure_authenticated()
-        if not auth_success:
-            return False, None, f"Authentication failed: {auth_error}"
-            
         url = f"https://{self.host}{FIREWALL_POLICIES_ENDPOINT}"
         return await self._make_authenticated_request('get', url)
     
-    async def get_firewall_policy(self, policy_id: str) -> tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
-        """Fetch a single firewall policy by its policy_id.
-        
-        Returns a tuple (success, policy, error) where policy is the policy dictionary.
-        """
+    async def get_firewall_policy(self, policy_id: str) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
+        """Fetch a single firewall policy by its policy_id."""
         success, policies, error = await self.get_firewall_policies()
         if not success:
             return False, None, error
@@ -342,10 +342,6 @@ class UDMAPI:
 
     async def get_traffic_routes(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch all traffic routes from the UDM."""
-        auth_success, auth_error = await self.ensure_authenticated()
-        if not auth_success:
-            return False, None, f"Authentication failed: {auth_error}"
-            
         url = f"https://{self.host}{TRAFFIC_ROUTES_ENDPOINT}"
         return await self._make_authenticated_request('get', url)
 
@@ -404,19 +400,11 @@ class UDMAPI:
     
     async def get_firewall_zone_matrix(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch firewall zone matrix from the UDM."""
-        auth_success, auth_error = await self.ensure_authenticated()
-        if not auth_success:
-            return False, None, f"Authentication failed: {auth_error}"
-            
         url = f"https://{self.host}{FIREWALL_ZONE_MATRIX_ENDPOINT}"
         return await self._make_authenticated_request('get', url)
 
     async def get_legacy_firewall_rules(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch legacy firewall rules from the UDM."""
-        auth_success, auth_error = await self.ensure_authenticated()
-        if not auth_success:
-            return False, None, f"Authentication failed: {auth_error}"
-        
         url = f"https://{self.host}{LEGACY_FIREWALL_RULES_ENDPOINT}"
         success, response, error = await self._make_authenticated_request('get', url)
         
@@ -449,10 +437,6 @@ class UDMAPI:
 
     async def get_legacy_traffic_rules(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch legacy traffic rules from the UDM."""
-        auth_success, auth_error = await self.ensure_authenticated()
-        if not auth_success:
-            return False, None, f"Authentication failed: {auth_error}"
-        
         url = f"https://{self.host}{LEGACY_TRAFFIC_RULES_ENDPOINT}"
         success, response, error = await self._make_authenticated_request('get', url)
         

@@ -7,6 +7,7 @@ DEFAULT_RETRY_DELAY = 1
 
 CONF_UPDATE_INTERVAL = "update_interval"
 DEFAULT_UPDATE_INTERVAL = 5
+SESSION_TIMEOUT = 30
 
 # API Endpoints
 SITE_FEATURE_MIGRATION_ENDPOINT = "/proxy/network/v2/api/site/default/site-feature-migration"
