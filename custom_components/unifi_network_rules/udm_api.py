@@ -257,8 +257,9 @@ class UDMAPI:
     async def _make_authenticated_request(self, method: str, url: str, json_data: Optional[Dict[str, Any]] = None) -> Tuple[bool, Any, Optional[str]]:
         """Make an authenticated request with correct headers and enhanced logging."""
         async with self._request_lock:
+            await self.ensure_authenticated()  # Ensure session is authenticated before making request
             await self._wait_for_next_request()
-
+            last_error = None  # capture the last error message
             for attempt in range(self.max_retries):
                 try:
                     session = await self._get_session()
@@ -271,10 +272,11 @@ class UDMAPI:
                     async with session.request(method, url, headers=headers, json=json_data) as response:
                         response_text = await response.text()
                         
-                        # Handle authentication errors
+                        # Handle authentication errors (401/403)
                         if response.status in [401, 403]:
+                            last_error = f"Request failed: {response.status}, {response_text}"
                             logger.warning(f"Authentication error ({response.status}): {response_text}")
-                            # Force complete re-authentication by clearing all auth state
+                            # Clear authentication state
                             self._cookies.clear()
                             self._csrf_token = None
                             self._device_token = None
@@ -289,7 +291,9 @@ class UDMAPI:
                                     continue
                                 return False, None, f"Authentication failed after {self.max_retries} attempts"
                             
-                            # Retry the request immediately with new auth
+                            # Always sleep before retrying (except on final attempt)
+                            if attempt < self.max_retries - 1:
+                                await asyncio.sleep(self.retry_delay)
                             continue
 
                         # Update CSRF token if provided
@@ -298,11 +302,12 @@ class UDMAPI:
                             logger.debug(f"Updating CSRF token to: {new_csrf}")
                             self._csrf_token = new_csrf
 
-                        # Update cookies from response
-                        for cookie in response.cookies.values():
-                            if cookie.key == COOKIE_TOKEN:
-                                self._cookies[COOKIE_TOKEN] = cookie.value
-                                logger.debug(f"Updated {COOKIE_TOKEN} cookie from response")
+                        # Update cookies from response safely
+                        if isinstance(response.cookies, dict):
+                            for cookie in response.cookies.values():
+                                if cookie.key == COOKIE_TOKEN:
+                                    self._cookies[COOKIE_TOKEN] = cookie.value
+                                    logger.debug(f"Updated {COOKIE_TOKEN} cookie from response")
 
                         if response.status == 200:
                             try:
@@ -312,16 +317,18 @@ class UDMAPI:
                                 logger.error(f"Failed to parse JSON response: {e}")
                                 return False, None, f"Invalid JSON response: {str(e)}"
 
-                        return False, None, f"Request failed: {response.status}, {response_text}"
+                        last_error = f"Request failed: {response.status}, {response_text}"
+                        return False, None, last_error
 
                 except Exception as e:
+                    last_error = str(e)
                     logger.error(f"Request error: {str(e)}")
                     if attempt < self.max_retries - 1:
                         await asyncio.sleep(self.retry_delay)
                         continue
-                    return False, None, str(e)
+                    return False, None, last_error
 
-            return False, None, "Max retries reached"
+            return False, None, last_error if last_error else "Max retries reached"
 
     async def get_firewall_policies(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch firewall policies from the UDM."""
