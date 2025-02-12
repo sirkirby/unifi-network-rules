@@ -1,4 +1,5 @@
 """Support for UniFi Network Rules switches."""
+from __future__ import annotations
 import logging
 import asyncio
 from typing import Any, Dict, List
@@ -10,6 +11,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_registry import EntityRegistry, async_get
+from .utils.logger import log_call
 
 from .const import DOMAIN
 
@@ -85,6 +87,24 @@ class UDMBaseSwitch(CoordinatorEntity, SwitchEntity):
 
         return False
 
+    async def _execute_toggle(self, new_state: bool, toggle_fn, verify_fn, entity_name: str) -> None:
+        """Execute toggle with verification using a common method."""
+        try:
+            self._pending_state = new_state
+            self.async_write_ha_state()
+
+            success, error = await toggle_fn(self._item_id, new_state)
+            if success and await self._verify_state_change(new_state, verify_fn):
+                return
+
+            self._pending_state = None
+            self.async_write_ha_state()
+            raise HomeAssistantError(f"Failed to toggle {entity_name}: {error}")
+        except Exception as e:
+            self._pending_state = None
+            self.async_write_ha_state()
+            raise HomeAssistantError(f"Error toggling {entity_name}: {str(e)}")
+
 class UDMFirewallPolicySwitch(UDMBaseSwitch):
     """Representation of a UDM Firewall Policy Switch."""
 
@@ -114,25 +134,8 @@ class UDMFirewallPolicySwitch(UDMBaseSwitch):
         await self._toggle(False)
 
     async def _toggle(self, new_state: bool) -> None:
-        """Toggle the policy state."""
-        try:
-            self._pending_state = new_state
-            self.async_write_ha_state()
-
-            success, error = await self._api.toggle_firewall_policy(self._item_id, new_state)
-            
-            if success:
-                if await self._verify_state_change(new_state, self._api.get_firewall_policies):
-                    return
-                
-            self._pending_state = None
-            self.async_write_ha_state()
-            raise HomeAssistantError(f"Failed to toggle firewall policy: {error}")
-                
-        except Exception as e:
-            self._pending_state = None
-            self.async_write_ha_state()
-            raise HomeAssistantError(f"Error toggling firewall policy: {str(e)}")
+        """Toggle the firewall policy state."""
+        await self._execute_toggle(new_state, self._api.toggle_firewall_policy, self._api.get_firewall_policies, "firewall policy")
 
 class UDMLegacyRuleSwitch(UDMBaseSwitch):
     """Base class for legacy rule switches."""
@@ -161,25 +164,8 @@ class UDMLegacyFirewallRuleSwitch(UDMLegacyRuleSwitch):
         await self._toggle(False)
 
     async def _toggle(self, new_state: bool) -> None:
-        """Toggle the rule state."""
-        try:
-            self._pending_state = new_state
-            self.async_write_ha_state()
-
-            success, error = await self._api.toggle_legacy_firewall_rule(self._item_id, new_state)
-            
-            if success:
-                if await self._verify_state_change(new_state, self._api.get_legacy_firewall_rules):
-                    return
-                
-            self._pending_state = None
-            self.async_write_ha_state()
-            raise HomeAssistantError(f"Failed to toggle firewall rule: {error}")
-                
-        except Exception as e:
-            self._pending_state = None
-            self.async_write_ha_state()
-            raise HomeAssistantError(f"Error toggling firewall rule: {str(e)}")
+        """Toggle the legacy firewall rule state."""
+        await self._execute_toggle(new_state, self._api.toggle_legacy_firewall_rule, self._api.get_legacy_firewall_rules, "firewall rule")
 
 class UDMLegacyTrafficRuleSwitch(UDMLegacyRuleSwitch):
     """Representation of a UDM Legacy Traffic Rule Switch."""
@@ -197,25 +183,8 @@ class UDMLegacyTrafficRuleSwitch(UDMLegacyRuleSwitch):
         await self._toggle(False)
 
     async def _toggle(self, new_state: bool) -> None:
-        """Toggle the rule state."""
-        try:
-            self._pending_state = new_state
-            self.async_write_ha_state()
-
-            success, error = await self._api.toggle_legacy_traffic_rule(self._item_id, new_state)
-            
-            if success:
-                if await self._verify_state_change(new_state, self._api.get_legacy_traffic_rules):
-                    return
-                
-            self._pending_state = None
-            self.async_write_ha_state()
-            raise HomeAssistantError(f"Failed to toggle traffic rule: {error}")
-                
-        except Exception as e:
-            self._pending_state = None
-            self.async_write_ha_state()
-            raise HomeAssistantError(f"Error toggling traffic rule: {str(e)}")
+        """Toggle the legacy traffic rule state."""
+        await self._execute_toggle(new_state, self._api.toggle_legacy_traffic_rule, self._api.get_legacy_traffic_rules, "traffic rule")
 
 class UDMTrafficRouteSwitch(UDMBaseSwitch):
     """Representation of a UDM Traffic Route Switch."""
@@ -236,26 +205,10 @@ class UDMTrafficRouteSwitch(UDMBaseSwitch):
         await self._toggle(False)
 
     async def _toggle(self, new_state: bool) -> None:
-        """Toggle the route state."""
-        try:
-            self._pending_state = new_state
-            self.async_write_ha_state()
+        """Toggle the traffic route state."""
+        await self._execute_toggle(new_state, self._api.toggle_traffic_route, self._api.get_traffic_routes, "traffic route")
 
-            success, error = await self._api.toggle_traffic_route(self._item_id, new_state)
-            
-            if success:
-                if await self._verify_state_change(new_state, self._api.get_traffic_routes):
-                    return
-                
-            self._pending_state = None
-            self.async_write_ha_state()
-            raise HomeAssistantError(f"Failed to toggle traffic route: {error}")
-                
-        except Exception as e:
-            self._pending_state = None
-            self.async_write_ha_state()
-            raise HomeAssistantError(f"Error toggling traffic route: {str(e)}")
-
+@log_call
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
     """Set up the UniFi Network Rules switches."""
     coordinator = hass.data[DOMAIN][entry.entry_id]['coordinator']

@@ -1,20 +1,37 @@
 """UDM API for controlling UniFi Dream Machine."""
-import aiohttp
+from __future__ import annotations
 import asyncio
-import logging
-import json
 from typing import Any, Dict, List, Tuple, Optional
 from datetime import datetime, timedelta
-from aiohttp import ClientTimeout, ClientError, CookieJar
+import aiohttp
+import json
+from aiohttp import ClientTimeout, CookieJar
+from dataclasses import dataclass
 
-_LOGGER = logging.getLogger(__name__)
+from .const import (
+    SITE_FEATURE_MIGRATION_ENDPOINT,
+    FIREWALL_POLICIES_ENDPOINT,
+    TRAFFIC_ROUTES_ENDPOINT,
+    LEGACY_FIREWALL_RULES_ENDPOINT,
+    LEGACY_TRAFFIC_RULES_ENDPOINT,
+    FIREWALL_ZONE_MATRIX_ENDPOINT,
+    FIREWALL_POLICY_TOGGLE_ENDPOINT,
+    AUTH_LOGIN_ENDPOINT,
+    DEFAULT_HEADERS,
+    MIN_REQUEST_INTERVAL,
+    ZONE_BASED_FIREWALL_FEATURE,
+    COOKIE_TOKEN,
+    SESSION_TIMEOUT
+)
+from .utils import logger
+from .utils.logger import log_call
 
+@dataclass
 class UDMCapabilities:
     """Class to store UDM capabilities."""
-    def __init__(self):
-        self.zone_based_firewall = False
-        self.legacy_firewall = False
-        self.traffic_routes = False  # This should be checked independently
+    zone_based_firewall: bool = False
+    legacy_firewall: bool = False
+    traffic_routes: bool = False
 
 class UDMAPI:
     """Class to interact with UniFi Dream Machine API."""
@@ -30,7 +47,7 @@ class UDMAPI:
         # Session management
         self._session: Optional[aiohttp.ClientSession] = None
         self._login_lock = asyncio.Lock()
-        self._session_timeout = timedelta(minutes=30)
+        self._session_timeout = timedelta(minutes=SESSION_TIMEOUT)
         self._last_login: Optional[datetime] = None
         
         # Authentication state
@@ -41,27 +58,27 @@ class UDMAPI:
         # Rate limiting
         self._request_lock = asyncio.Lock()
         self._last_request_time: Optional[datetime] = None
-        self._min_request_interval = 2.0
+        self._min_request_interval = MIN_REQUEST_INTERVAL
 
+    @log_call
     async def detect_capabilities(self) -> bool:
         """Detect UDM capabilities by checking endpoints."""
         try:
-            # Check feature migration status first
-            url = f"https://{self.host}/proxy/network/v2/api/site/default/site-feature-migration"
+            url = f"https://{self.host}{SITE_FEATURE_MIGRATION_ENDPOINT}"
             success, migrations, error = await self._make_authenticated_request('get', url)
             
-            _LOGGER.debug("Feature migration check: success=%s, data=%s, error=%s", 
+            logger.debug("Feature migration check: success=%s, data=%s, error=%s", 
                         success, migrations, error)
 
             if success and isinstance(migrations, list):
                 self.capabilities.zone_based_firewall = any(
-                    m.get("feature") == "ZONE_BASED_FIREWALL" 
+                    m.get("feature") == ZONE_BASED_FIREWALL_FEATURE
                     for m in migrations
                 )
             else:
                 # If migration check fails, check policies endpoint
                 success, policies, error = await self.get_firewall_policies()
-                _LOGGER.debug("Firewall policies check: success=%s, has_data=%s, error=%s",
+                logger.debug("Firewall policies check: success=%s, has_data=%s, error=%s",
                             success, bool(policies), error)
                 self.capabilities.zone_based_firewall = success
 
@@ -75,7 +92,7 @@ class UDMAPI:
             routes_success, routes_data, _ = await self.get_traffic_routes()
             self.capabilities.traffic_routes = routes_success and isinstance(routes_data, list)
 
-            _LOGGER.info(
+            logger.info(
                 "UDM Capabilities: zone_based_firewall=%s, legacy_firewall=%s, traffic_routes=%s",
                 self.capabilities.zone_based_firewall,
                 self.capabilities.legacy_firewall,
@@ -85,14 +102,13 @@ class UDMAPI:
             return True
 
         except Exception as e:
-            _LOGGER.error("Error detecting UDM capabilities: %s", str(e))
+            logger.error("Error detecting UDM capabilities: %s", str(e))
             return False
     
     async def _check_legacy_endpoints(self) -> bool:
         """Check if legacy endpoints return data."""
-        # Try legacy firewall rules endpoint
         success, rules, error = await self.get_legacy_firewall_rules()
-        _LOGGER.debug("Legacy firewall check: success=%s, has_data=%s, error=%s",
+        logger.debug("Legacy firewall check: success=%s, has_data=%s, error=%s",
                     success, bool(rules), error)
         
         if success and rules:
@@ -100,7 +116,7 @@ class UDMAPI:
 
         # Try legacy traffic rules endpoint as backup
         success, rules, error = await self.get_legacy_traffic_rules()
-        _LOGGER.debug("Legacy traffic check: success=%s, has_data=%s, error=%s",
+        logger.debug("Legacy traffic check: success=%s, has_data=%s, error=%s",
                     success, bool(rules), error)
         
         return success and bool(rules)
@@ -123,7 +139,7 @@ class UDMAPI:
             elapsed = datetime.now() - self._last_request_time
             if elapsed.total_seconds() < self._min_request_interval:
                 wait_time = self._min_request_interval - elapsed.total_seconds()
-                _LOGGER.debug(f"Rate limiting: waiting {wait_time:.2f} seconds")
+                logger.debug(f"Rate limiting: waiting {wait_time:.2f} seconds")
                 await asyncio.sleep(wait_time)
         self._last_request_time = datetime.now()
 
@@ -131,10 +147,10 @@ class UDMAPI:
         """Parse TOKEN value from Set-Cookie header."""
         try:
             parts = cookie_str.split(';')[0].split('=')
-            if len(parts) == 2 and parts[0].strip().upper() == 'TOKEN':
+            if len(parts) == 2 and parts[0].strip().upper() == COOKIE_TOKEN:
                 return parts[1].strip()
         except Exception as e:
-            _LOGGER.error(f"Failed to parse token cookie: {e}")
+            logger.error(f"Failed to parse token cookie: {e}")
         return None
 
     def _is_session_expired(self) -> bool:
@@ -143,45 +159,37 @@ class UDMAPI:
 
         # Ensure at least one form of authentication exists
         if not self._cookies.get("TOKEN"):
-            _LOGGER.debug("Session expired: Missing authentication cookie")
+            logger.debug("Session expired: Missing authentication cookie")
             return True
 
         # Extend session lifespan check
         if self._last_login and (now - self._last_login) > timedelta(minutes=30):
-            _LOGGER.debug("Session expired: Timed out")
+            logger.debug("Session expired: Timed out")
             return True
 
-        _LOGGER.debug("Session is valid")
+        logger.debug("Session is valid")
         return False
 
-
     def _get_base_headers(self) -> Dict[str, str]:
-        """Get base headers for requests."""
-        headers = {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-        }
-        if self._device_token:
+        headers = DEFAULT_HEADERS.copy()  # use constant default headers
+        # Only add Authorization header if the cookie is not present.
+        if not self._cookies.get(COOKIE_TOKEN) and self._device_token:
             headers['Authorization'] = f'Bearer {self._device_token}'
         return headers
 
     def _get_proxy_headers(self) -> Dict[str, str]:
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "X-CSRF-Token": self._csrf_token or "", 
-        }
-
-        if "TOKEN" in self._cookies:
-            headers["Cookie"] = f"TOKEN={self._cookies['TOKEN']}"
-
-        _LOGGER.debug(f"Using headers: {headers}")
+        headers = self._get_base_headers()  # Use base headers that contain "Authorization"
+        if self._csrf_token:
+            headers["X-CSRF-Token"] = self._csrf_token
+        if COOKIE_TOKEN in self._cookies:
+            headers["Cookie"] = f"{COOKIE_TOKEN}={self._cookies[COOKIE_TOKEN]}"
+        logger.debug(f"Using headers: {headers}")
         return headers
 
-
+    @log_call
     async def authenticate_session(self) -> Tuple[bool, Optional[str]]:
         """Authenticate and get session token."""
-        url = f"https://{self.host}/api/auth/login"
+        url = f"https://{self.host}{AUTH_LOGIN_ENDPOINT}"
         data = {
             "username": self.username,
             "password": self.password,
@@ -190,8 +198,8 @@ class UDMAPI:
 
         try:
             session = await self._get_session()
-            async with session.post(url, json=data, timeout=ClientTimeout(total=30)) as response:
-                _LOGGER.debug(f"Auth response status: {response.status}")
+            async with session.post(url, json=data, headers=DEFAULT_HEADERS, timeout=ClientTimeout(total=30)) as response:
+                logger.debug(f"Auth response status: {response.status}")
                 
                 if response.status != 200:
                     error_text = await response.text()
@@ -219,144 +227,166 @@ class UDMAPI:
                 for cookie_str in token_cookies:
                     token = self._parse_token_cookie(cookie_str)
                     if token:
-                        self._cookies['TOKEN'] = token
+                        self._cookies[COOKIE_TOKEN] = token
                         token_found = True
                         break
                 
                 if not token_found:
                     return False, "No TOKEN cookie in response"
                 
-                _LOGGER.debug("Authentication successful")
+                # Update the last login time on successful authentication.
+                self._last_login = datetime.now()
+                logger.debug("Authentication successful, updated session time.")
                 return True, None
                 
         except asyncio.TimeoutError:
             return False, "Authentication request timed out"
         except Exception as e:
-            _LOGGER.error(f"Authentication error: {str(e)}", exc_info=True)
+            logger.error(f"Authentication error: {str(e)}", exc_info=True)
             return False, str(e)
 
     async def ensure_authenticated(self) -> Tuple[bool, Optional[str]]:
         """Ensure we have a valid authentication session."""
         async with self._login_lock:
             if self._is_session_expired():
-                _LOGGER.debug("Session expired, but checking for valid authentication cookie.")
-
-                # If we have a valid TOKEN cookie, assume session is still valid
-                if self._cookies.get("TOKEN"):
-                    _LOGGER.debug("Session cookie is present, skipping re-authentication.")
-                    return True, None
-
-                # If no valid session, attempt re-authentication
-                _LOGGER.debug("No valid session cookie, performing re-authentication.")
-                success, error = await self.authenticate_session()
-                return success, error
+                logger.debug("Session expired, re-authenticating")
+                return await self.authenticate_session()
             return True, None
 
+    @log_call
     async def _make_authenticated_request(self, method: str, url: str, json_data: Optional[Dict[str, Any]] = None) -> Tuple[bool, Any, Optional[str]]:
         """Make an authenticated request with correct headers and enhanced logging."""
         async with self._request_lock:
+            await self.ensure_authenticated()  # Ensure session is authenticated before making request
             await self._wait_for_next_request()
-
+            last_error = None  # capture the last error message
             for attempt in range(self.max_retries):
                 try:
-                    if self._is_session_expired():
-                        _LOGGER.debug("Session expired, attempting reauth")
-                        success, error = await self.authenticate_session()
-                        if not success:
-                            return False, None, f"Authentication failed: {error}"
-
                     session = await self._get_session()
                     headers = self._get_proxy_headers()
                     
-                    _LOGGER.debug(f"Making {method.upper()} request to {url}")
+                    logger.debug(f"Making {method.upper()} request to {url} with headers: {headers}")
                     if json_data:
-                        _LOGGER.debug(f"Request payload: {json.dumps(json_data, indent=2)}")
+                        logger.debug(f"Request payload: {json.dumps(json_data, indent=2)}")
 
                     async with session.request(method, url, headers=headers, json=json_data) as response:
                         response_text = await response.text()
-                        self._log_response_data(method, url, response.status, response_text)
+                        
+                        # Handle authentication errors (401/403)
+                        if response.status in [401, 403]:
+                            last_error = f"Request failed: {response.status}, {response_text}"
+                            logger.warning(f"Authentication error ({response.status}): {response_text}")
+                            # Clear authentication state
+                            self._cookies.clear()
+                            self._csrf_token = None
+                            self._device_token = None
+                            self._last_login = None
+                            
+                            # Try to re-authenticate immediately
+                            auth_success, auth_error = await self.authenticate_session()
+                            if not auth_success:
+                                logger.error(f"Re-authentication failed: {auth_error}")
+                                if attempt < self.max_retries - 1:
+                                    await asyncio.sleep(self.retry_delay)
+                                    continue
+                                return False, None, f"Authentication failed after {self.max_retries} attempts"
+                            
+                            # Always sleep before retrying (except on final attempt)
+                            if attempt < self.max_retries - 1:
+                                await asyncio.sleep(self.retry_delay)
+                            continue
+
+                        # Update CSRF token if provided
+                        new_csrf = response.headers.get("x-csrf-token") or response.headers.get("x-updated-csrf-token")
+                        if new_csrf:
+                            logger.debug(f"Updating CSRF token to: {new_csrf}")
+                            self._csrf_token = new_csrf
+
+                        # Update cookies from response safely
+                        if isinstance(response.cookies, dict):
+                            for cookie in response.cookies.values():
+                                if cookie.key == COOKIE_TOKEN:
+                                    self._cookies[COOKIE_TOKEN] = cookie.value
+                                    logger.debug(f"Updated {COOKIE_TOKEN} cookie from response")
 
                         if response.status == 200:
                             try:
                                 parsed_response = json.loads(response_text)
-                                self._last_successful_request = datetime.now()
                                 return True, parsed_response, None
                             except json.JSONDecodeError as e:
-                                _LOGGER.error(f"Failed to parse JSON response: {e}")
+                                logger.error(f"Failed to parse JSON response: {e}")
                                 return False, None, f"Invalid JSON response: {str(e)}"
 
-                        if response.status in [401, 403]:
-                            _LOGGER.warning(f"Received {response.status}: {response_text}")
-                            if attempt < self.max_retries - 1:
-                                await asyncio.sleep(self.retry_delay)
-                                continue
-
-                        return False, None, f"Request failed: {response.status}, {response_text}"
+                        last_error = f"Request failed: {response.status}, {response_text}"
+                        return False, None, last_error
 
                 except Exception as e:
-                    _LOGGER.error(f"Request error: {str(e)}")
+                    last_error = str(e)
+                    logger.error(f"Request error: {str(e)}")
                     if attempt < self.max_retries - 1:
                         await asyncio.sleep(self.retry_delay)
                         continue
-                    return False, None, str(e)
+                    return False, None, last_error
 
-            return False, None, "Max retries reached"
-
+            return False, None, last_error if last_error else "Max retries reached"
 
     async def get_firewall_policies(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch firewall policies from the UDM."""
-        auth_success, auth_error = await self.ensure_authenticated()
-        if not auth_success:
-            return False, None, f"Authentication failed: {auth_error}"
-            
-        url = f"https://{self.host}/proxy/network/v2/api/site/default/firewall-policies"
+        url = f"https://{self.host}{FIREWALL_POLICIES_ENDPOINT}"
         return await self._make_authenticated_request('get', url)
+    
+    async def get_firewall_policy(self, policy_id: str) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
+        """Fetch a single firewall policy by its policy_id."""
+        success, policies, error = await self.get_firewall_policies()
+        if not success:
+            return False, None, error
+        if policies is None:
+            return False, None, "No policies returned"
+        policy = next((p for p in policies if p.get('_id') == policy_id), None)
+        if policy is None:
+            return False, None, f"Policy with id {policy_id} not found"
+        return True, policy, None
 
     async def get_traffic_routes(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch all traffic routes from the UDM."""
-        auth_success, auth_error = await self.ensure_authenticated()
-        if not auth_success:
-            return False, None, f"Authentication failed: {auth_error}"
-            
-        url = f"https://{self.host}/proxy/network/v2/api/site/default/trafficroutes"
+        url = f"https://{self.host}{TRAFFIC_ROUTES_ENDPOINT}"
         return await self._make_authenticated_request('get', url)
 
     async def toggle_firewall_policy(self, policy_id: str, enabled: bool):
         """Toggle a firewall policy on or off."""
-        url = f"https://{self.host}/proxy/network/v2/api/site/default/firewall-policies/batch"
+        url = f"https://{self.host}{FIREWALL_POLICY_TOGGLE_ENDPOINT}"
         payload = [{"_id": policy_id, "enabled": enabled}]
 
-        _LOGGER.info("Sending firewall policy toggle request: %s", payload)
+        logger.info("Sending firewall policy toggle request: %s", payload)
 
         success, response, error = await self._make_authenticated_request('put', url, payload)
-        _LOGGER.info("PUT response - Success: %s, Response: %s, Error: %s", success, response, error)
+        logger.info("PUT response - Success: %s, Response: %s, Error: %s", success, response, error)
 
         if not success:
-            _LOGGER.error("Failed to toggle firewall policy %s: %s", policy_id, error)
+            logger.error("Failed to toggle firewall policy %s: %s", policy_id, error)
             if response:
-                _LOGGER.error("Response content: %s", await response.text())
+                logger.error("Response content: %s", await response.text())
             return False, error
 
-        _LOGGER.info("Toggled firewall policy %s to %s successfully", policy_id, enabled)
+        logger.info("Toggled firewall policy %s to %s successfully", policy_id, enabled)
         return True, None
 
     async def toggle_traffic_route(self, route_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
         """Toggle a traffic route."""
         # First get all traffic routes
-        all_routes_url = f"https://{self.host}/proxy/network/v2/api/site/default/trafficroutes"
-        _LOGGER.info("Fetching all routes from URL: %s", all_routes_url)
-        success, all_routes, error = await self._make_authenticated_request('get', all_routes_url)
-        _LOGGER.info("GET all routes response - Success: %s, Total Routes: %s, Error: %s", 
+        logger.info("Fetching all routes from URL: %s", TRAFFIC_ROUTES_ENDPOINT)
+        success, all_routes, error = await self.get_traffic_routes()
+        logger.info("GET all routes response - Success: %s, Total Routes: %s, Error: %s", 
                     success, len(all_routes) if all_routes else 0, error)
         
-        if not success or not all_routes:
-            _LOGGER.error("Failed to fetch all routes: %s", error)
+        if not success:
+            logger.error("Failed to fetch all routes: %s", error)
             return False, f"Failed to fetch all routes: {error}"
 
         # Find our specific route
         route = next((r for r in all_routes if r.get('_id') == route_id), None)
         if not route:
-            _LOGGER.error("Route ID %s not found in routes list", route_id)
+            logger.error("Route ID %s not found in routes list", route_id)
             return False, f"Route ID {route_id} not found"
 
         # Create updated route with new enabled state
@@ -364,33 +394,25 @@ class UDMAPI:
         updated_route['enabled'] = enabled
         
         # PUT the update back
-        update_url = f"{all_routes_url}/{route_id}"
-        _LOGGER.info("Sending PUT request to %s with route: %s", update_url, updated_route)
+        update_url = f"https://{self.host}{TRAFFIC_ROUTES_ENDPOINT}/{route_id}"
+        logger.info("Sending PUT request to %s with route: %s", update_url, updated_route)
         success, response, error = await self._make_authenticated_request('put', update_url, updated_route)
-        _LOGGER.info("PUT response - Success: %s, Response: %s, Error: %s", success, response, error)
+        logger.info("PUT response - Success: %s, Response: %s, Error: %s", success, response, error)
         
         if success:
-            _LOGGER.info(f"Toggled traffic route {route_id} to {'on' if enabled else 'off'}")
+            logger.info(f"Toggled traffic route {route_id} to {'on' if enabled else 'off'}")
             return True, None
             
         return False, f"Failed to update route: {error}"
     
     async def get_firewall_zone_matrix(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch firewall zone matrix from the UDM."""
-        auth_success, auth_error = await self.ensure_authenticated()
-        if not auth_success:
-            return False, None, f"Authentication failed: {auth_error}"
-            
-        url = f"https://{self.host}/proxy/network/v2/api/site/default/firewall/zone-matrix"
+        url = f"https://{self.host}{FIREWALL_ZONE_MATRIX_ENDPOINT}"
         return await self._make_authenticated_request('get', url)
 
     async def get_legacy_firewall_rules(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch legacy firewall rules from the UDM."""
-        auth_success, auth_error = await self.ensure_authenticated()
-        if not auth_success:
-            return False, None, f"Authentication failed: {auth_error}"
-        
-        url = f"https://{self.host}/proxy/network/api/s/default/rest/firewallrule"
+        url = f"https://{self.host}{LEGACY_FIREWALL_RULES_ENDPOINT}"
         success, response, error = await self._make_authenticated_request('get', url)
         
         if not success:
@@ -398,35 +420,31 @@ class UDMAPI:
             
         try:
             if not isinstance(response, dict):
-                _LOGGER.error(f"Unexpected response type: {type(response)}")
+                logger.error(f"Unexpected response type: {type(response)}")
                 return False, None, "Invalid response format - not a dictionary"
                 
             if 'data' not in response:
-                _LOGGER.error(f"No 'data' key in response: {response}")
+                logger.error(f"No 'data' key in response: {response}")
                 return False, None, "Invalid response format - missing data key"
                 
             rules = response['data']
             if not isinstance(rules, list):
-                _LOGGER.error(f"Rules data is not a list: {type(rules)}")
+                logger.error(f"Rules data is not a list: {type(rules)}")
                 return False, None, "Invalid rules format"
                 
-            _LOGGER.debug(f"Successfully fetched {len(rules)} legacy firewall rules")
+            logger.debug(f"Successfully fetched {len(rules)} legacy firewall rules")
             for rule in rules:
-                _LOGGER.debug(f"Rule: {rule.get('name', 'Unnamed')} - Enabled: {rule.get('enabled', False)}")
+                logger.debug(f"Rule: {rule.get('name', 'Unnamed')} - Enabled: {rule.get('enabled', False)}")
                 
             return True, rules, None
             
         except Exception as e:
-            _LOGGER.exception("Error processing legacy firewall rules")
+            logger.exception("Error processing legacy firewall rules")
             return False, None, f"Error processing response: {str(e)}"
 
     async def get_legacy_traffic_rules(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch legacy traffic rules from the UDM."""
-        auth_success, auth_error = await self.ensure_authenticated()
-        if not auth_success:
-            return False, None, f"Authentication failed: {auth_error}"
-        
-        url = f"https://{self.host}/proxy/network/v2/api/site/default/trafficrules"
+        url = f"https://{self.host}{LEGACY_TRAFFIC_RULES_ENDPOINT}"
         success, response, error = await self._make_authenticated_request('get', url)
         
         if not success:
@@ -434,46 +452,56 @@ class UDMAPI:
             
         try:
             if response is None:
-                _LOGGER.error("Empty response received")
+                logger.error("Empty response received")
                 return False, None, "Empty response"
                 
             if not isinstance(response, list):
-                _LOGGER.error(f"Unexpected response type: {type(response)}")
+                logger.error(f"Unexpected response type: {type(response)}")
                 return False, None, f"Invalid response format - expected list, got {type(response)}"
                 
-            _LOGGER.debug(f"Successfully fetched {len(response)} legacy traffic rules")
+            logger.debug(f"Successfully fetched {len(response)} legacy traffic rules")
             for rule in response:
-                _LOGGER.debug(f"Traffic Rule: {rule.get('description', 'Unnamed')} - Enabled: {rule.get('enabled', False)}")
+                logger.debug(f"Traffic Rule: {rule.get('description', 'Unnamed')} - Enabled: {rule.get('enabled', False)}")
                 
             return True, response, None
             
         except Exception as e:
-            _LOGGER.exception("Error processing legacy traffic rules")
+            logger.exception("Error processing legacy traffic rules")
             return False, None, f"Error processing response: {str(e)}"
     
-    async def toggle_legacy_firewall_rule(self, rule_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
-        """Toggle a legacy firewall rule."""
-        url = f"https://{self.host}/proxy/network/api/s/default/rest/firewallrule/{rule_id}"
+    async def get_legacy_firewall_rule(self, rule_id: str) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
+        """Fetch a single legacy firewall rule by its rule_id.
         
-        # First get the current rule
+        Returns a tuple (success, rule, error) where rule is the rule dictionary.
+        """
+        url = f"https://{self.host}{LEGACY_FIREWALL_RULES_ENDPOINT}/{rule_id}"
         success, response, error = await self._make_authenticated_request('get', url)
+        
         if not success:
-            return False, f"Failed to fetch rule: {error}"
-
+            return False, None, f"Failed to fetch rule: {error}"
+            
         if not response or not isinstance(response, dict) or 'data' not in response:
-            return False, "Invalid rule data received"
-
-        # For legacy firewall rules, the response includes a data array
+            return False, None, "Invalid rule data received"
+        
         rules = response.get('data', [])
         rule = next((r for r in rules if r['_id'] == rule_id), None)
         if not rule:
-            return False, f"Rule {rule_id} not found"
-
-        # Create a copy and update
+            return False, None, f"Rule {rule_id} not found"
+        
+        return True, rule, None
+    
+    async def toggle_legacy_firewall_rule(self, rule_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
+        """Toggle a legacy firewall rule."""
+        # Use the new helper method to fetch the rule.
+        success, rule, error = await self.get_legacy_firewall_rule(rule_id)
+        if not success:
+            return False, error
+        
+        # Create a copy and update the enabled state.
         updated_rule = dict(rule)
         updated_rule['enabled'] = enabled
         
-        # Send the update
+        url = f"https://{self.host}{LEGACY_FIREWALL_RULES_ENDPOINT}/{rule_id}"
         success, response, error = await self._make_authenticated_request('put', url, updated_rule)
         if not success:
             return False, f"Failed to update rule: {error}"
@@ -482,11 +510,10 @@ class UDMAPI:
 
     async def toggle_legacy_traffic_rule(self, rule_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
         """Toggle a legacy traffic rule."""
-        url = f"https://{self.host}/proxy/network/v2/api/site/default/trafficrules/{rule_id}"
+        url = f"https://{self.host}{LEGACY_TRAFFIC_RULES_ENDPOINT}/{rule_id}"
         
         # First get all traffic rules to find the one we want to update
-        all_rules_url = f"https://{self.host}/proxy/network/v2/api/site/default/trafficrules"
-        success, rules, error = await self._make_authenticated_request('get', all_rules_url)
+        success, rules, error = await self.get_legacy_traffic_rules()
         
         if not success:
             return False, f"Failed to fetch rules: {error}"
@@ -518,11 +545,11 @@ class UDMAPI:
         except json.JSONDecodeError:
             formatted_response = response_text
 
-        _LOGGER.debug(f"API Response Details:")
-        _LOGGER.debug(f"Method: {method}")
-        _LOGGER.debug(f"URL: {url}")
-        _LOGGER.debug(f"Status: {response_status}")
-        _LOGGER.debug(f"Response Body:\n{formatted_response}")
+        logger.debug(f"API Response Details:")
+        logger.debug(f"Method: {method}")
+        logger.debug(f"URL: {url}")
+        logger.debug(f"Status: {response_status}")
+        logger.debug(f"Response Body:\n{formatted_response}")
 
     async def cleanup(self):
         """Cleanup resources."""

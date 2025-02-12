@@ -1,0 +1,6 @@
+{
+  "component_title": "UniFi Network Rules",
+  "error_auth": "Authentication failed",
+  "error_connect": "Cannot connect to the UniFi device",
+  "service_refresh_description": "Refresh UniFi Network Rules data"
+} 

@@ -38,7 +38,6 @@ async def validate_input(hass: core.HomeAssistant, data: dict):
     username = data[CONF_USERNAME]
     password = data[CONF_PASSWORD]
 
-    # Validate host (IP address or domain name)
     try:
         ip_address(host)
     except ValueError:
@@ -79,7 +78,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except vol.Invalid as vol_error:
                 _LOGGER.error("Validation error: %s", vol_error)
                 errors["base"] = "invalid_format"
-            except Exception:  # pylint: disable=broad-except
+            except Exception: 
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
 
