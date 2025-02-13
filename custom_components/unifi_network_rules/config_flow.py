@@ -34,18 +34,46 @@ async def validate_input(hass: core.HomeAssistant, data: dict):
 
     Data has the keys from DATA_SCHEMA with values provided by the user.
     """
-    host = data[CONF_HOST]
-    username = data[CONF_USERNAME]
-    password = data[CONF_PASSWORD]
+    api = UDMAPI(
+        host=data[CONF_HOST],
+        username=data[CONF_USERNAME],
+        password=data[CONF_PASSWORD]
+    )
 
-    try:
-        ip_address(host)
-    except ValueError:
-        # If it's not a valid IP address, check if it's a valid domain name
-        if not re.match(r'^[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*\.[a-zA-Z]{2,}$', host):
-            raise InvalidHost
+    # Try to authenticate first
+    auth_success, auth_error = await api.ensure_authenticated()
+    if not auth_success:
+        _LOGGER.error("Authentication failed: %s", auth_error)
+        raise InvalidAuth
 
-    return {"title": f"Unifi Device ({host})"}
+    # If authentication succeeds, try to detect capabilities
+    capabilities_success = await api.detect_capabilities()
+    if not capabilities_success:
+        _LOGGER.error(
+            "Failed to detect any capabilities. Check device status and permissions."
+        )
+        raise NoCapabilities
+
+    # Ensure at least one capability was detected
+    if not any([
+        api.capabilities.traffic_routes,
+        api.capabilities.zone_based_firewall,
+        api.capabilities.legacy_firewall
+    ]):
+        _LOGGER.error("No supported capabilities found on the device")
+        raise NoCapabilities
+
+    _LOGGER.info(
+        "Validated device with capabilities - Traffic Routes: %s, Zone-based Firewall: %s, Legacy Firewall: %s",
+        api.capabilities.traffic_routes,
+        api.capabilities.zone_based_firewall,
+        api.capabilities.legacy_firewall
+    )
+
+    await api.cleanup()
+
+    # Return info that you want to store in the config entry.
+    return {"title": f"UniFi Rules ({data[CONF_HOST]})"}
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """
@@ -68,9 +96,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 info = await validate_input(self.hass, user_input)
                 return self.async_create_entry(title=info["title"], data=user_input)
             except InvalidAuth:
-                errors["base"] = "invalid_auth"
+                errors["base"] = "auth"
+            except NoCapabilities:
+                errors["base"] = "no_capabilities"
             except CannotConnect:
-                errors["base"] = "cannot_connect"
+                errors["base"] = "connect"
             except InvalidUpdateInterval:
                 errors["base"] = "invalid_update_interval"
             except InvalidHost:
@@ -107,5 +137,11 @@ class InvalidHost(exceptions.HomeAssistantError):
 class InvalidUpdateInterval(exceptions.HomeAssistantError):
     """
     Error to indicate the update interval is invalid.
+    """
+    pass
+
+class NoCapabilities(exceptions.HomeAssistantError):
+    """
+    Error to indicate no supported capabilities were found.
     """
     pass

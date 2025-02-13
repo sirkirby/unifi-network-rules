@@ -1,57 +1,105 @@
-from datetime import timedelta
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from __future__ import annotations
+
 import logging
+from datetime import timedelta
+from typing import Any, Dict
+
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed
+
+from .udm_api import UDMAPI
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
 class UDMUpdateCoordinator(DataUpdateCoordinator):
     """Data update coordinator for UniFi Network Rules."""
 
-    def __init__(self, hass, api, update_interval: int):
-        self.api = api
-        self._update_interval = update_interval
+    def __init__(self, hass: HomeAssistant, api: UDMAPI, name: str, update_interval: int) -> None:
+        """Initialize the UDM coordinator."""
         super().__init__(
             hass,
-            _LOGGER,  # Pass a standard logging instance
-            name="udm_rule_manager",
+            _LOGGER,
+            name=name,
             update_interval=timedelta(minutes=update_interval),
-            update_method=self.async_update_data,
         )
+        self.api = api
 
-    async def async_update_data(self):
+    async def _async_update_data(self) -> Dict[str, Any]:
         """Fetch data from API."""
         _LOGGER.debug("Coordinator: Starting data update")
         data = {}
+        
         try:
+            if not hasattr(self.api, 'capabilities'):
+                _LOGGER.error("API capabilities not initialized. Cannot fetch data.")
+                return data
+
+            _LOGGER.debug(
+                "Updating with capabilities - Traffic Routes: %s, Zone Firewall: %s, Legacy Firewall: %s",
+                self.api.capabilities.traffic_routes,
+                self.api.capabilities.zone_based_firewall,
+                self.api.capabilities.legacy_firewall
+            )
+
+            # Only proceed if we have at least one capability
+            if not any([
+                self.api.capabilities.traffic_routes,
+                self.api.capabilities.zone_based_firewall,
+                self.api.capabilities.legacy_firewall
+            ]):
+                _LOGGER.error("No capabilities available. Cannot fetch any data.")
+                raise UpdateFailed("No capabilities detected on the device")
+
+            # Always try traffic routes if capability is present
             if self.api.capabilities.traffic_routes:
-                _LOGGER.debug("Coordinator: Fetching traffic routes")
-                routes_success, routes, routes_error = await self.api.get_traffic_routes()
-                if not routes_success:
-                    raise UpdateFailed(f"Failed to fetch traffic routes: {routes_error}")
-                data['traffic_routes'] = routes or []
+                _LOGGER.debug("Fetching traffic routes")
+                try:
+                    routes_success, routes, routes_error = await self.api.get_traffic_routes()
+                    if not routes_success:
+                        _LOGGER.error("Failed to fetch traffic routes: %s", routes_error)
+                    else:
+                        data['traffic_routes'] = routes or []
+                except Exception as e:
+                    _LOGGER.error("Error fetching traffic routes: %s", str(e))
 
+            # Fetch firewall data based on detected capabilities
             if self.api.capabilities.zone_based_firewall:
-                _LOGGER.debug("Coordinator: Fetching zone-based firewall policies")
-                policies_success, policies, policies_error = await self.api.get_firewall_policies()
-                if not policies_success:
-                    raise UpdateFailed(f"Failed to fetch policies: {policies_error}")
-                data['firewall_policies'] = policies or []
+                _LOGGER.debug("Fetching zone-based firewall policies")
+                try:
+                    policies_success, policies, policies_error = await self.api.get_firewall_policies()
+                    if not policies_success:
+                        _LOGGER.error("Failed to fetch policies: %s", policies_error)
+                    else:
+                        data['firewall_policies'] = policies or []
+                except Exception as e:
+                    _LOGGER.error("Error fetching firewall policies: %s", str(e))
+            elif self.api.capabilities.legacy_firewall:
+                _LOGGER.debug("Fetching legacy firewall rules")
+                try:
+                    rules_success, rules, rules_error = await self.api.get_legacy_firewall_rules()
+                    if not rules_success:
+                        _LOGGER.error("Failed to fetch legacy firewall rules: %s", rules_error)
+                    else:
+                        data['firewall_rules'] = {'data': rules or []}
 
-            if self.api.capabilities.legacy_firewall:
-                _LOGGER.debug("Coordinator: Fetching legacy firewall rules")
-                rules_success, rules, rules_error = await self.api.get_legacy_firewall_rules()
-                if not rules_success:
-                    raise UpdateFailed(f"Failed to fetch legacy firewall rules: {rules_error}")
-                data['firewall_rules'] = {'data': rules or []}
+                    traffic_success, traffic, traffic_error = await self.api.get_legacy_traffic_rules()
+                    if not traffic_success:
+                        _LOGGER.error("Failed to fetch legacy traffic rules: %s", traffic_error)
+                    else:
+                        data['traffic_rules'] = traffic or []
+                except Exception as e:
+                    _LOGGER.error("Error fetching legacy rules: %s", str(e))
 
-                _LOGGER.debug("Coordinator: Fetching legacy traffic rules")
-                traffic_success, traffic, traffic_error = await self.api.get_legacy_traffic_rules()
-                if not traffic_success:
-                    raise UpdateFailed(f"Failed to fetch legacy traffic rules: {traffic_error}")
-                data['traffic_rules'] = traffic or []
+            # Verify we got at least some data
+            if not data:
+                _LOGGER.error("No data was successfully retrieved from any endpoint")
+                raise UpdateFailed("Failed to retrieve any data from the device")
 
-            _LOGGER.debug("Coordinator: Final data keys: %s", list(data.keys()))
+            _LOGGER.debug("Successfully retrieved data for: %s", list(data.keys()))
             return data
+
         except Exception as e:
-            _LOGGER.debug("Coordinator: Error in update_data: %s", str(e))
+            _LOGGER.exception("Unexpected error in coordinator update: %s", str(e))
             raise UpdateFailed(f"Data update failed: {str(e)}")

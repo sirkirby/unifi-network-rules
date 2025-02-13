@@ -264,15 +264,44 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     # Detect UDM capabilities if not already done
     if not hasattr(api, 'capabilities'):
         if not await api.detect_capabilities():
-            _LOGGER.error("Failed to detect UDM capabilities")
+            _LOGGER.error(
+                "Failed to detect any UDM capabilities. No entities will be created. "
+                "Please check your network connection, credentials, and device status."
+            )
             return
+
+    # Validate that we have at least one working capability
+    if not any([
+        api.capabilities.traffic_routes,
+        api.capabilities.zone_based_firewall,
+        api.capabilities.legacy_firewall
+    ]):
+        _LOGGER.error(
+            "No supported capabilities detected on the UniFi device. "
+            "This integration requires at least one of: "
+            "traffic routes, zone-based firewall, or legacy firewall support."
+        )
+        return
+
+    # Log detected capabilities for debugging
+    _LOGGER.info(
+        "Setting up entities with detected capabilities - "
+        "Traffic Routes: %s, Zone-based Firewall: %s, Legacy Firewall: %s",
+        api.capabilities.traffic_routes,
+        api.capabilities.zone_based_firewall,
+        api.capabilities.legacy_firewall
+    )
 
     # Get zone matrix data for better naming if using zone-based firewall
     zones_data = []
     if api.capabilities.zone_based_firewall:
         success, zones_data, error = await api.get_firewall_zone_matrix()
         if not success:
-            _LOGGER.error("Failed to fetch zone matrix: %s", error)
+            _LOGGER.error(
+                "Failed to fetch zone matrix: %s. "
+                "Zone-based firewall rules will use generic naming.",
+                error
+            )
 
     # Get entity registry
     entity_registry = async_get(hass)
@@ -283,60 +312,85 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     @callback
     def async_update_items(now=None):
         """Update entities when coordinator data changes."""
+        if not coordinator.data:
+            _LOGGER.warning("No data available from coordinator")
+            return
+
         current_entities = set()
         new_entities = []
         
-        if coordinator.data:
-            # Process traffic routes
-            if 'traffic_routes' in coordinator.data:
+        try:
+            # Process traffic routes if capability is available
+            if api.capabilities.traffic_routes and 'traffic_routes' in coordinator.data:
                 for route in coordinator.data['traffic_routes']:
-                    entity_id = f"network_route_{route['_id']}"
-                    current_entities.add(entity_id)
-                    if entity_id not in existing_entities:
-                        new_entity = UDMTrafficRouteSwitch(coordinator, api, route)
-                        new_entities.append(new_entity)
-                        existing_entities[entity_id] = new_entity
+                    try:
+                        entity_id = f"network_route_{route['_id']}"
+                        current_entities.add(entity_id)
+                        if entity_id not in existing_entities:
+                            new_entity = UDMTrafficRouteSwitch(coordinator, api, route)
+                            new_entities.append(new_entity)
+                            existing_entities[entity_id] = new_entity
+                    except Exception as e:
+                        _LOGGER.error("Error creating traffic route entity: %s", str(e))
             
-            # Process firewall policies for zone-based firewall
-            if api.capabilities.zone_based_firewall and 'firewall_policies' in coordinator.data:
-                for policy in coordinator.data['firewall_policies']:
-                    if not policy.get('predefined', False):
-                        entity_id = f"network_policy_{policy['_id']}"
-                        current_entities.add(entity_id)
-                        if entity_id not in existing_entities:
-                            new_entity = UDMFirewallPolicySwitch(coordinator, api, policy, zones_data)
-                            new_entities.append(new_entity)
-                            existing_entities[entity_id] = new_entity
-
-            # Process legacy firewall rules
-            if api.capabilities.legacy_firewall:
+            # Process firewall rules based on capabilities
+            if api.capabilities.zone_based_firewall:
+                # Process zone-based firewall policies
+                if 'firewall_policies' in coordinator.data:
+                    for policy in coordinator.data['firewall_policies']:
+                        try:
+                            if not policy.get('predefined', False):
+                                entity_id = f"network_policy_{policy['_id']}"
+                                current_entities.add(entity_id)
+                                if entity_id not in existing_entities:
+                                    new_entity = UDMFirewallPolicySwitch(coordinator, api, policy, zones_data)
+                                    new_entities.append(new_entity)
+                                    existing_entities[entity_id] = new_entity
+                        except Exception as e:
+                            _LOGGER.error("Error creating firewall policy entity: %s", str(e))
+            elif api.capabilities.legacy_firewall:
+                # Process legacy firewall rules
                 if 'firewall_rules' in coordinator.data:
-                    for rule in coordinator.data['firewall_rules'].get('data', []):
-                        entity_id = f"network_rule_firewall_{rule['_id']}"
-                        current_entities.add(entity_id)
-                        if entity_id not in existing_entities:
-                            new_entity = UDMLegacyFirewallRuleSwitch(coordinator, api, rule)
-                            new_entities.append(new_entity)
-                            existing_entities[entity_id] = new_entity
+                    try:
+                        for rule in coordinator.data['firewall_rules'].get('data', []):
+                            try:
+                                entity_id = f"network_rule_firewall_{rule['_id']}"
+                                current_entities.add(entity_id)
+                                if entity_id not in existing_entities:
+                                    new_entity = UDMLegacyFirewallRuleSwitch(coordinator, api, rule)
+                                    new_entities.append(new_entity)
+                                    existing_entities[entity_id] = new_entity
+                            except Exception as e:
+                                _LOGGER.error("Error creating legacy firewall rule entity: %s", str(e))
 
-                if 'traffic_rules' in coordinator.data:
-                    for rule in coordinator.data['traffic_rules']:
-                        entity_id = f"network_rule_traffic_{rule['_id']}"
-                        current_entities.add(entity_id)
-                        if entity_id not in existing_entities:
-                            new_entity = UDMLegacyTrafficRuleSwitch(coordinator, api, rule)
-                            new_entities.append(new_entity)
-                            existing_entities[entity_id] = new_entity
+                        # Process legacy traffic rules
+                        if 'traffic_rules' in coordinator.data:
+                            for rule in coordinator.data['traffic_rules']:
+                                try:
+                                    entity_id = f"network_rule_traffic_{rule['_id']}"
+                                    current_entities.add(entity_id)
+                                    if entity_id not in existing_entities:
+                                        new_entity = UDMLegacyTrafficRuleSwitch(coordinator, api, rule)
+                                        new_entities.append(new_entity)
+                                        existing_entities[entity_id] = new_entity
+                                except Exception as e:
+                                    _LOGGER.error("Error creating legacy traffic rule entity: %s", str(e))
+                    except Exception as e:
+                        _LOGGER.error("Error processing legacy rules: %s", str(e))
 
-        # Remove entities that no longer exist
-        for entity_id in list(existing_entities.keys()):
-            if entity_id not in current_entities:
-                entity = existing_entities.pop(entity_id)
-                hass.async_create_task(async_remove_entity(hass, entity_registry, entity))
+            # Remove entities that no longer exist
+            for entity_id in list(existing_entities.keys()):
+                if entity_id not in current_entities:
+                    entity = existing_entities.pop(entity_id)
+                    hass.async_create_task(async_remove_entity(hass, entity_registry, entity))
 
-        # Add new entities
-        if new_entities:
-            async_add_entities(new_entities)
+            # Add new entities
+            if new_entities:
+                async_add_entities(new_entities)
+                _LOGGER.info("Added %d new entities", len(new_entities))
+
+        except Exception as e:
+            _LOGGER.exception("Unexpected error during entity update: %s", str(e))
 
     async def async_remove_entity(hass: HomeAssistant, registry: EntityRegistry, entity: SwitchEntity):
         """Remove entity from Home Assistant."""

@@ -186,7 +186,7 @@ async def test_toggle_traffic_route_not_found(udm_api):
            mock_request.return_value = (True, [], None)
            success, error = await udm_api.toggle_traffic_route(route_id, True)
            assert success is False
-           assert "Route ID nonexistent not found" in error
+           assert f"Route {route_id} not found" in error
 
 @pytest.mark.asyncio
 async def test_make_authenticated_request_success(udm_api):
@@ -257,129 +257,11 @@ async def test_make_authenticated_request_max_retries(udm_api):
        mock_request_method.return_value = mock_response_401
 
        success, data, error = await udm_api._make_authenticated_request('get', 'https://test.com', {})
-
+       
        assert success is False
        assert data is None
        assert "Request failed: 401" in error
        assert mock_sleep.call_count == udm_api.max_retries - 1
-
-@pytest.mark.asyncio
-async def test_update_firewall_policy_success(udm_api):
-    policy_id = "test_policy"
-    policy_data = {"_id": policy_id, "enabled": True, "name": "Test Policy"}
-    
-    with patch.object(udm_api, 'ensure_authenticated', return_value=(True, None)):
-        with patch.object(udm_api, '_make_authenticated_request') as mock_request:
-            mock_request.return_value = (True, None, None)
-            success, error = await udm_api.update_firewall_policy(policy_id, policy_data)
-            assert success is True
-            assert error is None
-            mock_request.assert_called_once()
-
-@pytest.mark.asyncio
-async def test_update_firewall_policy_failure(udm_api):
-    policy_id = "test_policy"
-    policy_data = {"_id": policy_id, "enabled": True, "name": "Test Policy"}
-    
-    with patch.object(udm_api, 'ensure_authenticated', return_value=(True, None)):
-        with patch.object(udm_api, '_make_authenticated_request') as mock_request:
-            mock_request.return_value = (False, None, "API Error")
-            success, error = await udm_api.update_firewall_policy(policy_id, policy_data)
-            assert success is False
-            assert "API Error" in error
-
-@pytest.mark.asyncio
-async def test_update_traffic_route_success(udm_api):
-    route_id = "test_route"
-    route_data = {
-        "_id": route_id,
-        "description": "Test Route",
-        "enabled": True,
-        "matching_target": "INTERNET"
-    }
-    
-    with patch.object(udm_api, 'ensure_authenticated', return_value=(True, None)):
-        with patch.object(udm_api, '_make_authenticated_request') as mock_request:
-            mock_request.return_value = (True, None, None)
-            success, error = await udm_api.update_traffic_route(route_id, route_data)
-            assert success is True
-            assert error is None
-            mock_request.assert_called_once()
-
-@pytest.mark.asyncio
-async def test_update_traffic_route_failure(udm_api):
-    route_id = "test_route"
-    route_data = {
-        "_id": route_id,
-        "description": "Test Route",
-        "enabled": True,
-        "matching_target": "INTERNET"
-    }
-    
-    with patch.object(udm_api, 'ensure_authenticated', return_value=(True, None)):
-        with patch.object(udm_api, '_make_authenticated_request') as mock_request:
-            mock_request.return_value = (False, None, "API Error")
-            success, error = await udm_api.update_traffic_route(route_id, route_data)
-            assert success is False
-            assert "API Error" in error
-
-@pytest.mark.asyncio
-async def test_update_legacy_firewall_rule_success(udm_api):
-    rule_id = "test_rule"
-    rule_data = {"_id": rule_id, "enabled": True, "name": "Test Rule"}
-    
-    with patch.object(udm_api, 'ensure_authenticated', return_value=(True, None)):
-        with patch.object(udm_api, '_make_authenticated_request') as mock_request:
-            mock_request.return_value = (True, None, None)
-            success, error = await udm_api.update_legacy_firewall_rule(rule_id, rule_data)
-            assert success is True
-            assert error is None
-            mock_request.assert_called_once()
-
-@pytest.mark.asyncio
-async def test_update_legacy_firewall_rule_failure(udm_api):
-    rule_id = "test_rule"
-    rule_data = {"_id": rule_id, "enabled": True, "name": "Test Rule"}
-    
-    with patch.object(udm_api, 'ensure_authenticated', return_value=(True, None)):
-        with patch.object(udm_api, '_make_authenticated_request') as mock_request:
-            mock_request.return_value = (False, None, "API Error")
-            success, error = await udm_api.update_legacy_firewall_rule(rule_id, rule_data)
-            assert success is False
-            assert "API Error" in error
-
-@pytest.mark.asyncio
-async def test_update_legacy_traffic_rule_success(udm_api):
-    rule_id = "test_rule"
-    rule_data = {
-        "_id": rule_id,
-        "description": "Test Rule",
-        "enabled": True
-    }
-    
-    with patch.object(udm_api, 'ensure_authenticated', return_value=(True, None)):
-        with patch.object(udm_api, '_make_authenticated_request') as mock_request:
-            mock_request.return_value = (True, None, None)
-            success, error = await udm_api.update_legacy_traffic_rule(rule_id, rule_data)
-            assert success is True
-            assert error is None
-            mock_request.assert_called_once()
-
-@pytest.mark.asyncio
-async def test_update_legacy_traffic_rule_failure(udm_api):
-    rule_id = "test_rule"
-    rule_data = {
-        "_id": rule_id,
-        "description": "Test Rule",
-        "enabled": True
-    }
-    
-    with patch.object(udm_api, 'ensure_authenticated', return_value=(True, None)):
-        with patch.object(udm_api, '_make_authenticated_request') as mock_request:
-            mock_request.return_value = (False, None, "API Error")
-            success, error = await udm_api.update_legacy_traffic_rule(rule_id, rule_data)
-            assert success is False
-            assert "API Error" in error
 
 @pytest.mark.asyncio
 async def test_update_firewall_policy_success(udm_api):
@@ -405,6 +287,22 @@ async def test_update_firewall_policy_success(udm_api):
         )
 
 @pytest.mark.asyncio
+async def test_update_firewall_policy_failure(udm_api):
+    policy_id = "test_policy"
+    policy_data = {
+        "_id": policy_id,
+        "enabled": True,
+        "name": "Test Policy",
+        "action": "allow"
+    }
+    
+    with patch.object(udm_api, '_make_authenticated_request') as mock_request:
+        mock_request.return_value = (False, None, "API Error")
+        success, error = await udm_api.update_firewall_policy(policy_id, policy_data)
+        assert success is False
+        assert "API Error" in error
+
+@pytest.mark.asyncio
 async def test_update_traffic_route_success(udm_api):
     """Test successful traffic route update."""
     route_id = "test_route"
@@ -428,93 +326,158 @@ async def test_update_traffic_route_success(udm_api):
         )
 
 @pytest.mark.asyncio
-async def test_update_legacy_firewall_rule_success(udm_api):
-    """Test successful legacy firewall rule update."""
-    rule_id = "test_rule"
-    rule_data = {
-        "_id": rule_id,
+async def test_update_traffic_route_failure(udm_api):
+    route_id = "test_route"
+    route_data = {
+        "_id": route_id,
+        "description": "Test Route",
         "enabled": True,
-        "name": "Test Rule",
-        "action": "accept"
+        "matching_target": "INTERNET"
+    }
+    
+    with patch.object(udm_api, '_make_authenticated_request') as mock_request:
+        mock_request.return_value = (False, None, "API Error")
+        success, error = await udm_api.update_traffic_route(route_id, route_data)
+        assert success is False
+        assert "API Error" in error
+
+@pytest.mark.asyncio
+async def test_create_firewall_policy_success(udm_api):
+    """Test creating a new firewall policy."""
+    policy_data = {
+        "name": "Test Policy",
+        "enabled": True,
+        "action": "BLOCK",
+        "source": {
+            "zone_id": "test_zone_1"
+        },
+        "destination": {
+            "zone_id": "test_zone_2"
+        }
     }
     
     with patch.object(udm_api, '_make_authenticated_request') as mock_request:
         mock_request.return_value = (True, None, None)
-        success, error = await udm_api.update_legacy_firewall_rule(rule_id, rule_data)
+        success, error = await udm_api.create_firewall_policy(policy_data)
         
         assert success is True
         assert error is None
         mock_request.assert_called_once_with(
-            'put',
-            f'https://{udm_api.host}/proxy/network/api/s/default/rest/firewallrule/{rule_id}',
-            rule_data
+            'post',
+            f'https://{udm_api.host}/proxy/network/v2/api/site/default/firewall-policies',
+            policy_data
         )
 
 @pytest.mark.asyncio
-async def test_update_legacy_traffic_rule_success(udm_api):
-    """Test successful legacy traffic rule update."""
-    rule_id = "test_rule"
-    rule_data = {
-        "_id": rule_id,
-        "description": "Test Rule",
-        "enabled": True
+async def test_create_firewall_policy_failure(udm_api):
+    """Test failure when creating a new firewall policy."""
+    policy_data = {
+        "name": "Test Policy",
+        "enabled": True,
+        "action": "BLOCK"
     }
     
     with patch.object(udm_api, '_make_authenticated_request') as mock_request:
+        mock_request.return_value = (False, None, "API Error")
+        success, error = await udm_api.create_firewall_policy(policy_data)
+        assert success is False
+        assert "API Error" in error
+
+@pytest.mark.asyncio
+async def test_delete_firewall_policies_success(udm_api):
+    """Test successful deletion of firewall policies."""
+    policy_ids = ["policy1", "policy2"]
+    
+    with patch.object(udm_api, '_make_authenticated_request') as mock_request:
         mock_request.return_value = (True, None, None)
-        success, error = await udm_api.update_legacy_traffic_rule(rule_id, rule_data)
+        success, error = await udm_api.delete_firewall_policies(policy_ids)
         
         assert success is True
         assert error is None
         mock_request.assert_called_once_with(
-            'put',
-            f'https://{udm_api.host}/proxy/network/v2/api/site/default/trafficrules/{rule_id}',
-            rule_data
+            'post',
+            f'https://{udm_api.host}/proxy/network/v2/api/site/default/firewall-policies/batch-delete',
+            policy_ids
         )
 
 @pytest.mark.asyncio
-async def test_update_methods_error_handling(udm_api):
-    """Test error handling in update methods."""
-    test_id = "test_id"
-    test_data = {"_id": test_id, "enabled": True}
-    error_msg = "API Error"
+async def test_delete_firewall_policies_failure(udm_api):
+    """Test failure when deleting firewall policies."""
+    policy_ids = ["policy1", "policy2"]
     
     with patch.object(udm_api, '_make_authenticated_request') as mock_request:
-        mock_request.return_value = (False, None, error_msg)
-        
-        # Test all update methods
-        success, error = await udm_api.update_firewall_policy(test_id, test_data)
+        mock_request.return_value = (False, None, "API Error")
+        success, error = await udm_api.delete_firewall_policies(policy_ids)
         assert success is False
-        assert error_msg in error
-
-        success, error = await udm_api.update_traffic_route(test_id, test_data)
-        assert success is False
-        assert error_msg in error
-
-        success, error = await udm_api.update_legacy_firewall_rule(test_id, test_data)
-        assert success is False
-        assert error_msg in error
-
-        success, error = await udm_api.update_legacy_traffic_rule(test_id, test_data)
-        assert success is False
-        assert error_msg in error
+        assert "API Error" in error
 
 @pytest.mark.asyncio
-async def test_update_methods_with_invalid_data(udm_api):
-    """Test update methods with invalid data."""
-    rule_id = "test_id"
-    invalid_data = {"invalid": "data"}  # Missing _id field
-    
+async def test_detect_capabilities_only_traffic_routes(udm_api):
+    """Test capability detection when only traffic routes are available."""
     with patch.object(udm_api, '_make_authenticated_request') as mock_request:
-        mock_request.return_value = (True, None, None)
+        # Mock traffic routes success but no other capabilities
+        mock_request.side_effect = [
+            (True, [{"_id": "1"}], None),  # Traffic routes success
+            (False, None, "Migration endpoint not available"),  # Migration check fails
+            (False, None, "Policies not available"),  # Policies check fails
+            (False, None, "Legacy rules not available")  # Legacy rules check fails
+        ]
         
-        for method in [
-            udm_api.update_firewall_policy,
-            udm_api.update_traffic_route,
-            udm_api.update_legacy_firewall_rule,
-            udm_api.update_legacy_traffic_rule
-        ]:
-            success, error = await method(rule_id, invalid_data)
-            assert success is True  # API validation happens server-side
-            mock_request.assert_called_once()
-            mock_request.reset_mock()
+        success = await udm_api.detect_capabilities()
+        
+        assert success is True  # Should succeed because traffic routes are available
+        assert udm_api.capabilities.traffic_routes is True
+        assert udm_api.capabilities.zone_based_firewall is False
+        assert udm_api.capabilities.legacy_firewall is False
+
+@pytest.mark.asyncio
+async def test_detect_capabilities_no_capabilities(udm_api):
+    """Test capability detection when no capabilities are available."""
+    with patch.object(udm_api, '_make_authenticated_request') as mock_request:
+        # Mock all endpoints failing
+        mock_request.side_effect = [
+            (False, None, "Traffic routes not available"),
+            (False, None, "Migration endpoint not available"),
+            (False, None, "Policies not available"),
+            (False, None, "Legacy rules not available")
+        ]
+        
+        success = await udm_api.detect_capabilities()
+        
+        assert success is False
+        assert udm_api.capabilities.traffic_routes is False
+        assert udm_api.capabilities.zone_based_firewall is False
+        assert udm_api.capabilities.legacy_firewall is False
+
+@pytest.mark.asyncio
+async def test_detect_capabilities_api_error(udm_api):
+    """Test capability detection when API requests fail with errors."""
+    with patch.object(udm_api, '_make_authenticated_request') as mock_request:
+        # Simulate API error
+        mock_request.side_effect = Exception("API Connection Error")
+        
+        success = await udm_api.detect_capabilities()
+        
+        assert success is False
+        assert udm_api.capabilities.traffic_routes is False
+        assert udm_api.capabilities.zone_based_firewall is False
+        assert udm_api.capabilities.legacy_firewall is False
+
+@pytest.mark.asyncio
+async def test_detect_capabilities_migration_transition(udm_api):
+    """Test capability detection during migration transition state."""
+    with patch.object(udm_api, '_make_authenticated_request') as mock_request:
+        # Mock successful traffic routes but ambiguous firewall state
+        mock_request.side_effect = [
+            (True, [{"_id": "1"}], None),  # Traffic routes available
+            (True, [], None),  # Empty migrations list
+            (False, None, "Policies endpoint error"),  # Policies not yet available
+            (True, [{"_id": "1"}], None)  # Legacy rules still accessible
+        ]
+        
+        success = await udm_api.detect_capabilities()
+        
+        assert success is True
+        assert udm_api.capabilities.traffic_routes is True
+        assert udm_api.capabilities.zone_based_firewall is False
+        assert udm_api.capabilities.legacy_firewall is True

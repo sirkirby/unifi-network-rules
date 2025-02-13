@@ -35,9 +35,21 @@ THEN
 
 **Password**: The password for the UDM account.
 
+**Updated Interval**: The automatic refresh interval in minutes.
+
 ## Usage
 
-Once you have configured the integration, you will be able to see the firewall policies (or traffic rules and network rules if you have not migrated to zone-based firewall), and traffic routes configured on your Unifi Network as switches in Home Assistant. Add the switch to a custom dashboard or use it in automations just like any other Home Assistant switch.
+Once you have configured the integration, you will be able to see the firewall policies and traffic routes configured on your Unifi Network as switches in Home Assistant. Add the switch to a custom dashboard or use it in automations just like any other Home Assistant switch.
+
+## Network Mode Detection
+
+The integration automatically detects the UniFi network configuration mode:
+
+- If zone-based firewall is detected, UniFi Network 9.0.92+ and opted to migrate, the integration will manage firewall policies using the new API.
+- If legacy mode is detected, UniFi Network 8+ and do not have zone-based option or opted to not migrate, the integration will manage legacy firewall and traffic rules.
+- Traffic routes are managed the same way in both modes.
+
+Migration from legacy mode to zone-based firewall is handled by UniFi OS. After migration, legacy rules become policies and the integration will automatically switch to managing them as policies.
 
 ## Services
 
@@ -58,7 +70,7 @@ tap_action:
 
 ### Backup Rules
 
-Create a backup of all your firewall and traffic rules. The backup will be stored in your Home Assistant config directory.
+Create a backup of all your firewall policies and traffic routes. The backup will be stored in your Home Assistant config directory.
 
 Example button card configuration:
 ```yaml
@@ -73,9 +85,9 @@ tap_action:
 
 ### Restore Rules
 
-Restore rules from a previously created backup file.
+Restore rules from a previously created backup file. You can selectively restore specific rules by their IDs, names, or rule types.
 
-Example button card configuration:
+Example button card configuration for full restore:
 ```yaml
 type: button
 name: Restore Rules
@@ -86,11 +98,130 @@ tap_action:
     filename: "unifi_rules_backup.json"
 ```
 
+Example selective restore by name:
+```yaml
+type: button
+name: Restore Guest Rules
+tap_action:
+  action: call-service
+  service: unifi_network_rules.restore_rules
+  data:
+    filename: "unifi_rules_backup.json"
+    name_filter: "Guest"
+    rule_types: ["policy"]
+```
+
+### Bulk Update Rules
+
+Enable or disable multiple rules at once by matching their names.
+
+Example button card configuration:
+```yaml
+type: button
+name: Disable Guest Network Rules
+tap_action:
+  action: call-service
+  service: unifi_network_rules.bulk_update_rules
+  data:
+    name_filter: "Guest"
+    state: false
+```
+
+### Create Rule from Template
+
+Create a new firewall policy from a template. Currently supports only firewall policies.
+
+Example template for a firewall policy:
+```yaml
+service: unifi_network_rules.create_from_template
+data:
+  rule_type: "policy"
+  template:
+    name: "Block Social Media"
+    enabled: true
+    action: "deny"
+    description: "Block access to social media sites"
+    match_rules:
+      - type: "domain"
+        values: ["facebook.com", "twitter.com", "instagram.com"]
+```
+
+### Delete Rule
+
+Delete an existing firewall policy by its ID. Currently supports only firewall policies.
+
+Example service call:
+```yaml
+service: unifi_network_rules.delete_rule
+data:
+  rule_id: "abc123def456"
+  rule_type: "policy"
+```
+
 You can add these buttons to your dashboard by:
 1. Edit your dashboard
 2. Click the + button to add a card
 3. Choose "Button"
 4. Configure using the examples above
+
+## Template Examples
+
+Here are some common rule templates you can use:
+
+### Guest Network Isolation
+```yaml
+service: unifi_network_rules.create_from_template
+data:
+  rule_type: policy
+  template:
+    name: Guest Network Isolation
+    enabled: true
+    action: deny
+    description: "Prevent guest network access to internal network"
+    match_rules:
+      - type: network
+        values: ["Guest Network"]
+      - type: destination
+        values: ["192.168.1.0/24"]
+```
+
+### Time-Based Gaming Route
+```yaml
+service: unifi_network_rules.create_from_template
+data:
+  rule_type: route
+  template:
+    name: Gaming Traffic - Peak Hours
+    enabled: true
+    description: "Prioritize gaming traffic during peak evening hours"
+    match_rules:
+      - type: port
+        values: ["3074", "3075", "3076"]  # Common gaming ports
+    priority: 1000
+    schedule:
+      days: ["mon", "tue", "wed", "thu", "fri"]
+      start_time: "18:00"
+      end_time: "23:00"
+```
+
+### IoT Device Restriction
+```yaml
+service: unifi_network_rules.create_from_template
+data:
+  rule_type: policy
+  template:
+    name: IoT Device Restrictions
+    enabled: true
+    action: deny
+    description: "Restrict IoT devices to DNS only"
+    match_rules:
+      - type: group
+        values: ["IoT Devices"]
+      - type: destination
+        values: ["!8.8.8.8", "!8.8.4.4"]  # Only allow DNS
+      - type: port
+        values: ["!53"]  # Only allow DNS port
+```
 
 ## Automation Examples
 
@@ -197,6 +328,7 @@ If you are having trouble getting the integration to work, please check the foll
 1. Ensure the UDM is running the latest version of the network application.
 2. Ensure the UDM is connected to the same network as your Home Assistant instance.
 3. Ensure you are using the IP address of the UDM, not the hostname.
+4. Verify your local account has proper admin privileges.
 
 ### Verify your local account is working
 
@@ -226,7 +358,12 @@ To get the debug log, navigate Devices and Services -> Unifi Network Rules -> En
 
 ## Limitations
 
-The integration is currently limited to firewall policies and traffic routes. It does not currently support managing other types of rules.
+The integration supports:
+- Zone-based firewall policies with full CRUD operations (create, read, update, delete) on UniFi OS 9.0.92+
+- OR Legacy firewall rules (read and update) on pre-9.0.92 systems
+- Traffic routes (read and update) on all systems
+
+Note: The new service operations (create/delete) are only available for zone-based firewall policies. Legacy rule support will be used automatically on older systems.
 
 ## Contributions
 

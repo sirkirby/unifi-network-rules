@@ -1,28 +1,105 @@
 refresh:
   name: Refresh Rules
-  description: "Refresh the state of all network rules"
-  fields: {}
-
+  description: Refresh the state of all network rules.
+  
 backup_rules:
   name: Backup Rules
-  description: "Backup all firewall and traffic rules to a file"
+  description: Backup all firewall policies, traffic routes, and legacy rules to a file.
   fields:
     filename:
       name: Filename
-      description: "Name of the backup file (will be stored in Home Assistant's config directory)"
+      description: Name of the backup file (will be stored in Home Assistant's config directory)
       required: true
-      example: "unifi_rules_backup_2024.json"
       selector:
-        text: {}
-
+        text:
+          
 restore_rules:
   name: Restore Rules
-  description: "Restore firewall and traffic rules from a backup file"
+  description: Restore firewall policies, traffic routes, and legacy rules from a backup file.
   fields:
     filename:
       name: Filename
-      description: "Name of the backup file to restore from (must exist in Home Assistant's config directory)"
+      description: Name of the backup file to restore from (must exist in Home Assistant's config directory)
       required: true
-      example: "unifi_rules_backup_2024.json"
       selector:
-        text: {}
+        text:
+    rule_ids:
+      name: Rule IDs
+      description: Optional list of specific rule IDs to restore
+      required: false
+      selector:
+        object:
+    name_filter:
+      name: Name Filter
+      description: Optional filter - only restore rules containing this text in their name
+      required: false
+      selector:
+        text:
+    rule_types:
+      name: Rule Types
+      description: Optional list of rule types to restore (policy, route, firewall, traffic)
+      required: false
+      selector:
+        select:
+          options:
+            - "policy"
+            - "route"
+            - "firewall"
+            - "traffic"
+          multiple: true
+
+bulk_update_rules:
+  name: Bulk Update Rules
+  description: Enable or disable multiple policies and routes based on matching names.
+  fields:
+    name_filter:
+      name: Name Filter
+      description: Text to match against rule names
+      required: true
+      selector:
+        text:
+    state:
+      name: State
+      description: True to enable matched rules, False to disable them
+      required: true
+      selector:
+        boolean:
+
+create_from_template:
+  name: Create Rule from Template
+  description: Create a new zone-based firewall policy from a template.
+  fields:
+    template:
+      name: Template
+      description: The template data for the new policy. Must include required fields like name, enabled, source.zone_id, destination.zone_id, etc.
+      required: true
+      selector:
+        object:
+    rule_type:
+      name: Rule Type
+      description: The type of rule to create. Currently only supports 'policy' for zone-based firewall policies.
+      required: true
+      selector:
+        select:
+          options:
+            - "policy"
+
+delete_rule:
+  name: Delete Rule
+  description: Delete a zone-based firewall policy.
+  fields:
+    rule_id:
+      name: Rule ID
+      description: The ID of the rule to delete.
+      required: true
+      example: "674f3052cdbf2c191e0a01b7"
+      selector:
+        text:
+    rule_type:
+      name: Rule Type
+      description: The type of rule to delete. Currently only supports 'policy' for zone-based firewall policies.
+      required: true
+      selector:
+        select:
+          options:
+            - "policy"
