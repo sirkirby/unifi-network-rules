@@ -92,6 +92,82 @@ You can add these buttons to your dashboard by:
 3. Choose "Button"
 4. Configure using the examples above
 
+## Automation Examples
+
+### Automated Daily Backup
+```yaml
+alias: Backup UniFi Network Rule State
+description: >-
+  Creates a daily backup of all policy, rule, and route JSON state to a file in 
+  the Home Assistant config directory every day at 2:00 AM
+trigger:
+  - platform: time
+    at: "02:00:00"
+action:
+  - service: unifi_network_rules.backup_rules
+    data:
+      filename: unifi_rules_daily_backup.json
+
+mode: single
+```
+
+### Backup Before Updates
+```yaml
+alias: Backup UniFi Rules Before Update
+description: >-
+  Automatically backup rules when UniFi OS updates are detected
+trigger:
+  - platform: event
+    event_type: unifi_os_update_detected  # requires UniFi integration
+action:
+  - service: unifi_network_rules.backup_rules
+    data:
+      filename: "unifi_rules_pre_update_{{now().strftime('%Y%m%d')}}.json"
+  - service: notify.mobile_app_your_phone  # customize this
+    data:
+      message: "UniFi rules backed up before system update"
+      
+mode: single
+```
+
+### Regular Refresh with Backup
+```yaml
+alias: Regular UniFi Rules Refresh and Backup
+description: >-
+  Refreshes rule states every 8 hours and creates a backup if changes are detected
+trigger:
+  - platform: time_pattern
+    hours: "/8"
+action:
+  - service: unifi_network_rules.refresh
+  - delay: 
+      seconds: 10
+  - service: unifi_network_rules.backup_rules
+    data:
+      filename: "unifi_rules_latest.json"
+
+mode: single
+```
+
+## Tips for Using Services
+
+1. **Multiple Backups**: Consider using timestamps in your backup filenames to maintain a history:
+   ```yaml
+   filename: "unifi_rules_{{now().strftime('%Y%m%d_%H%M')}}.json"
+   ```
+
+2. **Combine with Other Integrations**: The services work well with other Home Assistant integrations:
+   - Use with the Folder Watcher integration to monitor backup file changes
+   - Combine with the Google Drive Backup integration to ensure offsite copies
+   - Set up notifications when backups complete or restores are performed
+
+3. **Recovery Strategy**: Create an automation that:
+   1. Backs up current rules
+   2. Attempts to restore from a known good backup
+   3. Notifies you of the result
+
+4. **Version Control**: Store your backups in a version-controlled location by combining with the Git integration
+
 ## Local Development
 
 ### Testing
