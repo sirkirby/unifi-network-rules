@@ -155,23 +155,35 @@ async def async_restore_rules_service(hass: HomeAssistant, call: ServiceCall) ->
 
 async def async_setup_services(hass: HomeAssistant) -> None:
     """Set up services for the UniFi Network Rules integration."""
+    async def wrapped_refresh_service(call: ServiceCall) -> None:
+        """Wrapped refresh service that ensures proper call argument."""
+        await async_refresh_service(hass, call)
+
+    async def wrapped_backup_service(call: ServiceCall) -> None:
+        """Wrapped backup service that ensures proper call argument."""
+        await async_backup_rules_service(hass, call)
+
+    async def wrapped_restore_service(call: ServiceCall) -> None:
+        """Wrapped restore service that ensures proper call argument."""
+        await async_restore_rules_service(hass, call)
+
     hass.services.async_register(
         "unifi_network_rules",
         "refresh",
-        async_refresh_service,
+        wrapped_refresh_service,
         schema=None,
     )
     
     hass.services.async_register(
         "unifi_network_rules",
         "backup_rules",
-        async_backup_rules_service,
+        wrapped_backup_service,
         schema=BACKUP_SCHEMA,
     )
     
     hass.services.async_register(
         "unifi_network_rules",
         "restore_rules",
-        async_restore_rules_service,
+        wrapped_restore_service,
         schema=RESTORE_SCHEMA,
     )
