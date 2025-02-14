@@ -1,22 +1,94 @@
 {
-    "config": {
-      "step": {
-        "user": {
-          "title": "Connect to UDM",
-          "description": "Set up UDM Rule Manager to manage your UniFi Dream Machine rules.",
-          "data": {
-            "host": "Host",
-            "username": "Username",
-            "password": "Password"
-          }
+  "config": {
+    "step": {
+      "user": {
+        "title": "UniFi Network Rules",
+        "description": "Set up UniFi Network Rules to manage firewall policies and traffic routes.",
+        "data": {
+          "host": "Host",
+          "username": "Username",
+          "password": "Password",
+          "update_interval": "Update Interval (minutes)"
         }
-      },
-      "error": {
-        "cannot_connect": "Failed to connect to UDM. Please check your credentials and try again."
-      },
-      "abort": {
-        "already_configured": "UDM Rule Manager is already configured"
       }
     },
-    "title": "UniFi Network Rules"
-  }
+    "error": {
+      "auth": "Authentication failed. Please check your credentials.",
+      "connect": "Cannot connect to the UniFi device. Please check your network and device status.",
+      "no_capabilities": "No supported capabilities detected. Please ensure your UniFi device is properly initialized and your account has the necessary permissions.",
+      "invalid_host": "Invalid host address provided.",
+      "invalid_update_interval": "Update interval must be between 1 and 1440 minutes.",
+      "unknown": "An unexpected error occurred. Please check the logs for more details."
+    },
+    "abort": {
+      "already_configured": "Device is already configured"
+    }
+  },
+  "services": {
+    "refresh": {
+      "name": "Refresh",
+      "description": "Refresh UniFi Network Rules data"
+    },
+    "backup_rules": {
+      "name": "Backup Rules",
+      "description": "Backup firewall and traffic rules to a file",
+      "fields": {
+        "filename": {
+          "name": "Filename",
+          "description": "Name of the backup file (will be stored in Home Assistant's config directory)"
+        }
+      }
+    },
+    "restore_rules": {
+      "name": "Restore Rules",
+      "description": "Restore firewall and traffic rules from a backup file",
+      "fields": {
+        "filename": {
+          "name": "Filename",
+          "description": "Name of the backup file to restore from (must exist in Home Assistant's config directory)"
+        },
+        "rule_ids": {
+          "name": "Rule IDs",
+          "description": "Optional list of specific rule IDs to restore"
+        },
+        "name_filter": {
+          "name": "Name Filter",
+          "description": "Optional filter - only restore rules containing this text in their name"
+        },
+        "rule_types": {
+          "name": "Rule Types",
+          "description": "Optional list of rule types to restore (policy, route, firewall, traffic)"
+        }
+      }
+    },
+    "bulk_update_rules": {
+      "name": "Bulk Update Rules",
+      "description": "Enable or disable multiple rules based on name matching",
+      "fields": {
+        "name_filter": {
+          "name": "Name Filter",
+          "description": "Text to match against rule names"
+        },
+        "state": {
+          "name": "State",
+          "description": "True to enable matched rules, False to disable them"
+        }
+      }
+    },
+    "delete_rule": {
+      "name": "Delete Rule",
+      "description": "Delete a rule",
+      "fields": {
+        "rule_id": {
+          "name": "Rule ID",
+          "description": "The ID of the rule to delete"
+        },
+        "rule_type": {
+          "name": "Rule Type",
+          "description": "The type of rule to delete. Currently only supports 'policy' for firewall policies"
+        }
+      }
+    }
+  },
+  "title": "UniFi Network Rules"
+}

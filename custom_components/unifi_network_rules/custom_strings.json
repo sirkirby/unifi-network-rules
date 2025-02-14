@@ -1,6 +1,7 @@
 {
   "component_title": "UniFi Network Rules",
-  "error_auth": "Authentication failed",
-  "error_connect": "Cannot connect to the UniFi device",
+  "error_auth": "Authentication failed. Please check your credentials.",
+  "error_connect": "Cannot connect to the UniFi device. Check network and device status.",
+  "error_no_capabilities": "No supported capabilities detected. Please verify your UniFi device is properly initialized and your account has the required permissions.",
   "service_refresh_description": "Refresh UniFi Network Rules data"
-} 
+}

@@ -12,6 +12,7 @@ SESSION_TIMEOUT = 30
 # API Endpoints
 SITE_FEATURE_MIGRATION_ENDPOINT = "/proxy/network/v2/api/site/default/site-feature-migration"
 FIREWALL_POLICIES_ENDPOINT = "/proxy/network/v2/api/site/default/firewall-policies"
+FIREWALL_POLICIES_DELETE_ENDPOINT = "/proxy/network/v2/api/site/default/firewall-policies/batch-delete"
 TRAFFIC_ROUTES_ENDPOINT = "/proxy/network/v2/api/site/default/trafficroutes"
 LEGACY_FIREWALL_RULES_ENDPOINT = "/proxy/network/api/s/default/rest/firewallrule"
 LEGACY_TRAFFIC_RULES_ENDPOINT = "/proxy/network/v2/api/site/default/trafficrules"

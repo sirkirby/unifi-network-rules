@@ -12,6 +12,7 @@ from .const import (
     SITE_FEATURE_MIGRATION_ENDPOINT,
     FIREWALL_POLICIES_ENDPOINT,
     TRAFFIC_ROUTES_ENDPOINT,
+    FIREWALL_POLICIES_DELETE_ENDPOINT,
     LEGACY_FIREWALL_RULES_ENDPOINT,
     LEGACY_TRAFFIC_RULES_ENDPOINT,
     FIREWALL_ZONE_MATRIX_ENDPOINT,
@@ -62,64 +63,87 @@ class UDMAPI:
 
     @log_call
     async def detect_capabilities(self) -> bool:
-        """Detect UDM capabilities by checking endpoints."""
+        """Detect UDM capabilities by checking endpoints.
+        
+        Returns True if any capabilities were successfully detected,
+        False if no capabilities could be detected or there was an error.
+        """
         try:
-            url = f"https://{self.host}{SITE_FEATURE_MIGRATION_ENDPOINT}"
-            success, migrations, error = await self._make_authenticated_request('get', url)
+            # Reset capabilities to ensure clean detection
+            self.capabilities = UDMCapabilities()
+
+            # Always check traffic routes first as they're available in all modes
+            routes_success, routes_data, routes_error = await self.get_traffic_routes()
+            self.capabilities.traffic_routes = routes_success and isinstance(routes_data, list)
+            
+            if not self.capabilities.traffic_routes:
+                logger.error("Failed to detect traffic routes capability: %s", routes_error)
+
+            # Check zone-based firewall capability using feature migration endpoint
+            migration_url = f"https://{self.host}{SITE_FEATURE_MIGRATION_ENDPOINT}"
+            success, migrations, error = await self._make_authenticated_request('get', migration_url)
             
             logger.debug("Feature migration check: success=%s, data=%s, error=%s", 
                         success, migrations, error)
 
+            # Try to detect zone-based firewall capability
             if success and isinstance(migrations, list):
                 self.capabilities.zone_based_firewall = any(
                     m.get("feature") == ZONE_BASED_FIREWALL_FEATURE
                     for m in migrations
                 )
+                if not self.capabilities.zone_based_firewall:
+                    logger.debug("Zone-based firewall feature not found in migrations")
             else:
-                # If migration check fails, check policies endpoint
+                # If migration endpoint fails, try policies endpoint as fallback
+                logger.debug("Migration endpoint check failed, trying policies endpoint")
                 success, policies, error = await self.get_firewall_policies()
-                logger.debug("Firewall policies check: success=%s, has_data=%s, error=%s",
-                            success, bool(policies), error)
-                self.capabilities.zone_based_firewall = success
+                logger.debug("Firewall policies check: success=%s, has_data=%s, error=%s", success, bool(policies), error)
+                self.capabilities.zone_based_firewall = success and bool(policies)
 
-            # If not zone-based, check legacy endpoints
+            # If zone-based firewall is not detected, check legacy endpoints
             if not self.capabilities.zone_based_firewall:
-                self.capabilities.legacy_firewall = await self._check_legacy_endpoints()
-            else:
-                self.capabilities.legacy_firewall = False
+                logger.debug("Zone-based firewall not detected, checking legacy endpoints")
+                legacy_success, legacy_rules, legacy_error = await self.get_legacy_firewall_rules()
+                self.capabilities.legacy_firewall = legacy_success and isinstance(legacy_rules, list)
+                           
+                if not self.capabilities.legacy_firewall:
+                    logger.error("Failed to detect legacy firewall capability: %s", legacy_error)
 
-            # Check traffic routes (available in both modes)
-            routes_success, routes_data, _ = await self.get_traffic_routes()
-            self.capabilities.traffic_routes = routes_success and isinstance(routes_data, list)
-
+            # Log final capability state
             logger.info(
-                "UDM Capabilities: zone_based_firewall=%s, legacy_firewall=%s, traffic_routes=%s",
+                "UDM Capabilities detected: traffic_routes=%s, zone_based_firewall=%s, legacy_firewall=%s",
+                self.capabilities.traffic_routes,
                 self.capabilities.zone_based_firewall,
-                self.capabilities.legacy_firewall,
-                self.capabilities.traffic_routes
+                self.capabilities.legacy_firewall
             )
 
-            return True
+            # Handle edge case where no firewall capabilities are detected
+            if not self.capabilities.zone_based_firewall and not self.capabilities.legacy_firewall:
+                logger.error(
+                    "No firewall capabilities detected. This could indicate:\n"
+                    "1. UniFi Network has changed its API\n"
+                    "2. The device is not properly initialized\n"
+                    "3. The user lacks necessary permissions\n"
+                    "4. Network connectivity issues"
+                )
+
+            # Return True if any capability was detected
+            return any([
+                self.capabilities.traffic_routes,
+                self.capabilities.zone_based_firewall,
+                self.capabilities.legacy_firewall
+            ])
 
         except Exception as e:
-            logger.error("Error detecting UDM capabilities: %s", str(e))
-            return False
-    
-    async def _check_legacy_endpoints(self) -> bool:
-        """Check if legacy endpoints return data."""
-        success, rules, error = await self.get_legacy_firewall_rules()
-        logger.debug("Legacy firewall check: success=%s, has_data=%s, error=%s",
-                    success, bool(rules), error)
-        
-        if success and rules:
-            return True
-
-        # Try legacy traffic rules endpoint as backup
-        success, rules, error = await self.get_legacy_traffic_rules()
-        logger.debug("Legacy traffic check: success=%s, has_data=%s, error=%s",
-                    success, bool(rules), error)
-        
-        return success and bool(rules)
+            logger.exception("Error during capability detection: %s", str(e))
+            # Reset capabilities on error
+            self.capabilities = UDMCapabilities()
+            return any([
+                self.capabilities.traffic_routes,
+                self.capabilities.zone_based_firewall,
+                self.capabilities.legacy_firewall
+            ])
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create an aiohttp session."""
@@ -234,7 +258,6 @@ class UDMAPI:
                 if not token_found:
                     return False, "No TOKEN cookie in response"
                 
-                # Update the last login time on successful authentication.
                 self._last_login = datetime.now()
                 logger.debug("Authentication successful, updated session time.")
                 return True, None
@@ -272,17 +295,14 @@ class UDMAPI:
                     async with session.request(method, url, headers=headers, json=json_data) as response:
                         response_text = await response.text()
                         
-                        # Handle authentication errors (401/403)
                         if response.status in [401, 403]:
                             last_error = f"Request failed: {response.status}, {response_text}"
                             logger.warning(f"Authentication error ({response.status}): {response_text}")
-                            # Clear authentication state
                             self._cookies.clear()
                             self._csrf_token = None
                             self._device_token = None
                             self._last_login = None
                             
-                            # Try to re-authenticate immediately
                             auth_success, auth_error = await self.authenticate_session()
                             if not auth_success:
                                 logger.error(f"Re-authentication failed: {auth_error}")
@@ -291,26 +311,35 @@ class UDMAPI:
                                     continue
                                 return False, None, f"Authentication failed after {self.max_retries} attempts"
                             
-                            # Always sleep before retrying (except on final attempt)
                             if attempt < self.max_retries - 1:
                                 await asyncio.sleep(self.retry_delay)
                             continue
 
-                        # Update CSRF token if provided
-                        new_csrf = response.headers.get("x-csrf-token") or response.headers.get("x-updated-csrf-token")
-                        if new_csrf:
-                            logger.debug(f"Updating CSRF token to: {new_csrf}")
-                            self._csrf_token = new_csrf
+                        if response.status in [200, 201, 204]:
+                            # Update tokens from response
+                            new_csrf = response.headers.get("x-csrf-token") or response.headers.get("x-updated-csrf-token")
+                            if new_csrf:
+                                logger.debug(f"Updating CSRF token to: {new_csrf}")
+                                self._csrf_token = new_csrf
 
-                        # Update cookies from response safely
-                        if isinstance(response.cookies, dict):
-                            for cookie in response.cookies.values():
-                                if cookie.key == COOKIE_TOKEN:
-                                    self._cookies[COOKIE_TOKEN] = cookie.value
-                                    logger.debug(f"Updated {COOKIE_TOKEN} cookie from response")
+                            # Handle both dict and ClientResponse cookie types
+                            if hasattr(response.cookies, 'items'):
+                                for key, cookie in response.cookies.items():
+                                    if key == COOKIE_TOKEN:
+                                        if isinstance(cookie, str):
+                                            self._cookies[COOKIE_TOKEN] = cookie
+                                        else:
+                                            self._cookies[COOKIE_TOKEN] = cookie.value
+                            else:
+                                for cookie_str in response.headers.getall('Set-Cookie', []):
+                                    token = self._parse_token_cookie(cookie_str)
+                                    if token:
+                                        self._cookies[COOKIE_TOKEN] = token
+                                        break
 
-                        if response.status == 200:
                             try:
+                                if response.status == 204 or not response_text:
+                                    return True, None, None
                                 parsed_response = json.loads(response_text)
                                 return True, parsed_response, None
                             except json.JSONDecodeError as e:
@@ -536,10 +565,45 @@ class UDMAPI:
             
         return True, None
 
+    async def update_firewall_policy(self, policy_id: str, policy_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Update a firewall policy with complete state data."""
+        url = f"https://{self.host}{FIREWALL_POLICIES_ENDPOINT}/{policy_id}"
+        success, response, error = await self._make_authenticated_request('put', url, policy_data)
+        if not success:
+            logger.error(f"Failed to update firewall policy {policy_id}: {error}")
+            return False, error
+        return True, None
+
+    async def update_traffic_route(self, route_id: str, route_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Update a traffic route with complete state data."""
+        url = f"https://{self.host}{TRAFFIC_ROUTES_ENDPOINT}/{route_id}"
+        success, response, error = await self._make_authenticated_request('put', url, route_data)
+        if not success:
+            logger.error(f"Failed to update traffic route {route_id}: {error}")
+            return False, error
+        return True, None
+
+    async def create_firewall_policy(self, policy_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Create a new firewall policy."""
+        url = f"https://{self.host}{FIREWALL_POLICIES_ENDPOINT}"
+        success, response, error = await self._make_authenticated_request('post', url, policy_data)
+        if not success:
+            logger.error(f"Failed to create firewall policy: {error}")
+            return False, error
+        return True, None
+
+    async def delete_firewall_policies(self, policy_ids: List[str]) -> Tuple[bool, Optional[str]]:
+        """Delete one or more firewall policies."""
+        url = f"https://{self.host}{FIREWALL_POLICIES_DELETE_ENDPOINT}"
+        success, response, error = await self._make_authenticated_request('post', url, policy_ids)
+        if not success:
+            logger.error(f"Failed to delete firewall policies: {error}")
+            return False, error
+        return True, None
+
     def _log_response_data(self, method: str, url: str, response_status: int, response_text: str):
         """Log response data in a structured way."""
         try:
-            # Try to parse as JSON for pretty printing
             response_data = json.loads(response_text)
             formatted_response = json.dumps(response_data, indent=2)
         except json.JSONDecodeError:
