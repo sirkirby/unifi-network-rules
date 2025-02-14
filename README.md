@@ -26,7 +26,7 @@ A local account with Admin privileges to the network application. Must not be a 
 [![Discord][discord-shield]][discord]
 [![Community Forum][forum-shield]][forum]
 
-If you don't or can't use HACS, alternatively, copy the `custom_components/UniFi_network_rules` directory to your `config/custom_components` directory.
+If you don't or can't use HACS, alternatively, copy the `custom_components/unifi_network_rules` directory to your `config/custom_components` directory.
 
 I recommend installing the Studio Code Server addon to make it easier to copy in the custom component directly in the Home Assistant UI. `Settings -> Add-ons -> Studio Code Server -> Install`. Then turn on `Show in Sidebar`.
 
