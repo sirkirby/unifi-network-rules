@@ -1,35 +1,46 @@
-# Unifi Network Rules Custom Integration
+# UniFi Network Rules Custom Integration
 
-Pulls user-defined firewall policies and traffic routes from your Unifi Dream Machine/Router and allows you to enable/disable them as switches in Home Assistant. It will ignore pre-defined firewall policies to keep the amount of entities manageable.
+[![License][license-shield]](LICENSE)
+![Project Maintenance][maintenance-shield]
+[![GitHub Activity][commits-shield]][commits]
+
+[![GitHub Release][release-shield]][releases]
+[![issues][issues-shield]][issues-link]
+[![validate-badge]][validate-workflow]
+
+[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/sirkirby)
+
+Pulls user-defined firewall policies and traffic routes from your UniFi Dream Machine/Router and allows you to enable/disable them and build more sophisticated automations in Home Assistant.
 
 ## Requirements
 
-A Unifi device running network application 9.0.92 or later.
-
-> [!NOTE]
-> For version 8.x.x of the Unifi Network application, please use the v.0.3.x release of this integration.
+A UniFi device running network application 9.0.92 or later.
 
 A local account with Admin privileges to the network application. Must not be a UniFi Cloud account.
 
 ## Installation
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=sirkirby&repository=unifi-network-rules&category=integration)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=sirkirby&repository=UniFi-network-rules&category=integration)
 
-If you don't or can't use HACS, alternatively, copy the `custom_components/unifi_network_rules` directory to your `config/custom_components` directory.
+[![hacs][hacsbadge]][hacs]
+[![Discord][discord-shield]][discord]
+[![Community Forum][forum-shield]][forum]
 
-I recommend installing the Studio Code Server addon to make it easier to copy in the custom component directly in the Home Assistant UI. `Settings -> Add-ons -> Studio Code Server -> Install`. The turn on `Show in Sidebar`.
+If you don't or can't use HACS, alternatively, copy the `custom_components/UniFi_network_rules` directory to your `config/custom_components` directory.
+
+I recommend installing the Studio Code Server addon to make it easier to copy in the custom component directly in the Home Assistant UI. `Settings -> Add-ons -> Studio Code Server -> Install`. Then turn on `Show in Sidebar`.
 
 THEN
 
 1. Restart Home Assistant.
 2. In the Home Assistant configuration page, click on "Integrations".
 3. Click on the "+" button in the bottom right corner.
-4. Search for "Unifi Network Rule Manager" and select it.
+4. Search for "UniFi Network Rule Manager" and select it.
 5. Enter credentials of a local admin user on your UDM and click on the "Submit" button.
 
 ## Configuration
 
-**Host**: The IP address of your Unifi Device. Avoid using the hostname as it may not work.
+**Host**: The IP address of your UniFi Device. Avoid using the hostname as it may not work.
 
 **Username**: The local admin account on the UDM.
 
@@ -39,14 +50,14 @@ THEN
 
 ## Usage
 
-Once you have configured the integration, you will be able to see the firewall policies and traffic routes configured on your Unifi Network as switches in Home Assistant. Add the switch to a custom dashboard or use it in automations just like any other Home Assistant switch.
+Once you have configured the integration, you will be able to see the firewall policies and traffic routes configured on your UniFi Network as switches in Home Assistant. Add the switch to a custom dashboard or use it in automations just like any other Home Assistant switch.
 
 ## Network Mode Detection
 
 The integration automatically detects the UniFi network configuration mode:
 
-- If zone-based firewall is detected, UniFi Network 9.0.92+ and opted to migrate, the integration will manage firewall policies using the new API.
-- If legacy mode is detected, UniFi Network 8+ and do not have zone-based option or opted to not migrate, the integration will manage legacy firewall and traffic rules.
+- If a zone-based firewall is detected (available in UniFi Network 9.0.92+ systems that have migrated), the integration will manage firewall policies using the new API.
+- If legacy mode is detected (on UniFi Network 8+ systems that either lack the zone-based option or have opted not to migrate), the integration will manage legacy firewall and traffic rules.
 - Traffic routes are managed the same way in both modes.
 
 Migration from legacy mode to zone-based firewall is handled by UniFi OS. After migration, legacy rules become policies and the integration will automatically switch to managing them as policies.
@@ -66,37 +77,50 @@ This is the simplest method:
 
 Example automation for refresh:
 ```yaml
-automation:
-  - alias: "Refresh UniFi Rules when Button Pressed"
-    trigger:
-      platform: state
-      entity_id: input_button.refresh_unifi_rules
-    action:
-      - service: unifi_network_rules.refresh
+alias: Backup UniFi Network Rules
+description: >-
+  Dumps all policy, rule, and route JSON state to a file in the ha config
+  directory
+triggers:
+  - trigger: state
+    entity_id:
+      - input_button.backup_unr
+conditions: []
+actions:
+  - action: UniFi_network_rules.backup_rules
+    metadata: {}
+    data:
+      filename: unr_daily_backup.json
+mode: single
 ```
+<img src="./assets/backup_unr_button.png" alt="Backup UNR Button" width="200" />
 
 ### Method 2: Using Scripts with a Lovelace Button Card (More Customizable)
 
-First, create a script in your `configuration.yaml`:
+First, create a script in your Settings → Automations & Scenes → Scripts:
 
 ```yaml
-script:
-  backup_unifi_rules:
-    sequence:
-      - service: unifi_network_rules.backup_rules
+sequence:
+  - sequence:
+      - action: UniFi_network_rules.backup_rules
+        metadata: {}
         data:
-          filename: "unifi_rules_backup.json"
+          filename: my_custom_unr_backup.json
+alias: Backup my UniFi Rules
+description: Custom script that will backup all rules and routes imported from your UDM
 ```
 
 Then add a button card to your dashboard that references the script:
 ```yaml
+show_name: true
+show_icon: true
 type: button
-name: Backup Rules
 tap_action:
-  action: call-service
-  service: script.turn_on
-  service_data:
-    entity_id: script.backup_unifi_rules
+  action: perform-action
+  perform_action: script.backup_my_UniFi_rules
+  target: {}
+name: Backup my Network Rules
+icon: mdi:cloud-upload
 ```
 
 ### Available Services
@@ -120,55 +144,42 @@ Delete an existing zone-based firewall policy by its ID. Only available for UniF
 
 ### Automated Daily Backup
 ```yaml
-alias: Backup UniFi Network Rule State
+alias: Backup UniFi Network Rules
 description: >-
   Creates a daily backup of all policy, rule, and route JSON state to a file in 
   the Home Assistant config directory every day at 2:00 AM
-trigger:
-  - platform: time
-    at: "02:00:00"
-action:
-  - service: unifi_network_rules.backup_rules
+triggers:
+  - trigger: time_pattern
+    hours: "2"
+conditions: []
+actions:
+  - action: UniFi_network_rules.backup_rules
+    metadata: {}
     data:
-      filename: unifi_rules_daily_backup.json
-
+      filename: unr_daily_backup.json
 mode: single
 ```
 
-### Guest Network Security Automation
+### Block Kid's devices at bedtime
+Every night at 11PM, Policies or Rules that contain the name "Block Kid Internet" will `enable` and send a notification to Chris's iPhone
 ```yaml
-alias: Guest Network After Hours
-description: Disable guest network access during off-hours
-trigger:
-  - platform: time
-    at: "23:00:00"
-action:
-  - service: unifi_network_rules.bulk_update_rules
+alias: Daily Device Downtime
+description: Block kid devices at bedtime daily
+triggers:
+  - trigger: time_pattern
+    hours: "23"
+conditions: []
+actions:
+  - action: UniFi_network_rules.bulk_update_rules
+    metadata: {}
     data:
-      name_filter: "Guest Network"
-      state: false
-  - service: notify.mobile_app
+      state: true
+      name_filter: Block Kid internet
+  - action: notify.mobile_app_chrisiphone
+    metadata: {}
     data:
-      message: "Guest network rules disabled for the night"
-mode: single
-```
-
-### Regular Refresh with Backup
-```yaml
-alias: Regular UniFi Rules Refresh and Backup
-description: >-
-  Refreshes rule states every 8 hours and creates a backup if changes are detected
-trigger:
-  - platform: time_pattern
-    hours: "/8"
-action:
-  - service: unifi_network_rules.refresh
-  - delay: 
-      seconds: 10
-  - service: unifi_network_rules.backup_rules
-    data:
-      filename: "unifi_rules_latest.json"
-
+      message: Kids Device Downtime Enabled
+      title: Daily Device Downtime
 mode: single
 ```
 
@@ -176,12 +187,12 @@ mode: single
 
 1. **Backup Organization**: Use descriptive filenames with timestamps:
    ```yaml
-   filename: "unifi_rules_{{now().strftime('%Y%m%d_%H%M')}}.json"
+   filename: "UniFi_rules_{{now().strftime('%Y%m%d_%H%M')}}.json"
    ```
 
 2. **Selective Restore**: When restoring rules, use filters to target specific rules:
    ```yaml
-   service: unifi_network_rules.restore_rules
+   service: UniFi_network_rules.restore_rules
    data:
      filename: "backup.json"
      name_filter: "Guest"  # Only restore guest-related rules
@@ -246,13 +257,13 @@ Possible responses:
 
 ### Verify your account has admin privileges
 
-You can do this by logging into your Unifi device locally or via <https://unifi.ui.com>, navigate to Settings -> Admins & Users, and checking the local user's permissions. It should be Admin or Super Admin for the network application.
+You can do this by logging into your UniFi device locally or via <https://UniFi.ui.com>, navigate to Settings -> Admins & Users, and checking the local user's permissions. It should be Admin or Super Admin for the network application.
 
 ### Open a bug issue
 
-If you are having trouble getting the integration to work, please open an [Issue](https://github.com/sirkirby/unifi-network-rules/issues) using the bug report template. Please enable debug logging and include the full log output in your report. Note that it may contain sensitive network information, so please review it before posting. The logs can be large, so i recommend attaching them as a file.
+If you are having trouble getting the integration to work, please open an [Issue](https://github.com/sirkirby/UniFi-network-rules/issues) using the bug report template. Please enable debug logging and include the full log output in your report. Note that it may contain sensitive network information, so please review it before posting. The logs can be large, so i recommend attaching them as a file.
 
-To get the debug log, navigate Devices and Services -> Unifi Network Rules -> Enable Debug Logging. Then reload the integration and try to reproduce the issue. Finally, disable debug logging and download the log file.
+To get the debug log, navigate Devices and Services -> UniFi Network Rules -> Enable Debug Logging. Then reload the integration and try to reproduce the issue. Finally, disable debug logging and download the log file.
 
 ## Limitations
 
@@ -266,3 +277,26 @@ Note: The new service operations (create/delete) are only available for zone-bas
 ## Contributions
 
 Contributions are welcome! Please read our [Contributing Guidelines](CONTRIBUTING.md) and feel free to submit a PR.
+
+***
+
+[commits-shield]: https://img.shields.io/github/commit-activity/y/sirkirby/unifi-network-rules?style=for-the-badge
+[commits]: https://github.com/sirkirby/unifi-network-rules/commits/main
+[license-shield]: https://img.shields.io/github/license/sirkirby/unifi-network-rules.svg?style=for-the-badge
+[maintenance-shield]: https://img.shields.io/badge/maintainer-sirkirby-blue.svg?style=for-the-badge
+
+[hacs]: https://github.com/custom-components/hacs
+[hacsbadge]: https://img.shields.io/badge/HACS-Custom-orange.svg?style=for-the-badge
+[discord]: https://discord.gg/Qa5fW2R
+[discord-shield]: https://img.shields.io/discord/330944238910963714.svg?style=for-the-badge
+[forum-shield]: https://img.shields.io/badge/community-forum-brightgreen.svg?style=for-the-badge
+[forum]: https://community.home-assistant.io/
+
+[releases]: https://github.com/sirkirby/unifi-network-rules/releases
+[release-shield]: https://img.shields.io/github/v/release/sirkirby/unifi-network-rules?style=flat
+
+[issues-shield]: https://img.shields.io/github/issues/sirkirby/unifi-network-rules?style=flat
+[issues-link]: https://github.com/sirkirby/unifi-network-rules/issues
+
+[validate-badge]: https://github.com/sirkirby/unifi-network-rules/actions/workflows/python-tests.yml/badge.svg
+[validate-workflow]: https://github.com/sirkirby/unifi-network-rules/actions/workflows/python-tests.yml
