@@ -65,25 +65,6 @@ bulk_update_rules:
       selector:
         boolean:
 
-create_from_template:
-  name: Create Rule from Template
-  description: Create a new zone-based firewall policy from a template.
-  fields:
-    template:
-      name: Template
-      description: The template data for the new policy. Must include required fields like name, enabled, source.zone_id, destination.zone_id, etc.
-      required: true
-      selector:
-        object:
-    rule_type:
-      name: Rule Type
-      description: The type of rule to create. Currently only supports 'policy' for zone-based firewall policies.
-      required: true
-      selector:
-        select:
-          options:
-            - "policy"
-
 delete_rule:
   name: Delete Rule
   description: Delete a zone-based firewall policy.

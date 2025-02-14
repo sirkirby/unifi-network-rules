@@ -75,20 +75,6 @@
         }
       }
     },
-    "create_from_template": {
-      "name": "Create Rule from Template",
-      "description": "Create a new rule from a template",
-      "fields": {
-        "template": {
-          "name": "Template",
-          "description": "The template data for the new rule. Must include required fields like name, enabled, etc."
-        },
-        "rule_type": {
-          "name": "Rule Type",
-          "description": "The type of rule to create. Currently only supports 'policy' for firewall policies"
-        }
-      }
-    },
     "delete_rule": {
       "name": "Delete Rule",
       "description": "Delete a rule",

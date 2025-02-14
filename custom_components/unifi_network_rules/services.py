@@ -10,9 +10,8 @@ import homeassistant.helpers.config_validation as cv
 SERVICE_FILENAME = "filename"
 SERVICE_NAME_FILTER = "name_filter"
 SERVICE_STATE = "state"
-SERVICE_TEMPLATE = "template"
-SERVICE_RULE_TYPE = "rule_type"
 SERVICE_RULE_ID = "rule_id"
+SERVICE_RULE_TYPE = "rule_type"
 
 BACKUP_SCHEMA = vol.Schema({
     vol.Required(SERVICE_FILENAME): cv.string,
@@ -28,11 +27,6 @@ RESTORE_SCHEMA = vol.Schema({
 BULK_UPDATE_SCHEMA = vol.Schema({
     vol.Required(SERVICE_NAME_FILTER): cv.string,
     vol.Required(SERVICE_STATE): cv.boolean,
-})
-
-CREATE_FROM_TEMPLATE_SCHEMA = vol.Schema({
-    vol.Required(SERVICE_TEMPLATE): dict,
-    vol.Required(SERVICE_RULE_TYPE): vol.In(["policy"]),
 })
 
 DELETE_RULE_SCHEMA = vol.Schema({
@@ -80,7 +74,7 @@ async def async_backup_rules_service(hass: HomeAssistant, call: ServiceCall) -> 
             if traffic_routes := coordinator.data.get("traffic_routes"):
                 entry_backup["traffic_routes"] = traffic_routes
             
-            if firewall_rules := coordinator.data.get("firewall_rules", {}).get("data"):
+            if firewall_rules := coordinator.data.get("firewall_rules"):
                 entry_backup["firewall_rules"] = firewall_rules
             
             if traffic_rules := coordinator.data.get("traffic_rules"):
@@ -247,36 +241,6 @@ async def async_bulk_update_rules_service(hass: HomeAssistant, call: ServiceCall
         # Refresh the coordinator after updates
         await coordinator.async_request_refresh()
 
-async def async_create_from_template_service(hass: HomeAssistant, call: ServiceCall) -> None:
-    """Service to create a new rule from a template."""
-    template_data = call.data[SERVICE_TEMPLATE]
-    rule_type = call.data[SERVICE_RULE_TYPE]
-    domain_data = hass.data.get("unifi_network_rules", {})
-    
-    for entry_id, entry_data in domain_data.items():
-        api = entry_data.get("api")
-        if not api:
-            continue
-            
-        try:
-            if rule_type == "policy":
-                success, error = await api.create_firewall_policy(template_data)
-                if not success:
-                    logger.error(f"Failed to create firewall policy: {error}")
-                else:
-                    logger.info("Successfully created firewall policy from template")
-            else:
-                logger.error(f"Unsupported rule type for template creation: {rule_type}")
-                continue
-                
-            # Refresh the coordinator
-            coordinator = entry_data.get("coordinator")
-            if coordinator:
-                await coordinator.async_request_refresh()
-                
-        except Exception as e:
-            logger.error(f"Error creating rule from template: {str(e)}")
-
 async def async_delete_rule_service(hass: HomeAssistant, call: ServiceCall) -> None:
     """Service to delete a rule."""
     rule_id = call.data[SERVICE_RULE_ID]
@@ -324,10 +288,6 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     async def wrapped_bulk_update_service(call: ServiceCall) -> None:
         """Wrapped bulk update service that ensures proper call argument."""
         await async_bulk_update_rules_service(hass, call)
-
-    async def wrapped_create_from_template_service(call: ServiceCall) -> None:
-        """Wrapped create from template service that ensures proper call argument."""
-        await async_create_from_template_service(hass, call)
         
     async def wrapped_delete_rule_service(call: ServiceCall) -> None:
         """Wrapped delete rule service that ensures proper call argument."""
@@ -359,13 +319,6 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         "bulk_update_rules",
         wrapped_bulk_update_service,
         schema=BULK_UPDATE_SCHEMA,
-    )
-    
-    hass.services.async_register(
-        "unifi_network_rules",
-        "create_from_template",
-        wrapped_create_from_template_service,
-        schema=CREATE_FROM_TEMPLATE_SCHEMA,
     )
     
     hass.services.async_register(

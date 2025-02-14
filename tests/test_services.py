@@ -9,7 +9,6 @@ from custom_components.unifi_network_rules.services import (
     async_backup_rules_service,
     async_restore_rules_service,
     async_bulk_update_rules_service,
-    async_create_from_template_service,
     async_delete_rule_service
 )
 
@@ -23,8 +22,11 @@ def mock_api():
     api.get_traffic_routes = AsyncMock(return_value=(True, [], None))
     api.update_firewall_policy = AsyncMock(return_value=(True, None))
     api.update_traffic_route = AsyncMock(return_value=(True, None))
-    api.create_firewall_policy = AsyncMock(return_value=(True, None))
     api.delete_firewall_policies = AsyncMock(return_value=(True, None))
+    api.update_legacy_firewall_rule = AsyncMock(return_value=(True, None))
+    api.update_legacy_traffic_rule = AsyncMock(return_value=(True, None))
+    api.get_legacy_firewall_rules = AsyncMock(return_value=(True, [], None))
+    api.get_legacy_traffic_rules = AsyncMock(return_value=(True, [], None))
     return api
 
 @pytest.fixture
@@ -44,16 +46,28 @@ def mock_data():
                 "_id": "policy1",
                 "name": "Policy 1",
                 "enabled": True,
-                "tags": ["test"],
                 "predefined": False
             }
         ],
         "traffic_routes": [
             {
                 "_id": "route1",
-                "description": "Route 1",
-                "enabled": True,
-                "tags": ["test"]
+                "name": "Route 1",
+                "enabled": True
+            }
+        ],
+        "firewall_rules": [
+            {
+                "_id": "rule1",
+                "name": "Rule 1",
+                "enabled": True
+            }
+        ],
+        "traffic_rules": [
+            {
+                "_id": "traffic1",
+                "name": "Traffic 1",
+                "enabled": True
             }
         ]
     }
@@ -81,8 +95,8 @@ async def test_refresh_service_no_coordinator(hass: HomeAssistant):
     # Should not raise an error
 
 @pytest.mark.asyncio
-async def test_backup_rules_service(hass: HomeAssistant, mock_coordinator, mock_data):
-    """Test backup service."""
+async def test_backup_rules_service_full(hass: HomeAssistant, mock_coordinator, mock_data):
+    """Test backup service with full data."""
     mock_coordinator.data = mock_data
     hass.data["unifi_network_rules"] = {
         "test_entry": {
@@ -103,12 +117,24 @@ async def test_backup_rules_service(hass: HomeAssistant, mock_coordinator, mock_
         assert json.loads(written_data) == {"test_entry": mock_data}
 
 @pytest.mark.asyncio
-async def test_restore_rules_service_capabilities_check(hass: HomeAssistant, mock_api, mock_coordinator, mock_data):
-    """Test restore service respects UDM capabilities."""
-    # Set capabilities
-    mock_api.capabilities.zone_based_firewall = False
-    mock_api.capabilities.traffic_routes = False
-    
+async def test_backup_rules_service_empty_data(hass: HomeAssistant, mock_coordinator):
+    """Test backup service with no data."""
+    mock_coordinator.data = {}
+    hass.data["unifi_network_rules"] = {
+        "test_entry": {
+            "coordinator": mock_coordinator
+        }
+    }
+
+    mock_call = MagicMock()
+    mock_call.data = {"filename": "test_backup.json"}
+
+    result = await async_backup_rules_service(hass, mock_call)
+    assert result is None
+
+@pytest.mark.asyncio
+async def test_restore_rules_service_success(hass: HomeAssistant, mock_api, mock_coordinator, mock_data):
+    """Test successful restore operation."""
     hass.data["unifi_network_rules"] = {
         "test_entry": {
             "api": mock_api,
@@ -118,14 +144,15 @@ async def test_restore_rules_service_capabilities_check(hass: HomeAssistant, moc
 
     backup_data = {"test_entry": mock_data}
     mock_call = MagicMock()
-    mock_call.data = {"filename": "test_backup.json"}
+    mock_call.data = {
+        "filename": "test_backup.json",
+        "name_filter": "Policy"
+    }
 
     with patch("os.path.exists", return_value=True), \
          patch("builtins.open", mock_open(read_data=json.dumps(backup_data))):
         await async_restore_rules_service(hass, mock_call)
-
-        # Verify no updates were attempted due to capabilities
-        mock_api.update_firewall_policy.assert_not_called()
+        mock_api.update_firewall_policy.assert_called_once()
         mock_api.update_traffic_route.assert_not_called()
         mock_coordinator.async_request_refresh.assert_called_once()
 
@@ -137,16 +164,14 @@ async def test_bulk_update_rules_service(hass: HomeAssistant, mock_api, mock_coo
             {
                 "_id": "policy1",
                 "name": "Policy 1",
-                "enabled": True,
-                "tags": ["test"]
+                "enabled": True
             }
         ],
         "traffic_routes": [
             {
                 "_id": "route1",
-                "description": "Route 1",
-                "enabled": True,
-                "tags": ["test"]
+                "name": "Route 1",
+                "enabled": True
             }
         ]
     }
@@ -160,47 +185,14 @@ async def test_bulk_update_rules_service(hass: HomeAssistant, mock_api, mock_coo
 
     mock_call = MagicMock()
     mock_call.data = {
-        "tags": ["test"],
+        "name_filter": "Policy",
         "state": False
     }
 
     await async_bulk_update_rules_service(hass, mock_call)
 
     mock_api.update_firewall_policy.assert_called_once()
-    mock_api.update_traffic_route.assert_called_once()
-    mock_coordinator.async_request_refresh.assert_called_once()
-
-@pytest.mark.asyncio
-async def test_create_from_template_service(hass: HomeAssistant, mock_api, mock_coordinator):
-    """Test create from template service."""
-    hass.data["unifi_network_rules"] = {
-        "test_entry": {
-            "api": mock_api,
-            "coordinator": mock_coordinator
-        }
-    }
-
-    template_data = {
-        "name": "Test Policy",
-        "enabled": True,
-        "action": "BLOCK",
-        "source": {
-            "zone_id": "test_zone_1"
-        },
-        "destination": {
-            "zone_id": "test_zone_2"
-        }
-    }
-
-    mock_call = MagicMock()
-    mock_call.data = {
-        "template": template_data,
-        "rule_type": "policy"
-    }
-
-    await async_create_from_template_service(hass, mock_call)
-
-    mock_api.create_firewall_policy.assert_called_once_with(template_data)
+    mock_api.update_traffic_route.assert_not_called()
     mock_coordinator.async_request_refresh.assert_called_once()
 
 @pytest.mark.asyncio
@@ -223,6 +215,25 @@ async def test_delete_rule_service(hass: HomeAssistant, mock_api, mock_coordinat
 
     mock_api.delete_firewall_policies.assert_called_once_with(["test_policy_id"])
     mock_coordinator.async_request_refresh.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_restore_rules_service_file_not_found(hass: HomeAssistant, mock_api, mock_coordinator):
+    """Test restore service when backup file doesn't exist."""
+    hass.data["unifi_network_rules"] = {
+        "test_entry": {
+            "api": mock_api,
+            "coordinator": mock_coordinator
+        }
+    }
+
+    mock_call = MagicMock()
+    mock_call.data = {"filename": "nonexistent.json"}
+
+    with patch("os.path.exists", return_value=False):
+        await async_restore_rules_service(hass, mock_call)
+        mock_api.update_firewall_policy.assert_not_called()
+        mock_api.update_traffic_route.assert_not_called()
+        mock_coordinator.async_request_refresh.assert_not_called()
 
 @pytest.mark.asyncio
 async def test_restore_rules_service_mixed_errors(hass: HomeAssistant, mock_api, mock_coordinator, mock_data):

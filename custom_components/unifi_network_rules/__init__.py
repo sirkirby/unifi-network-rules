@@ -84,7 +84,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady(f"Setup failed: {str(e)}") from e
 
     logger.debug("Creating coordinator")
-    coordinator = UDMUpdateCoordinator(hass, api, update_interval)
+    coordinator = UDMUpdateCoordinator(
+        hass,
+        api,
+        f"UniFi Network Rules ({host})",
+        update_interval
+    )
 
     logger.debug("Performing initial data fetch")
     await coordinator.async_config_entry_first_refresh()

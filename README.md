@@ -53,175 +53,68 @@ Migration from legacy mode to zone-based firewall is handled by UniFi OS. After 
 
 ## Services
 
-The integration provides several services that can be used as buttons in your dashboards or in automations:
+The integration provides several services focused on managing and automating existing UniFi Network rules:
 
-### Refresh Rules
+### Method 1: Using an Input Button Helper with Automation
 
-Manually refresh the state of all network rules. Useful if you've made changes directly in the UniFi interface.
+This is the simplest method:
 
-Example button card configuration:
+1. Go to Settings → Devices & Services → Helpers
+2. Add a Button helper (e.g., "Refresh UniFi Rules")
+3. Create an automation that triggers when the button is pressed
+4. Use the service in the automation's action
+
+Example automation for refresh:
 ```yaml
-type: button
-name: Refresh Rules
-tap_action:
-  action: call-service
-  service: unifi_network_rules.refresh
+automation:
+  - alias: "Refresh UniFi Rules when Button Pressed"
+    trigger:
+      platform: state
+      entity_id: input_button.refresh_unifi_rules
+    action:
+      - service: unifi_network_rules.refresh
 ```
 
-### Backup Rules
+### Method 2: Using Scripts with a Lovelace Button Card (More Customizable)
 
-Create a backup of all your firewall policies and traffic routes. The backup will be stored in your Home Assistant config directory.
+First, create a script in your `configuration.yaml`:
 
-Example button card configuration:
+```yaml
+script:
+  backup_unifi_rules:
+    sequence:
+      - service: unifi_network_rules.backup_rules
+        data:
+          filename: "unifi_rules_backup.json"
+```
+
+Then add a button card to your dashboard that references the script:
 ```yaml
 type: button
 name: Backup Rules
 tap_action:
   action: call-service
-  service: unifi_network_rules.backup_rules
-  data:
-    filename: "unifi_rules_backup.json"
+  service: script.turn_on
+  service_data:
+    entity_id: script.backup_unifi_rules
 ```
 
-### Restore Rules
+### Available Services
 
+#### Refresh Rules
+Manually refresh the state of all network rules. Useful if you've made changes directly in the UniFi interface.
+
+#### Backup Rules
+Create a backup of all your firewall policies and traffic routes. The backup will be stored in your Home Assistant config directory.
+
+#### Restore Rules
 Restore rules from a previously created backup file. You can selectively restore specific rules by their IDs, names, or rule types.
 
-Example button card configuration for full restore:
-```yaml
-type: button
-name: Restore Rules
-tap_action:
-  action: call-service
-  service: unifi_network_rules.restore_rules
-  data:
-    filename: "unifi_rules_backup.json"
-```
+#### Bulk Update Rules
+Enable or disable multiple rules at once by matching their names. This is useful for automating rule management based on conditions or schedules.
 
-Example selective restore by name:
-```yaml
-type: button
-name: Restore Guest Rules
-tap_action:
-  action: call-service
-  service: unifi_network_rules.restore_rules
-  data:
-    filename: "unifi_rules_backup.json"
-    name_filter: "Guest"
-    rule_types: ["policy"]
-```
-
-### Bulk Update Rules
-
-Enable or disable multiple rules at once by matching their names.
-
-Example button card configuration:
-```yaml
-type: button
-name: Disable Guest Network Rules
-tap_action:
-  action: call-service
-  service: unifi_network_rules.bulk_update_rules
-  data:
-    name_filter: "Guest"
-    state: false
-```
-
-### Create Rule from Template
-
-Create a new firewall policy from a template. Currently supports only firewall policies.
-
-Example template for a firewall policy:
-```yaml
-service: unifi_network_rules.create_from_template
-data:
-  rule_type: "policy"
-  template:
-    name: "Block Social Media"
-    enabled: true
-    action: "deny"
-    description: "Block access to social media sites"
-    match_rules:
-      - type: "domain"
-        values: ["facebook.com", "twitter.com", "instagram.com"]
-```
-
-### Delete Rule
-
-Delete an existing firewall policy by its ID. Currently supports only firewall policies.
-
-Example service call:
-```yaml
-service: unifi_network_rules.delete_rule
-data:
-  rule_id: "abc123def456"
-  rule_type: "policy"
-```
-
-You can add these buttons to your dashboard by:
-1. Edit your dashboard
-2. Click the + button to add a card
-3. Choose "Button"
-4. Configure using the examples above
-
-## Template Examples
-
-Here are some common rule templates you can use:
-
-### Guest Network Isolation
-```yaml
-service: unifi_network_rules.create_from_template
-data:
-  rule_type: policy
-  template:
-    name: Guest Network Isolation
-    enabled: true
-    action: deny
-    description: "Prevent guest network access to internal network"
-    match_rules:
-      - type: network
-        values: ["Guest Network"]
-      - type: destination
-        values: ["192.168.1.0/24"]
-```
-
-### Time-Based Gaming Route
-```yaml
-service: unifi_network_rules.create_from_template
-data:
-  rule_type: route
-  template:
-    name: Gaming Traffic - Peak Hours
-    enabled: true
-    description: "Prioritize gaming traffic during peak evening hours"
-    match_rules:
-      - type: port
-        values: ["3074", "3075", "3076"]  # Common gaming ports
-    priority: 1000
-    schedule:
-      days: ["mon", "tue", "wed", "thu", "fri"]
-      start_time: "18:00"
-      end_time: "23:00"
-```
-
-### IoT Device Restriction
-```yaml
-service: unifi_network_rules.create_from_template
-data:
-  rule_type: policy
-  template:
-    name: IoT Device Restrictions
-    enabled: true
-    action: deny
-    description: "Restrict IoT devices to DNS only"
-    match_rules:
-      - type: group
-        values: ["IoT Devices"]
-      - type: destination
-        values: ["!8.8.8.8", "!8.8.4.4"]  # Only allow DNS
-      - type: port
-        values: ["!53"]  # Only allow DNS port
-```
+#### Delete Rule
+Delete an existing zone-based firewall policy by its ID. Only available for UniFi OS 9.0.92+ with zone-based firewall enabled.
 
 ## Automation Examples
 
@@ -242,22 +135,21 @@ action:
 mode: single
 ```
 
-### Backup Before Updates
+### Guest Network Security Automation
 ```yaml
-alias: Backup UniFi Rules Before Update
-description: >-
-  Automatically backup rules when UniFi OS updates are detected
+alias: Guest Network After Hours
+description: Disable guest network access during off-hours
 trigger:
-  - platform: event
-    event_type: unifi_os_update_detected  # requires UniFi integration
+  - platform: time
+    at: "23:00:00"
 action:
-  - service: unifi_network_rules.backup_rules
+  - service: unifi_network_rules.bulk_update_rules
     data:
-      filename: "unifi_rules_pre_update_{{now().strftime('%Y%m%d')}}.json"
-  - service: notify.mobile_app_your_phone  # customize this
+      name_filter: "Guest Network"
+      state: false
+  - service: notify.mobile_app
     data:
-      message: "UniFi rules backed up before system update"
-      
+      message: "Guest network rules disabled for the night"
 mode: single
 ```
 
@@ -282,22 +174,28 @@ mode: single
 
 ## Tips for Using Services
 
-1. **Multiple Backups**: Consider using timestamps in your backup filenames to maintain a history:
+1. **Backup Organization**: Use descriptive filenames with timestamps:
    ```yaml
    filename: "unifi_rules_{{now().strftime('%Y%m%d_%H%M')}}.json"
    ```
 
-2. **Combine with Other Integrations**: The services work well with other Home Assistant integrations:
-   - Use with the Folder Watcher integration to monitor backup file changes
-   - Combine with the Google Drive Backup integration to ensure offsite copies
-   - Set up notifications when backups complete or restores are performed
+2. **Selective Restore**: When restoring rules, use filters to target specific rules:
+   ```yaml
+   service: unifi_network_rules.restore_rules
+   data:
+     filename: "backup.json"
+     name_filter: "Guest"  # Only restore guest-related rules
+     rule_types: ["policy"]  # Only restore firewall policies
+   ```
 
-3. **Recovery Strategy**: Create an automation that:
-   1. Backs up current rules
-   2. Attempts to restore from a known good backup
-   3. Notifies you of the result
+3. **Bulk Updates**: Use naming conventions in UniFi to make bulk updates easier:
+   - Name related rules with common prefixes (e.g., "Guest_", "IoT_")
+   - Use the bulk_update_rules service with name_filter to manage groups of rules
 
-4. **Version Control**: Store your backups in a version-controlled location by combining with the Git integration
+4. **Integration with Other Services**: Combine with other Home Assistant integrations:
+   - Use the Folder Watcher integration to monitor backup file changes
+   - Combine with the Google Drive Backup integration for offsite copies
+   - Set up notifications when rule states change
 
 ## Local Development
 

@@ -98,16 +98,15 @@ class UDMAPI:
                 # If migration endpoint fails, try policies endpoint as fallback
                 logger.debug("Migration endpoint check failed, trying policies endpoint")
                 success, policies, error = await self.get_firewall_policies()
-                logger.debug("Firewall policies check: success=%s, has_data=%s, error=%s",
-                            success, bool(policies), error)
+                logger.debug("Firewall policies check: success=%s, has_data=%s, error=%s", success, bool(policies), error)
                 self.capabilities.zone_based_firewall = success and bool(policies)
 
             # If zone-based firewall is not detected, check legacy endpoints
             if not self.capabilities.zone_based_firewall:
                 logger.debug("Zone-based firewall not detected, checking legacy endpoints")
                 legacy_success, legacy_rules, legacy_error = await self.get_legacy_firewall_rules()
-                self.capabilities.legacy_firewall = legacy_success and bool(legacy_rules)
-                
+                self.capabilities.legacy_firewall = legacy_success and isinstance(legacy_rules, list)
+                           
                 if not self.capabilities.legacy_firewall:
                     logger.error("Failed to detect legacy firewall capability: %s", legacy_error)
 
@@ -128,8 +127,6 @@ class UDMAPI:
                     "3. The user lacks necessary permissions\n"
                     "4. Network connectivity issues"
                 )
-                # Still return True if at least traffic routes are available
-                return self.capabilities.traffic_routes
 
             # Return True if any capability was detected
             return any([
@@ -142,7 +139,11 @@ class UDMAPI:
             logger.exception("Error during capability detection: %s", str(e))
             # Reset capabilities on error
             self.capabilities = UDMCapabilities()
-            return False
+            return any([
+                self.capabilities.traffic_routes,
+                self.capabilities.zone_based_firewall,
+                self.capabilities.legacy_firewall
+            ])
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create an aiohttp session."""
@@ -314,18 +315,28 @@ class UDMAPI:
                                 await asyncio.sleep(self.retry_delay)
                             continue
 
-                        new_csrf = response.headers.get("x-csrf-token") or response.headers.get("x-updated-csrf-token")
-                        if new_csrf:
-                            logger.debug(f"Updating CSRF token to: {new_csrf}")
-                            self._csrf_token = new_csrf
-
-                        if isinstance(response.cookies, dict):
-                            for cookie in response.cookies.values():
-                                if cookie.key == COOKIE_TOKEN:
-                                    self._cookies[COOKIE_TOKEN] = cookie.value
-                                    logger.debug(f"Updated {COOKIE_TOKEN} cookie from response")
-
                         if response.status in [200, 201, 204]:
+                            # Update tokens from response
+                            new_csrf = response.headers.get("x-csrf-token") or response.headers.get("x-updated-csrf-token")
+                            if new_csrf:
+                                logger.debug(f"Updating CSRF token to: {new_csrf}")
+                                self._csrf_token = new_csrf
+
+                            # Handle both dict and ClientResponse cookie types
+                            if hasattr(response.cookies, 'items'):
+                                for key, cookie in response.cookies.items():
+                                    if key == COOKIE_TOKEN:
+                                        if isinstance(cookie, str):
+                                            self._cookies[COOKIE_TOKEN] = cookie
+                                        else:
+                                            self._cookies[COOKIE_TOKEN] = cookie.value
+                            else:
+                                for cookie_str in response.headers.getall('Set-Cookie', []):
+                                    token = self._parse_token_cookie(cookie_str)
+                                    if token:
+                                        self._cookies[COOKIE_TOKEN] = token
+                                        break
+
                             try:
                                 if response.status == 204 or not response_text:
                                     return True, None, None
