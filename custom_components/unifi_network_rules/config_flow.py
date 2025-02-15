@@ -3,6 +3,7 @@ from homeassistant import config_entries, core, exceptions
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 import homeassistant.helpers.config_validation as cv
 from .const import DOMAIN, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
+from .udm_api import UDMAPI
 import logging
 from homeassistant.helpers.entity import EntityDescription
 from ipaddress import ip_address
