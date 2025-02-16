@@ -82,7 +82,7 @@ async def async_backup_rules_service(hass: HomeAssistant, call: ServiceCall) -> 
             
             if port_forward_rules := coordinator.data.get("port_forward_rules"):
                 entry_backup["port_forward_rules"] = port_forward_rules
-            
+
             if entry_backup:
                 backup_data[entry_id] = entry_backup
 
@@ -147,7 +147,7 @@ async def async_restore_rules_service(hass: HomeAssistant, call: ServiceCall) ->
         # Restore firewall policies if available
         if api.capabilities.zone_based_firewall and "firewall_policies" in backup_entry:
             for policy in backup_entry["firewall_policies"]:
-                if not policy.get("predefined", False) and should_restore_rule(policy, "policy"):
+                if should_restore_rule(policy, "policy"):
                     try:
                         success, error = await api.update_firewall_policy(policy["_id"], policy)
                         if not success:

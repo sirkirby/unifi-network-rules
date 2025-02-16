@@ -83,7 +83,14 @@ class UDMUpdateCoordinator(DataUpdateCoordinator):
                     if not policies_success:
                         _LOGGER.error("Failed to fetch policies: %s", policies_error)
                     else:
-                        data['firewall_policies'] = policies or []
+                        # Filter out predefined policies at the coordinator level
+                        user_defined_policies = [
+                            policy for policy in (policies or [])
+                            if not policy.get('predefined', False)
+                        ]
+                        if user_defined_policies:
+                            data['firewall_policies'] = user_defined_policies
+                        _LOGGER.debug(f"Filtered out predefined policies. Kept {len(user_defined_policies)} user-defined policies.")
                 except Exception as e:
                     _LOGGER.error("Error fetching firewall policies: %s", str(e))
             elif self.api.capabilities.legacy_firewall:

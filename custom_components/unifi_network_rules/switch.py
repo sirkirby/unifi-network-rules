@@ -163,10 +163,6 @@ class UDMFirewallPolicySwitch(UDMBaseSwitch):
         """Initialize the UDM Firewall Policy Switch."""
         super().__init__(coordinator, api, policy, zones_data)
         
-        if policy.get('predefined', False):
-            _LOGGER.debug("Skipping predefined policy: %s", policy.get('name'))
-            return
-
         self._attr_unique_id = f"network_policy_{policy['_id']}"
         if name:
             self._attr_name = name
