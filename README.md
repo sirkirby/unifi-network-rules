@@ -160,6 +160,44 @@ actions:
 mode: single
 ```
 
+### Full and Selective backups
+**Fully restore the state of all policies**
+```yaml
+alias: Restore all policies from last backup
+description: Restores the backed-up state of all policies, including zones, devices, objects, etc.
+triggers:
+  - trigger: state
+    entity_id:
+      - input_button.restore_unr
+conditions: []
+actions:
+  - action: unifi_network_rules.restore_rules
+    metadata: {}
+    data:
+      filename: unr_daily_backup.json
+mode: single
+```
+
+**Selectively restore rules based on name and type**
+```yaml
+alias: Restore Kid Downtime Policies
+description: Restores the backed-up state of the policies that contain the name `Block Kid`
+triggers:
+  - trigger: state
+    entity_id:
+      - input_button.restore_unr
+conditions: []
+actions:
+  - action: unifi_network_rules.restore_rules
+    metadata: {}
+    data:
+      filename: unr_daily_backup.json
+      name_filter: Block Kid
+      rule_types:
+        - policy
+mode: single
+```
+
 ### Block Kid's devices at bedtime
 Every night at 11PM, Policies or Rules that contain the name "Block Kid Internet" will `enable` and send a notification to Chris's iPhone
 ```yaml
@@ -192,7 +230,7 @@ description: >-
 triggers:
   - trigger: state
     entity_id:
-      - switch.port_forward_minecraft_tcp_udp_port_25565_to_10_1_1_75_4882
+      - switch.port_forward_minecraft_10_1_1_75_4882
     from: "off"
     to: "on"
 conditions: []
@@ -206,7 +244,7 @@ actions:
     metadata: {}
     data: {}
     target:
-      entity_id: switch.port_forward_minecraft_tcp_udp_port_25565_to_10_1_1_75_4882
+      entity_id: switch.port_forward_minecraft_10_1_1_75_4882
 mode: single
 ```
 
@@ -221,11 +259,12 @@ This automation uses a helper to toggle port forwarding access to a game server.
 
 2. **Selective Restore**: When restoring rules, use filters to target specific rules:
    ```yaml
-   service: UniFi_network_rules.restore_rules
+   action: UniFi_network_rules.restore_rules
    data:
      filename: "backup.json"
      name_filter: "Guest"  # Only restore guest-related rules
-     rule_types: ["policy"]  # Only restore firewall policies
+     rule_types:
+       - policy  # Only restore firewall policies
    ```
 
 3. **Bulk Updates**: Use naming conventions in UniFi to make bulk updates easier:
