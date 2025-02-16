@@ -160,7 +160,7 @@ actions:
 mode: single
 ```
 
-### Full and Selective backups
+### Full and Selective restore
 **Fully restore the state of all policies**
 ```yaml
 alias: Restore all policies from last backup
