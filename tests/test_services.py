@@ -292,8 +292,8 @@ async def test_port_forward_rule_switch_initialization():
     }
 
     switch = UDMPortForwardRuleSwitch(coordinator, api, rule)
-    assert switch.name == "Port Forward: Minecraft (tcp_udp port 25565 to 10.29.13.235) (t123)"
-    assert switch.unique_id == "port_forward_rule_test123"
+    assert switch.name == "Port Forward: Minecraft (10.29.13.235) (t123)"
+    assert switch.unique_id == "pf_minecraft_t123"
     assert switch.is_on is False
 
 @pytest.mark.asyncio
@@ -315,8 +315,8 @@ async def test_port_forward_rule_switch_different_ports():
     }
 
     switch = UDMPortForwardRuleSwitch(coordinator, api, rule)
-    assert switch.name == "Port Forward: Web (tcp port 80->8080 to 10.29.13.235) (t456)"
-    assert switch.unique_id == "port_forward_rule_test456"
+    assert switch.name == "Port Forward: Web (10.29.13.235) (t456)"
+    assert switch.unique_id == "pf_web_t456"
 
 @pytest.mark.asyncio
 async def test_port_forward_rule_switch_toggle_on():
