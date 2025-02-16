@@ -57,7 +57,7 @@
         },
         "rule_types": {
           "name": "Rule Types",
-          "description": "Optional list of rule types to restore (policy, route, firewall, traffic)"
+          "description": "Optional list of rule types to restore (policy, route, firewall, traffic, port_forward)"
         }
       }
     },

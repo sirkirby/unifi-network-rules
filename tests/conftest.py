@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, AsyncMock
 from homeassistant.core import HomeAssistant
 import asyncio
 import warnings
@@ -20,6 +20,11 @@ async def mock_udmapi():
         api.login.return_value = (True, None)
         api.get_traffic_rules.return_value = (True, [{"_id": "1", "enabled": True, "description": "Test Traffic Rule"}], None)
         api.get_firewall_rules.return_value = (True, [{"_id": "2", "enabled": False, "description": "Test Firewall Rule"}], None)
+        api.get_port_forward_rules.return_value = (True, [{"_id": "3", "enabled": True, "name": "Test Port Forward"}], None)
+        api.toggle_port_forward_rule = AsyncMock(return_value=(True, None))
+        api.update_port_forward_rule = AsyncMock(return_value=(True, None))
+        api.create_port_forward_rule = AsyncMock(return_value=(True, None))
+        api.delete_port_forward_rule = AsyncMock(return_value=(True, None))
         yield api
 
 @pytest.fixture

@@ -160,6 +160,44 @@ actions:
 mode: single
 ```
 
+### Full and Selective backups
+**Fully restore the state of all policies**
+```yaml
+alias: Restore all policies from last backup
+description: Restores the backed-up state of all policies, including zones, devices, objects, etc.
+triggers:
+  - trigger: state
+    entity_id:
+      - input_button.restore_unr
+conditions: []
+actions:
+  - action: unifi_network_rules.restore_rules
+    metadata: {}
+    data:
+      filename: unr_daily_backup.json
+mode: single
+```
+
+**Selectively restore rules based on name and type**
+```yaml
+alias: Restore Kid Downtime Policies
+description: Restores the backed-up state of the policies that contain the name `Block Kid`
+triggers:
+  - trigger: state
+    entity_id:
+      - input_button.restore_unr
+conditions: []
+actions:
+  - action: unifi_network_rules.restore_rules
+    metadata: {}
+    data:
+      filename: unr_daily_backup.json
+      name_filter: Block Kid
+      rule_types:
+        - policy
+mode: single
+```
+
 ### Block Kid's devices at bedtime
 Every night at 11PM, Policies or Rules that contain the name "Block Kid Internet" will `enable` and send a notification to Chris's iPhone
 ```yaml
@@ -183,6 +221,35 @@ actions:
 mode: single
 ```
 
+### Temporarily Enable Game Server Access
+```yaml
+alias: Turn Off Minecraft Server Port after 2 hours
+description: >-
+  We don't want to leave this port open indefinitely, just leave open for a
+  normal gaming session, then automatically turn off.
+triggers:
+  - trigger: state
+    entity_id:
+      - switch.port_forward_minecraft_10_1_1_75_4882
+    from: "off"
+    to: "on"
+conditions: []
+actions:
+  - delay:
+      hours: 2
+      minutes: 0
+      seconds: 0
+      milliseconds: 0
+  - action: switch.turn_off
+    metadata: {}
+    data: {}
+    target:
+      entity_id: switch.port_forward_minecraft_10_1_1_75_4882
+mode: single
+```
+
+This automation uses a helper to toggle port forwarding access to a game server. When enabled, it automatically disables the port forwarding after 2 hours for security.
+
 ## Tips for Using Services
 
 1. **Backup Organization**: Use descriptive filenames with timestamps:
@@ -192,11 +259,12 @@ mode: single
 
 2. **Selective Restore**: When restoring rules, use filters to target specific rules:
    ```yaml
-   service: UniFi_network_rules.restore_rules
+   action: UniFi_network_rules.restore_rules
    data:
      filename: "backup.json"
      name_filter: "Guest"  # Only restore guest-related rules
-     rule_types: ["policy"]  # Only restore firewall policies
+     rule_types:
+       - policy  # Only restore firewall policies
    ```
 
 3. **Bulk Updates**: Use naming conventions in UniFi to make bulk updates easier:
@@ -271,8 +339,21 @@ The integration supports:
 - Zone-based firewall policies with full CRUD operations (create, read, update, delete) on UniFi OS 9.0.92+
 - OR Legacy firewall rules (read and update) on pre-9.0.92 systems
 - Traffic routes (read and update) on all systems
+- Port forwarding rules (read and update) on all systems
 
 Note: The new service operations (create/delete) are only available for zone-based firewall policies. Legacy rule support will be used automatically on older systems.
+
+## Port Forwarding Rules
+
+The integration now supports managing port forwarding rules from your UniFi Dream Machine/Router. Each port forwarding rule is represented as a switch entity that lets you enable or disable it. The rule name includes:
+- The name you assigned in UniFi
+- The protocol (TCP, UDP, or both)
+- The port configuration (e.g., "port 80->80" or "port 80->8080")
+- The destination IP address
+
+Example entity name: `Port Forward: Minecraft (tcp_udp port 25565 to 10.29.13.235)`
+
+Note: Creating new port forwarding rules through the integration is only supported for backup/restore purposes. Configure new rules through the UniFi interface.
 
 ## Contributions
 

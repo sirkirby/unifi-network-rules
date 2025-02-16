@@ -19,6 +19,7 @@ LEGACY_TRAFFIC_RULES_ENDPOINT = "/proxy/network/v2/api/site/default/trafficrules
 FIREWALL_ZONE_MATRIX_ENDPOINT = "/proxy/network/v2/api/site/default/firewall/zone-matrix"
 FIREWALL_POLICY_TOGGLE_ENDPOINT = "/proxy/network/v2/api/site/default/firewall-policies/batch"
 AUTH_LOGIN_ENDPOINT = "/api/auth/login"
+PORT_FORWARD_ENDPOINT = "/proxy/network/api/s/default/rest/portforward"
 
 ZONE_BASED_FIREWALL_FEATURE = "ZONE_BASED_FIREWALL"
 
