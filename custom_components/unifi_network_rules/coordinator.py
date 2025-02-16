@@ -52,6 +52,17 @@ class UDMUpdateCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("No capabilities available. Cannot fetch any data.")
                 raise UpdateFailed("No capabilities detected on the device")
 
+            # Fetch port forwarding rules
+            _LOGGER.debug("Fetching port forwarding rules")
+            try:
+                port_fwd_success, port_fwd_rules, port_fwd_error = await self.api.get_port_forward_rules()
+                if not port_fwd_success:
+                    _LOGGER.error("Failed to fetch port forwarding rules: %s", port_fwd_error)
+                else:
+                    data['port_forward_rules'] = port_fwd_rules or []
+            except Exception as e:
+                _LOGGER.error("Error fetching port forwarding rules: %s", str(e))
+
             # Always try traffic routes if capability is present
             if self.api.capabilities.traffic_routes:
                 _LOGGER.debug("Fetching traffic routes")

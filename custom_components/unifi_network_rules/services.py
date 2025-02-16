@@ -21,7 +21,7 @@ RESTORE_SCHEMA = vol.Schema({
     vol.Required(SERVICE_FILENAME): cv.string,
     vol.Optional("rule_ids"): vol.All(cv.ensure_list, [cv.string]),
     vol.Optional("name_filter"): cv.string,
-    vol.Optional("rule_types"): vol.All(cv.ensure_list, [vol.In(["policy", "route", "firewall", "traffic"])])
+    vol.Optional("rule_types"): vol.All(cv.ensure_list, [vol.In(["policy", "route", "firewall", "traffic", "port_forward"])])
 })
 
 BULK_UPDATE_SCHEMA = vol.Schema({
@@ -80,6 +80,9 @@ async def async_backup_rules_service(hass: HomeAssistant, call: ServiceCall) -> 
             if traffic_rules := coordinator.data.get("traffic_rules"):
                 entry_backup["traffic_rules"] = traffic_rules
             
+            if port_forward_rules := coordinator.data.get("port_forward_rules"):
+                entry_backup["port_forward_rules"] = port_forward_rules
+            
             if entry_backup:
                 backup_data[entry_id] = entry_backup
 
@@ -103,7 +106,7 @@ async def async_restore_rules_service(hass: HomeAssistant, call: ServiceCall) ->
     filename = call.data[SERVICE_FILENAME]
     rule_ids = call.data.get("rule_ids", [])
     name_filter = call.data.get("name_filter", "")
-    rule_types = call.data.get("rule_types", ["policy", "route", "firewall", "traffic"])
+    rule_types = call.data.get("rule_types", ["policy", "route", "firewall", "traffic", "port_forward"])
     
     domain_data = hass.data.get("unifi_network_rules", {})
     backup_path = hass.config.path(filename)
@@ -184,6 +187,17 @@ async def async_restore_rules_service(hass: HomeAssistant, call: ServiceCall) ->
                             logger.error(f"Failed to restore legacy traffic rule {rule['_id']}: {error}")
                     except Exception as e:
                         logger.error(f"Error restoring legacy traffic rule {rule['_id']}: {str(e)}")
+
+        # Restore port forward rules if available
+        if "port_forward_rules" in backup_entry:
+            for rule in backup_entry["port_forward_rules"]:
+                if should_restore_rule(rule, "port_forward"):
+                    try:
+                        success, error = await api.update_port_forward_rule(rule["_id"], rule)
+                        if not success:
+                            logger.error(f"Failed to restore port forward rule {rule['_id']}: {error}")
+                    except Exception as e:
+                        logger.error(f"Error restoring port forward rule {rule['_id']}: {str(e)}")
 
         # Refresh the coordinator after restore
         coordinator = entry_data.get("coordinator")

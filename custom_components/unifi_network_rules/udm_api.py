@@ -22,7 +22,8 @@ from .const import (
     MIN_REQUEST_INTERVAL,
     ZONE_BASED_FIREWALL_FEATURE,
     COOKIE_TOKEN,
-    SESSION_TIMEOUT
+    SESSION_TIMEOUT,
+    PORT_FORWARD_ENDPOINT
 )
 from .utils import logger
 from .utils.logger import log_call
@@ -598,6 +599,86 @@ class UDMAPI:
         success, response, error = await self._make_authenticated_request('post', url, policy_ids)
         if not success:
             logger.error(f"Failed to delete firewall policies: {error}")
+            return False, error
+        return True, None
+
+    async def get_port_forward_rules(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
+        """Fetch port forwarding rules from the UDM."""
+        url = f"https://{self.host}{PORT_FORWARD_ENDPOINT}"
+        success, response, error = await self._make_authenticated_request('get', url)
+        
+        if not success:
+            return False, None, error
+            
+        try:
+            if not isinstance(response, dict):
+                logger.error(f"Unexpected response type: {type(response)}")
+                return False, None, "Invalid response format - not a dictionary"
+                
+            if 'data' not in response:
+                logger.error(f"No 'data' key in response: {response}")
+                return False, None, "Invalid response format - missing data key"
+                
+            rules = response['data']
+            if not isinstance(rules, list):
+                logger.error(f"Rules data is not a list: {type(rules)}")
+                return False, None, "Invalid rules format"
+                
+            logger.debug(f"Successfully fetched {len(rules)} port forward rules")
+            return True, rules, None
+            
+        except Exception as e:
+            logger.exception("Error processing port forward rules")
+            return False, None, f"Error processing response: {str(e)}"
+
+    async def toggle_port_forward_rule(self, rule_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
+        """Toggle a port forward rule."""
+        # First get all rules to find the one we want to update
+        success, rules, error = await self.get_port_forward_rules()
+        
+        if not success:
+            return False, f"Failed to fetch rules: {error}"
+        if not rules:
+            return False, f"Rule {rule_id} not found"
+        rule = next((r for r in rules if r['_id'] == rule_id), None)
+        if not rule:
+            return False, f"Rule {rule_id} not found"
+        # Create a copy and update the enabled state
+        updated_rule = dict(rule)
+        updated_rule['enabled'] = enabled
+        
+        # Send the update
+        url = f"https://{self.host}{PORT_FORWARD_ENDPOINT}/{rule_id}"
+        success, response, error = await self._make_authenticated_request('put', url, updated_rule)
+        if not success:
+            return False, f"Failed to update rule: {error}"
+            
+        return True, None
+
+    async def update_port_forward_rule(self, rule_id: str, rule_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Update a port forward rule with complete state data."""
+        url = f"https://{self.host}{PORT_FORWARD_ENDPOINT}/{rule_id}"
+        success, response, error = await self._make_authenticated_request('put', url, rule_data)
+        if not success:
+            logger.error(f"Failed to update port forward rule {rule_id}: {error}")
+            return False, error
+        return True, None
+
+    async def create_port_forward_rule(self, rule_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Create a new port forward rule. Mainly used for rule restoration."""
+        url = f"https://{self.host}{PORT_FORWARD_ENDPOINT}"
+        success, response, error = await self._make_authenticated_request('post', url, rule_data)
+        if not success:
+            logger.error(f"Failed to create port forward rule: {error}")
+            return False, error
+        return True, None
+
+    async def delete_port_forward_rule(self, rule_id: str) -> Tuple[bool, Optional[str]]:
+        """Delete a port forward rule."""
+        url = f"https://{self.host}{PORT_FORWARD_ENDPOINT}/{rule_id}"
+        success, response, error = await self._make_authenticated_request('delete', url)
+        if not success:
+            logger.error(f"Failed to delete port forward rule: {error}")
             return False, error
         return True, None
 

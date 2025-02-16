@@ -529,3 +529,132 @@ async def test_get_legacy_traffic_rules_failure(udm_api):
             assert success is False
             assert rules is None
             assert "API Error" in error
+
+@pytest.mark.asyncio
+async def test_get_port_forward_rules_success(udm_api):
+    """Test successful port forwarding rules retrieval."""
+    mock_rules = {
+        "meta": {"rc": "ok"},
+        "data": [
+            {
+                "_id": "test123",
+                "name": "Minecraft",
+                "enabled": False
+            }
+        ]
+    }
+    
+    with patch.object(udm_api, 'ensure_authenticated', return_value=(True, None)):
+        with patch.object(udm_api, '_make_authenticated_request') as mock_request:
+            mock_request.return_value = (True, mock_rules, None)
+            success, rules, error = await udm_api.get_port_forward_rules()
+            assert success is True
+            assert rules == mock_rules['data']
+            assert error is None
+
+@pytest.mark.asyncio
+async def test_get_port_forward_rules_failure(udm_api):
+    """Test failed port forwarding rules retrieval."""
+    with patch.object(udm_api, 'ensure_authenticated', return_value=(True, None)):
+        with patch.object(udm_api, '_make_authenticated_request') as mock_request:
+            mock_request.return_value = (False, None, "API Error")
+            success, rules, error = await udm_api.get_port_forward_rules()
+            assert success is False
+            assert rules is None
+            assert "API Error" in error
+
+@pytest.mark.asyncio
+async def test_toggle_port_forward_rule_success(udm_api):
+    """Test successful port forward rule toggle."""
+    rule_id = "test_id"
+    mock_rule = {
+        "_id": rule_id,
+        "name": "Test-Port-Forward",
+        "enabled": False
+    }
+
+    with patch.object(udm_api, 'ensure_authenticated', return_value=(True, None)):
+        with patch.object(udm_api, '_make_authenticated_request') as mock_request:
+            # Mock first call to get_port_forward_rules
+            mock_request.side_effect = [
+                (True, {"data": [mock_rule]}, None),  # GET response
+                (True, None, None)                     # PUT response
+            ]
+            success, error = await udm_api.toggle_port_forward_rule(rule_id, True)
+            assert success is True
+            assert error is None
+            assert mock_request.call_count == 2
+
+@pytest.mark.asyncio
+async def test_toggle_port_forward_rule_not_found(udm_api):
+    """Test port forward rule toggle when rule doesn't exist."""
+    rule_id = "nonexistent"
+    
+    with patch.object(udm_api, 'ensure_authenticated', return_value=(True, None)):
+        with patch.object(udm_api, '_make_authenticated_request') as mock_request:
+            mock_request.return_value = (True, {"data": []}, None)
+            success, error = await udm_api.toggle_port_forward_rule(rule_id, True)
+            assert success is False
+            assert f"Rule {rule_id} not found" in error
+
+@pytest.mark.asyncio
+async def test_create_port_forward_rule_success(udm_api):
+    """Test successful port forward rule creation."""
+    mock_rule_data = {
+        "_id": "new_rule_id",
+        "name": "Test-Port-Forward",
+        "enabled": False
+    }
+
+    mock_response = {
+        "meta": {"rc": "ok"},
+        "data": [mock_rule_data]
+    }
+
+    with patch.object(udm_api, 'ensure_authenticated', return_value=(True, None)):
+        with patch.object(udm_api, '_make_authenticated_request') as mock_request:
+            mock_request.return_value = (True, mock_response, None)
+            success, error = await udm_api.create_port_forward_rule(mock_rule_data)
+            assert success is True
+            assert error is None
+
+@pytest.mark.asyncio
+async def test_update_port_forward_rule_success(udm_api):
+    """Test successful port forward rule update."""
+    rule_id = "test_id"
+    mock_rule_data = {
+        "_id": rule_id,
+        "name": "Test-Port-Forward",
+        "enabled": True
+    }
+
+    with patch.object(udm_api, 'ensure_authenticated', return_value=(True, None)):
+        with patch.object(udm_api, '_make_authenticated_request') as mock_request:
+            mock_request.return_value = (True, None, None)
+            success, error = await udm_api.update_port_forward_rule(rule_id, mock_rule_data)
+            assert success is True
+            assert error is None
+
+@pytest.mark.asyncio
+async def test_delete_port_forward_rule_success(udm_api):
+    """Test successful port forward rule deletion."""
+    rule_id = "test_id"
+
+    with patch.object(udm_api, 'ensure_authenticated', return_value=(True, None)):
+        with patch.object(udm_api, '_make_authenticated_request') as mock_request:
+            mock_request.return_value = (True, None, None)
+            success, error = await udm_api.delete_port_forward_rule(rule_id)
+            assert success is True
+            assert error is None
+
+@pytest.mark.asyncio
+async def test_delete_port_forward_rule_failure(udm_api):
+    """Test failed port forward rule deletion."""
+    rule_id = "test_id"
+
+    with patch.object(udm_api, 'ensure_authenticated', return_value=(True, None)):
+        with patch.object(udm_api, '_make_authenticated_request') as mock_request:
+            mock_request.return_value = (False, None, "API Error")
+            success, error = await udm_api.delete_port_forward_rule(rule_id)
+            assert success is False
+            assert "API Error" in error

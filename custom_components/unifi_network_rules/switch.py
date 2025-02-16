@@ -37,6 +37,14 @@ class UDMBaseSwitch(CoordinatorEntity, SwitchEntity):
         self._pending_state = None
         self._zones_data = zones_data
         self.entity_category = EntityCategory.CONFIG
+        # For test environment - allow coordinator to provide hass
+        if not hasattr(self, 'hass') and hasattr(coordinator, 'hass'):
+            self.hass = coordinator.hass
+
+    def _safe_write_state(self) -> None:
+        """Safely write state if we're in a real HA environment."""
+        if hasattr(self, 'async_write_ha_state') and hasattr(self, 'hass') and self.hass is not None:
+            self.async_write_ha_state()
 
     @property
     def available(self) -> bool:
@@ -56,7 +64,7 @@ class UDMBaseSwitch(CoordinatorEntity, SwitchEntity):
         """Handle updated data from the coordinator."""
         if self.coordinator.data is None:
             self._item_data = None
-            self.async_write_ha_state()
+            self._safe_write_state()
             return
 
         # Find the updated item data that matches this entity
@@ -65,7 +73,7 @@ class UDMBaseSwitch(CoordinatorEntity, SwitchEntity):
             item = next((i for i in items if i.get('_id') == self._item_id), None)
             if item:
                 self._item_data = item
-                self.async_write_ha_state()
+                self._safe_write_state()
                 return
 
         if 'firewall_policies' in self.coordinator.data:
@@ -73,7 +81,7 @@ class UDMBaseSwitch(CoordinatorEntity, SwitchEntity):
             item = next((i for i in items if i.get('_id') == self._item_id), None)
             if item:
                 self._item_data = item
-                self.async_write_ha_state()
+                self._safe_write_state()
                 return
 
         if 'firewall_rules' in self.coordinator.data:
@@ -81,7 +89,7 @@ class UDMBaseSwitch(CoordinatorEntity, SwitchEntity):
             item = next((i for i in items if i.get('_id') == self._item_id), None)
             if item:
                 self._item_data = item
-                self.async_write_ha_state()
+                self._safe_write_state()
                 return
 
         if 'traffic_rules' in self.coordinator.data:
@@ -89,12 +97,12 @@ class UDMBaseSwitch(CoordinatorEntity, SwitchEntity):
             item = next((i for i in items if i.get('_id') == self._item_id), None)
             if item:
                 self._item_data = item
-                self.async_write_ha_state()
+                self._safe_write_state()
                 return
 
         # If we get here, the item no longer exists in the coordinator data
         self._item_data = None
-        self.async_write_ha_state()
+        self._safe_write_state()
 
     async def _verify_state_change(self, target_state: bool, get_method, max_attempts: int = 3) -> bool:
         """Verify that the state change was successful."""
@@ -136,18 +144,16 @@ class UDMBaseSwitch(CoordinatorEntity, SwitchEntity):
         """Execute toggle with verification using a common method."""
         try:
             self._pending_state = new_state
-            self.async_write_ha_state()
-
+            self._safe_write_state()
             success, error = await toggle_fn(self._item_id, new_state)
             if success and await self._verify_state_change(new_state, verify_fn):
                 return
-
             self._pending_state = None
-            self.async_write_ha_state()
+            self._safe_write_state()
             raise HomeAssistantError(f"Failed to toggle {entity_name}: {error}")
         except Exception as e:
             self._pending_state = None
-            self.async_write_ha_state()
+            self._safe_write_state()
             raise HomeAssistantError(f"Error toggling {entity_name}: {str(e)}")
 
 class UDMFirewallPolicySwitch(UDMBaseSwitch):
@@ -253,6 +259,59 @@ class UDMTrafficRouteSwitch(UDMBaseSwitch):
         """Toggle the traffic route state."""
         await self._execute_toggle(new_state, self._api.toggle_traffic_route, self._api.get_traffic_routes, "traffic route")
 
+class UDMPortForwardRuleSwitch(UDMBaseSwitch):
+    """Representation of a UDM Port Forward Rule Switch."""
+
+    def __init__(self, coordinator, api, rule: Dict[str, Any]):
+        """Initialize the UDM Port Forward Rule Switch."""
+        super().__init__(coordinator, api, rule)
+        self._attr_unique_id = f"port_forward_rule_{rule['_id']}"
+        name = rule.get('name', 'Unnamed')
+        proto = rule.get('proto', 'unknown')
+        dst_port = rule.get('dst_port', '')
+        fwd_port = rule.get('fwd_port', '')
+        fwd_ip = rule.get('fwd', '')
+        
+        # Format name to show forwarding details
+        if dst_port == fwd_port:
+            port_info = f"port {dst_port}"
+        else:
+            port_info = f"port {dst_port}->{fwd_port}"
+            
+        self._attr_name = f"Port Forward: {name} ({proto} {port_info} to {fwd_ip}) ({rule['_id'][-4:]})"
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn the switch on."""
+        await self._toggle(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the switch off."""
+        await self._toggle(False)
+
+    async def _toggle(self, new_state: bool) -> None:
+        """Toggle the port forward rule state."""
+        await self._execute_toggle(new_state, self._api.toggle_port_forward_rule, self._api.get_port_forward_rules, "port forward rule")
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        if self.coordinator.data is None:
+            self._item_data = None
+            self._safe_write_state()
+            return
+
+        if 'port_forward_rules' in self.coordinator.data:
+            items = self.coordinator.data['port_forward_rules']
+            item = next((i for i in items if i.get('_id') == self._item_id), None)
+            if item:
+                self._item_data = item
+                self._safe_write_state()
+                return
+
+        # If we get here, the item no longer exists in the coordinator data
+        self._item_data = None
+        self._safe_write_state()
+
 @log_call
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
     """Set up the UniFi Network Rules switches."""
@@ -333,6 +392,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                     except Exception as e:
                         _LOGGER.error("Error creating traffic route entity: %s", str(e))
             
+            # Process port forward rules
+            if 'port_forward_rules' in coordinator.data:
+                for rule in coordinator.data['port_forward_rules']:
+                    try:
+                        entity_id = f"port_forward_rule_{rule['_id']}"
+                        current_entities.add(entity_id)
+                        if entity_id not in existing_entities:
+                            new_entity = UDMPortForwardRuleSwitch(coordinator, api, rule)
+                            new_entities.append(new_entity)
+                            existing_entities[entity_id] = new_entity
+                    except Exception as e:
+                        _LOGGER.error("Error creating port forward rule entity: %s", str(e))
+
             # Process firewall rules based on capabilities
             if api.capabilities.zone_based_firewall:
                 # Process zone-based firewall policies
