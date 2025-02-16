@@ -261,20 +261,14 @@ class UDMPortForwardRuleSwitch(UDMBaseSwitch):
     def __init__(self, coordinator, api, rule: Dict[str, Any]):
         """Initialize the UDM Port Forward Rule Switch."""
         super().__init__(coordinator, api, rule)
-        self._attr_unique_id = f"port_forward_rule_{rule['_id']}"
-        name = rule.get('name', 'Unnamed')
-        proto = rule.get('proto', 'unknown')
-        dst_port = rule.get('dst_port', '')
-        fwd_port = rule.get('fwd_port', '')
-        fwd_ip = rule.get('fwd', '')
         
-        # Format name to show forwarding details
-        if dst_port == fwd_port:
-            port_info = f"port {dst_port}"
-        else:
-            port_info = f"port {dst_port}->{fwd_port}"
-            
-        self._attr_name = f"Port Forward: {name} ({proto} {port_info} to {fwd_ip}) ({rule['_id'][-4:]})"
+        # Use rule name or unnamed if not present
+        name = rule.get('name', 'Unnamed')
+        # Generate a stable unique_id that won't change with port modifications
+        self._attr_unique_id = f"pf_{name.lower().replace(' ', '_')}_{rule['_id'][-4:]}"
+        
+        fwd_ip = rule.get('fwd', '')
+        self._attr_name = f"Port Forward: {name} ({fwd_ip}) ({rule['_id'][-4:]})"
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the switch on."""
@@ -371,7 +365,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             _LOGGER.warning("No data available from coordinator")
             return
 
-        current_entities = set()
+        current_unique_ids = set()
         new_entities = []
         
         try:
@@ -379,12 +373,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             if api.capabilities.traffic_routes and 'traffic_routes' in coordinator.data:
                 for route in coordinator.data['traffic_routes']:
                     try:
-                        entity_id = f"network_route_{route['_id']}"
-                        current_entities.add(entity_id)
-                        if entity_id not in existing_entities:
+                        unique_id = f"network_route_{route['_id']}"
+                        current_unique_ids.add(unique_id)
+                        if unique_id not in existing_entities:
                             new_entity = UDMTrafficRouteSwitch(coordinator, api, route)
                             new_entities.append(new_entity)
-                            existing_entities[entity_id] = new_entity
+                            existing_entities[unique_id] = new_entity
                     except Exception as e:
                         _LOGGER.error("Error creating traffic route entity: %s", str(e))
             
@@ -392,12 +386,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             if 'port_forward_rules' in coordinator.data:
                 for rule in coordinator.data['port_forward_rules']:
                     try:
-                        entity_id = f"port_forward_rule_{rule['_id']}"
-                        current_entities.add(entity_id)
-                        if entity_id not in existing_entities:
+                        name = rule.get('name', 'Unnamed')
+                        unique_id = f"pf_{name.lower().replace(' ', '_')}_{rule['_id'][-4:]}"
+                        current_unique_ids.add(unique_id)
+                        if unique_id not in existing_entities:
                             new_entity = UDMPortForwardRuleSwitch(coordinator, api, rule)
                             new_entities.append(new_entity)
-                            existing_entities[entity_id] = new_entity
+                            existing_entities[unique_id] = new_entity
                     except Exception as e:
                         _LOGGER.error("Error creating port forward rule entity: %s", str(e))
 
@@ -408,12 +403,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                     for policy in coordinator.data['firewall_policies']:
                         try:
                             if not policy.get('predefined', False):
-                                entity_id = f"network_policy_{policy['_id']}"
-                                current_entities.add(entity_id)
-                                if entity_id not in existing_entities:
+                                unique_id = f"network_policy_{policy['_id']}"
+                                current_unique_ids.add(unique_id)
+                                if unique_id not in existing_entities:
                                     new_entity = UDMFirewallPolicySwitch(coordinator, api, policy, zones_data)
                                     new_entities.append(new_entity)
-                                    existing_entities[entity_id] = new_entity
+                                    existing_entities[unique_id] = new_entity
                         except Exception as e:
                             _LOGGER.error("Error creating firewall policy entity: %s", str(e))
             elif api.capabilities.legacy_firewall:
@@ -422,12 +417,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                     try:
                         for rule in coordinator.data['firewall_rules'].get('data', []):
                             try:
-                                entity_id = f"network_rule_firewall_{rule['_id']}"
-                                current_entities.add(entity_id)
-                                if entity_id not in existing_entities:
+                                unique_id = f"network_rule_firewall_{rule['_id']}"
+                                current_unique_ids.add(unique_id)
+                                if unique_id not in existing_entities:
                                     new_entity = UDMLegacyFirewallRuleSwitch(coordinator, api, rule)
                                     new_entities.append(new_entity)
-                                    existing_entities[entity_id] = new_entity
+                                    existing_entities[unique_id] = new_entity
                             except Exception as e:
                                 _LOGGER.error("Error creating legacy firewall rule entity: %s", str(e))
 
@@ -435,22 +430,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                         if 'traffic_rules' in coordinator.data:
                             for rule in coordinator.data['traffic_rules']:
                                 try:
-                                    entity_id = f"network_rule_traffic_{rule['_id']}"
-                                    current_entities.add(entity_id)
-                                    if entity_id not in existing_entities:
+                                    unique_id = f"network_rule_traffic_{rule['_id']}"
+                                    current_unique_ids.add(unique_id)
+                                    if unique_id not in existing_entities:
                                         new_entity = UDMLegacyTrafficRuleSwitch(coordinator, api, rule)
                                         new_entities.append(new_entity)
-                                        existing_entities[entity_id] = new_entity
+                                        existing_entities[unique_id] = new_entity
                                 except Exception as e:
                                     _LOGGER.error("Error creating legacy traffic rule entity: %s", str(e))
                     except Exception as e:
                         _LOGGER.error("Error processing legacy rules: %s", str(e))
 
-            # Remove entities that no longer exist
-            for entity_id in list(existing_entities.keys()):
-                if entity_id not in current_entities:
-                    entity = existing_entities.pop(entity_id)
-                    hass.async_create_task(async_remove_entity(hass, entity_registry, entity))
+            # Remove any entities from the registry that are no longer provided by our integration
+            for entity_entry in async_entries_for_config_entry(entity_registry, entry.entry_id):
+                if entity_entry.unique_id not in current_unique_ids:
+                    entity_registry.async_remove(entity_entry.entity_id)
+                    if entity_entry.unique_id in existing_entities:
+                        existing_entities.pop(entity_entry.unique_id)
+                    _LOGGER.info("Removed stale entity %s (unique_id: %s)", entity_entry.entity_id, entity_entry.unique_id)
 
             # Add new entities
             if new_entities:
@@ -459,12 +456,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
         except Exception as e:
             _LOGGER.exception("Unexpected error during entity update: %s", str(e))
-
-    async def async_remove_entity(hass: HomeAssistant, registry: EntityRegistry, entity: SwitchEntity):
-        """Remove entity from Home Assistant."""
-        if entity.entity_id:
-            registry.async_remove(entity.entity_id)
-            _LOGGER.info("Removed entity %s", entity.entity_id)
 
     # Set up initial entities
     async_update_items()
