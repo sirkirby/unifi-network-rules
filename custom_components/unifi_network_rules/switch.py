@@ -1,56 +1,57 @@
 """Support for UniFi Network Rules switches."""
 from __future__ import annotations
-import logging
+
+from typing import Any, Dict, Optional
 import asyncio
-from typing import Any, Dict, List
+
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import EntityCategory
-from homeassistant.helpers.entity_registry import EntityRegistry, async_get
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import DOMAIN, LOGGER
+from .entity_loader import UnifiRuleEntityLoader
 from .utils.logger import log_call
-
-from .const import DOMAIN
-
-_LOGGER = logging.getLogger(__name__)
-
-def _get_zone_name(zone_id: str, zones_data: List[Dict[str, Any]]) -> str:
-    """Get zone name from zone ID."""
-    if not zones_data or not zone_id:
-        return "Unknown"
-    
-    zone = next((z for z in zones_data if z['_id'] == zone_id), None)
-    return zone['name'] if zone else "Unknown"
+from .rule_template import RuleType
 
 class UDMBaseSwitch(CoordinatorEntity, SwitchEntity):
     """Base class for UDM switches."""
 
-    def __init__(self, coordinator, api, item_data: Dict[str, Any], zones_data: List[Dict[str, Any]] = None):
+    def __init__(self, coordinator, api, item_data: Dict[str, Any], data_key: str):
         """Initialize the base switch."""
         super().__init__(coordinator)
         self._api = api
         self._item_data = item_data
         self._item_id = item_data['_id']
+        self._data_key = data_key
         self._pending_state = None
-        self._zones_data = zones_data
         self.entity_category = EntityCategory.CONFIG
-        # For test environment - allow coordinator to provide hass
-        if not hasattr(self, 'hass') and hasattr(coordinator, 'hass'):
-            self.hass = coordinator.hass
+        self._entity_loader = None
+        
+        # Check if this entity type supports websockets
+        self._websocket_supported = self._api.supports_websocket(self._data_key)
+        if self._websocket_supported:
+            LOGGER.debug("Websocket updates supported for %s", self._data_key)
+        else:
+            LOGGER.debug("Falling back to REST API for %s updates", self._data_key)
 
-    def _safe_write_state(self) -> None:
-        """Safely write state if we're in a real HA environment."""
-        if hasattr(self, 'async_write_ha_state') and hasattr(self, 'hass') and self.hass is not None:
-            self.async_write_ha_state()
+    def _get_rules_key(self) -> str:
+        """Get the key for accessing rules in coordinator data."""
+        return self._data_key
 
     @property
     def available(self) -> bool:
-        """Return if entity is available."""
-        is_available = self.coordinator.last_update_success and self._item_data is not None
-        return is_available
+        """Return True if entity is available."""
+        rules = self.coordinator.data.get(self._get_rules_key(), [])
+        if isinstance(rules, dict) and 'data' in rules:
+            rules = rules['data']
+        return (
+            self.coordinator.last_update_success and
+            any(rule.get('_id') == self._item_id for rule in rules)
+        )
 
     @property
     def is_on(self) -> bool:
@@ -58,138 +59,182 @@ class UDMBaseSwitch(CoordinatorEntity, SwitchEntity):
         if self._pending_state is not None:
             return self._pending_state
         return bool(self._item_data.get('enabled', False))
+    
+    async def async_added_to_hass(self) -> None:
+        """When entity is added to hass."""
+        await super().async_added_to_hass()
+        
+        # Get entity loader from coordinator data after entity is added to hass
+        if self.coordinator.config_entry and DOMAIN in self.coordinator.hass.data:
+            entry_data = self.coordinator.hass.data[DOMAIN].get(self.coordinator.config_entry.entry_id, {})
+            self._entity_loader = entry_data.get('entity_loader')
+        
+        # Start tracking this specific rule in the coordinator
+        self.coordinator.track_rule_changes(self._item_id)
+        
+        # When entity is removed, stop tracking the rule
+        self.async_on_remove(
+            lambda: self.coordinator.stop_tracking_rule(self._item_id)
+        )
 
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
-        if self.coordinator.data is None:
-            self._item_data = None
-            self._safe_write_state()
-            return
-
-        # Find the updated item data that matches this entity
-        if 'traffic_routes' in self.coordinator.data:
-            items = self.coordinator.data['traffic_routes']
-            item = next((i for i in items if i.get('_id') == self._item_id), None)
-            if item:
-                self._item_data = item
-                self._safe_write_state()
-                return
-
-        if 'firewall_policies' in self.coordinator.data:
-            items = self.coordinator.data['firewall_policies']
-            item = next((i for i in items if i.get('_id') == self._item_id), None)
-            if item:
-                self._item_data = item
-                self._safe_write_state()
-                return
-
-        if 'firewall_rules' in self.coordinator.data:
-            items = self.coordinator.data['firewall_rules'].get('data', [])
-            item = next((i for i in items if i.get('_id') == self._item_id), None)
-            if item:
-                self._item_data = item
-                self._safe_write_state()
-                return
-
-        if 'traffic_rules' in self.coordinator.data:
-            items = self.coordinator.data['traffic_rules']
-            item = next((i for i in items if i.get('_id') == self._item_id), None)
-            if item:
-                self._item_data = item
-                self._safe_write_state()
-                return
-
-        # If we get here, the item no longer exists in the coordinator data
-        self._item_data = None
-        self._safe_write_state()
+    async def async_will_remove_from_hass(self) -> None:
+        """Handle entity being removed from Home Assistant."""
+        await super().async_will_remove_from_hass()
+        
+        # Ensure we cleanup when entity is removed
+        self.coordinator.stop_tracking_rule(self._item_id)
+        
+        # Remove from entity loader if available
+        if self._entity_loader:
+            platform = self.__class__.__name__.lower().replace('udm', '').replace('switch', '')
+            self._entity_loader.async_handle_entity_removal(platform, self.unique_id)
 
     async def _verify_state_change(self, target_state: bool, get_method, max_attempts: int = 3) -> bool:
         """Verify that the state change was successful."""
         for attempt in range(max_attempts):
-            try:
-                success, items, error = await get_method()
-                if not success:
-                    _LOGGER.error("Failed to fetch items for verification: %s", error)
-                    await asyncio.sleep(2)
-                    continue
-
-                current_item = next((i for i in (items or []) if i['_id'] == self._item_id), None)
-                if not current_item:
-                    _LOGGER.error("Item not found during verification")
-                    await asyncio.sleep(2)
-                    continue
-
-                current_state = current_item.get('enabled', False)
-                if current_state == target_state:
-                    await self.coordinator.async_request_refresh()
-                    return True
-
-                _LOGGER.warning(
-                    "State verification attempt %d/%d failed for %s. Expected: %s, Got: %s",
-                    attempt + 1,
-                    max_attempts,
-                    self._attr_name,
-                    target_state,
-                    current_state
-                )
-                await asyncio.sleep(2)
-            except Exception as e:
-                _LOGGER.error("Error during state verification: %s", str(e))
-                await asyncio.sleep(2)
-
+            success, item, error = await get_method(self._item_id)
+            if success and item and item.get('enabled') == target_state:
+                self._item_data = item
+                return True
+            await asyncio.sleep(1)
         return False
 
     async def _execute_toggle(self, new_state: bool, toggle_fn, verify_fn, entity_name: str) -> None:
         """Execute toggle with verification using a common method."""
         try:
             self._pending_state = new_state
-            self._safe_write_state()
+            self.async_write_ha_state()
             success, error = await toggle_fn(self._item_id, new_state)
             if success and await self._verify_state_change(new_state, verify_fn):
                 return
             self._pending_state = None
-            self._safe_write_state()
+            self.async_write_ha_state()
             raise HomeAssistantError(f"Failed to toggle {entity_name}: {error}")
         except Exception as e:
             self._pending_state = None
-            self._safe_write_state()
+            self.async_write_ha_state()
             raise HomeAssistantError(f"Error toggling {entity_name}: {str(e)}")
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle data update."""
+        rules = self.coordinator.data.get(self._get_rules_key(), [])
+        if isinstance(rules, dict) and 'data' in rules:
+            rules = rules['data']
+        updated_item = next(
+            (item for item in rules if item.get('_id') == self._item_id), 
+            None
+        )
+        if updated_item:
+            self._item_data = updated_item
+            self.async_write_ha_state()
+            return
+        # If we get here, the item no longer exists
+        self._item_data = None
+        self.async_write_ha_state()
+        
+        # Remove entity if entity loader is available
+        if self._entity_loader:
+            self._entity_loader.async_remove_entity('switch', self.unique_id)
 
 class UDMFirewallPolicySwitch(UDMBaseSwitch):
     """Representation of a UDM Firewall Policy Switch."""
 
-    def __init__(self, coordinator, api, policy: Dict[str, Any], zones_data: List[Dict[str, Any]], name: str = None):
+    def __init__(self, coordinator, api, policy: Dict[str, Any]):
         """Initialize the UDM Firewall Policy Switch."""
-        super().__init__(coordinator, api, policy, zones_data)
+        super().__init__(coordinator, api, policy, 'firewall_policies')
         
         self._attr_unique_id = f"network_policy_{policy['_id']}"
-        if name:
-            self._attr_name = name
-        else:
-            source_zone = _get_zone_name(policy.get('source', {}).get('zone_id'), zones_data)
-            dest_zone = _get_zone_name(policy.get('destination', {}).get('zone_id'), zones_data)
-            base_name = policy.get('name', 'Unnamed')
-            self._attr_name = f"Network Policy: {source_zone}->{dest_zone}: {base_name} ({policy['_id'][-4:]})"
+        base_name = policy.get('name', 'Unnamed')
+        self._attr_name = f"Network Policy: {base_name} ({policy['_id'][-4:]})"
 
+    @log_call
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the switch on."""
         await self._toggle(True)
 
+    @log_call
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the switch off."""
         await self._toggle(False)
 
+    @log_call
     async def _toggle(self, new_state: bool) -> None:
         """Toggle the firewall policy state."""
-        await self._execute_toggle(new_state, self._api.toggle_firewall_policy, self._api.get_firewall_policies, "firewall policy")
+        if self._websocket_supported:
+            # Use websocket-based update if supported
+            success = await self.coordinator._handle_websocket_update(
+                'firewall_policies',
+                'update',
+                {**self._item_data, 'enabled': new_state}
+            )
+            if not success:
+                # Fall back to REST API if websocket update fails
+                await self._execute_toggle(
+                    new_state,
+                    self._api.toggle_firewall_policy,
+                    self._api.get_firewall_policy,
+                    "firewall policy"
+                )
+        else:
+            # Use REST API directly
+            await self._execute_toggle(
+                new_state,
+                self._api.toggle_firewall_policy,
+                self._api.get_firewall_policy,
+                "firewall policy"
+            )
+
+class UDMTrafficRouteSwitch(UDMBaseSwitch):
+    """Representation of a UDM Traffic Route Switch."""
+
+    def __init__(self, coordinator, api, route: Dict[str, Any]):
+        """Initialize the UDM Traffic Route Switch."""
+        super().__init__(coordinator, api, route, 'traffic_routes')
+        self._attr_unique_id = f"network_route_{route['_id']}"
+        desc = route.get('description', 'Unnamed')
+        self._attr_name = f"Network Route: {desc} ({route['_id'][-4:]})"
+
+    @log_call
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn the switch on."""
+        await self._toggle(True)
+
+    @log_call
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the switch off."""
+        await self._toggle(False)
+
+    @log_call
+    async def _toggle(self, new_state: bool) -> None:
+        """Toggle the traffic route state."""
+        if self._websocket_supported:
+            success = await self.coordinator._handle_websocket_update(
+                'traffic_routes',
+                'update',
+                {**self._item_data, 'enabled': new_state}
+            )
+            if not success:
+                await self._execute_toggle(
+                    new_state,
+                    self._api.toggle_traffic_route,
+                    self._api.get_traffic_routes,
+                    "traffic route"
+                )
+        else:
+            await self._execute_toggle(
+                new_state,
+                self._api.toggle_traffic_route,
+                self._api.get_traffic_routes,
+                "traffic route"
+            )
 
 class UDMLegacyRuleSwitch(UDMBaseSwitch):
     """Base class for legacy rule switches."""
 
-    def __init__(self, coordinator, api, rule: Dict[str, Any], rule_type: str):
+    def __init__(self, coordinator, api, rule: Dict[str, Any], rule_type: str, data_key: str):
         """Initialize the legacy rule switch."""
-        super().__init__(coordinator, api, rule)
+        super().__init__(coordinator, api, rule, data_key)
         self._rule_type = rule_type
         rule_name = rule.get('name', rule.get('description', 'Unnamed'))
         self._attr_unique_id = f"network_rule_{rule_type}_{rule['_id']}"
@@ -200,275 +245,226 @@ class UDMLegacyFirewallRuleSwitch(UDMLegacyRuleSwitch):
 
     def __init__(self, coordinator, api, rule: Dict[str, Any]):
         """Initialize the UDM Legacy Firewall Rule Switch."""
-        super().__init__(coordinator, api, rule, "firewall")
+        super().__init__(coordinator, api, rule, "firewall", "firewall_rules")
 
+    @log_call
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the switch on."""
+        """Turn on the rule."""
         await self._toggle(True)
 
+    @log_call
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn the switch off."""
+        """Turn off the rule."""
         await self._toggle(False)
 
+    @log_call
     async def _toggle(self, new_state: bool) -> None:
-        """Toggle the legacy firewall rule state."""
-        await self._execute_toggle(new_state, self._api.toggle_legacy_firewall_rule, self._api.get_legacy_firewall_rules, "firewall rule")
+        """Toggle the rule state."""
+        if self._websocket_supported:
+            success = await self.coordinator._handle_websocket_update(
+                'firewall_rules',
+                'update',
+                {**self._item_data, 'enabled': new_state}
+            )
+            if not success:
+                await self._execute_toggle(
+                    new_state,
+                    self._api.toggle_legacy_firewall_rule,
+                    self._api.get_legacy_firewall_rule,
+                    "legacy firewall rule"
+                )
+        else:
+            await self._execute_toggle(
+                new_state,
+                self._api.toggle_legacy_firewall_rule,
+                self._api.get_legacy_firewall_rule,
+                "legacy firewall rule"
+            )
 
 class UDMLegacyTrafficRuleSwitch(UDMLegacyRuleSwitch):
     """Representation of a UDM Legacy Traffic Rule Switch."""
 
     def __init__(self, coordinator, api, rule: Dict[str, Any]):
         """Initialize the UDM Legacy Traffic Rule Switch."""
-        super().__init__(coordinator, api, rule, "traffic")
+        super().__init__(coordinator, api, rule, "traffic", "traffic_rules")
 
+    @log_call
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the switch on."""
+        """Turn on the rule."""
         await self._toggle(True)
 
+    @log_call
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn the switch off."""
+        """Turn off the rule."""
         await self._toggle(False)
 
+    @log_call
     async def _toggle(self, new_state: bool) -> None:
-        """Toggle the legacy traffic rule state."""
-        await self._execute_toggle(new_state, self._api.toggle_legacy_traffic_rule, self._api.get_legacy_traffic_rules, "traffic rule")
-
-class UDMTrafficRouteSwitch(UDMBaseSwitch):
-    """Representation of a UDM Traffic Route Switch."""
-
-    def __init__(self, coordinator, api, route: Dict[str, Any]):
-        """Initialize the UDM Traffic Route Switch."""
-        super().__init__(coordinator, api, route)
-        self._attr_unique_id = f"network_route_{route['_id']}"
-        desc = route.get('description', 'Unnamed')
-        self._attr_name = f"Network Route: {desc} ({route['_id'][-4:]})"
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the switch on."""
-        await self._toggle(True)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn the switch off."""
-        await self._toggle(False)
-
-    async def _toggle(self, new_state: bool) -> None:
-        """Toggle the traffic route state."""
-        await self._execute_toggle(new_state, self._api.toggle_traffic_route, self._api.get_traffic_routes, "traffic route")
+        """Toggle the rule state."""
+        if self._websocket_supported:
+            success = await self.coordinator._handle_websocket_update(
+                'traffic_rules',
+                'update',
+                {**self._item_data, 'enabled': new_state}
+            )
+            if not success:
+                await self._execute_toggle(
+                    new_state,
+                    self._api.toggle_legacy_traffic_rule,
+                    lambda x: (True, self._item_data, None),  # No direct get method for traffic rules
+                    "legacy traffic rule"
+                )
+        else:
+            await self._execute_toggle(
+                new_state,
+                self._api.toggle_legacy_traffic_rule,
+                lambda x: (True, self._item_data, None),
+                "legacy traffic rule"
+            )
 
 class UDMPortForwardRuleSwitch(UDMBaseSwitch):
     """Representation of a UDM Port Forward Rule Switch."""
 
     def __init__(self, coordinator, api, rule: Dict[str, Any]):
         """Initialize the UDM Port Forward Rule Switch."""
-        super().__init__(coordinator, api, rule)
+        super().__init__(coordinator, api, rule, 'port_forward_rules')
         
-        # Use rule name or unnamed if not present
         name = rule.get('name', 'Unnamed')
-        # Generate a stable unique_id that won't change with port modifications
-        self._attr_unique_id = f"pf_{name.lower().replace(' ', '_')}_{rule['_id'][-4:]}"
+        self._attr_unique_id = f"port_forward_{name.lower().replace(' ', '_')}_{rule['_id'][-4:]}"
         
         fwd_ip = rule.get('fwd', '')
         self._attr_name = f"Port Forward: {name} ({fwd_ip}) ({rule['_id'][-4:]})"
 
+    @log_call
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the switch on."""
         await self._toggle(True)
 
+    @log_call
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the switch off."""
         await self._toggle(False)
 
+    @log_call
     async def _toggle(self, new_state: bool) -> None:
         """Toggle the port forward rule state."""
-        await self._execute_toggle(new_state, self._api.toggle_port_forward_rule, self._api.get_port_forward_rules, "port forward rule")
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
-        if self.coordinator.data is None:
-            self._item_data = None
-            self._safe_write_state()
-            return
-
-        if 'port_forward_rules' in self.coordinator.data:
-            items = self.coordinator.data['port_forward_rules']
-            item = next((i for i in items if i.get('_id') == self._item_id), None)
-            if item:
-                self._item_data = item
-                self._safe_write_state()
-                return
-
-        # If we get here, the item no longer exists in the coordinator data
-        self._item_data = None
-        self._safe_write_state()
+        if self._websocket_supported:
+            success = await self.coordinator._handle_websocket_update(
+                'port_forward_rules',
+                'update',
+                {**self._item_data, 'enabled': new_state}
+            )
+            if not success:
+                await self._execute_toggle(
+                    new_state,
+                    self._api.toggle_port_forward_rule,
+                    lambda x: (True, self._item_data, None),
+                    "port forward rule"
+                )
+        else:
+            await self._execute_toggle(
+                new_state,
+                self._api.toggle_port_forward_rule,
+                lambda x: (True, self._item_data, None),
+                "port forward rule"
+            )
 
 @log_call
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> bool:
     """Set up the UniFi Network Rules switches."""
     coordinator = hass.data[DOMAIN][entry.entry_id]['coordinator']
     api = hass.data[DOMAIN][entry.entry_id]['api']
+    entity_loader = hass.data[DOMAIN][entry.entry_id]['entity_loader']
 
-    _LOGGER.info("Setting up switches with coordinator data: %s", coordinator.data)
-    
-    # Detect UDM capabilities if not already done
-    if not hasattr(api, 'capabilities'):
-        if not await api.detect_capabilities():
-            _LOGGER.error(
-                "Failed to detect any UDM capabilities. No entities will be created. "
-                "Please check your network connection, credentials, and device status."
-            )
-            return
+    # Register switch platform
+    entity_loader.async_setup_platform('switch', async_add_entities)
 
-    # Validate that we have at least one working capability
-    if not any([
-        api.capabilities.traffic_routes,
-        api.capabilities.zone_based_firewall,
-        api.capabilities.legacy_firewall
-    ]):
-        _LOGGER.error(
-            "No supported capabilities detected on the UniFi device. "
-            "This integration requires at least one of: "
-            "traffic routes, zone-based firewall, or legacy firewall support."
-        )
-        return
+    # Define entity configs
+    entity_configs = []
 
-    # Log detected capabilities for debugging
-    _LOGGER.info(
-        "Setting up entities with detected capabilities - "
-        "Traffic Routes: %s, Zone-based Firewall: %s, Legacy Firewall: %s",
-        api.capabilities.traffic_routes,
-        api.capabilities.zone_based_firewall,
-        api.capabilities.legacy_firewall
-    )
-
-    # Get zone matrix data for better naming if using zone-based firewall
-    zones_data = []
+    # Add firewall policies for zone-based firewall
     if api.capabilities.zone_based_firewall:
-        success, zones_data, error = await api.get_firewall_zone_matrix()
-        if not success:
-            _LOGGER.error(
-                "Failed to fetch zone matrix: %s. "
-                "Zone-based firewall rules will use generic naming.",
-                error
-            )
+        for policy in coordinator.data.get('firewall_policies', []):
+            if not policy.get('predefined', False):
+                entity_configs.append({
+                    'type': 'firewall_policy',
+                    'policy': policy,
+                    'data_key': 'firewall_policies'
+                })
 
-    # Get entity registry
-    entity_registry = async_get(hass)
-    
-    # Track existing entities to prevent duplicates
-    existing_entities = {}
-    
-    @callback
-    def async_update_items(now=None):
-        """Update entities when coordinator data changes."""
-        if not coordinator.data:
-            _LOGGER.warning("No data available from coordinator")
-            return
+    # Add traffic routes
+    if api.capabilities.traffic_routes:
+        for route in coordinator.data.get('traffic_routes', []):
+            entity_configs.append({
+                'type': 'traffic_route',
+                'route': route,
+                'data_key': 'traffic_routes'
+            })
 
-        current_unique_ids = set()
-        new_entities = []
+    # Add port forward rules
+    for rule in coordinator.data.get('port_forward_rules', []):
+        entity_configs.append({
+            'type': 'port_forward',
+            'rule': rule,
+            'data_key': 'port_forward_rules'
+        })
+
+    # Add legacy firewall rules if using legacy mode
+    if api.capabilities.legacy_firewall:
+        legacy_rules = coordinator.data.get('firewall_rules', {}).get('data', [])
+        for rule in legacy_rules:
+            entity_configs.append({
+                'type': 'legacy_firewall',
+                'rule': rule,
+                'data_key': 'firewall_rules'
+            })
         
-        try:
-            # Process traffic routes if capability is available
-            if api.capabilities.traffic_routes and 'traffic_routes' in coordinator.data:
-                for route in coordinator.data['traffic_routes']:
-                    try:
-                        unique_id = f"network_route_{route['_id']}"
-                        current_unique_ids.add(unique_id)
-                        if unique_id not in existing_entities:
-                            new_entity = UDMTrafficRouteSwitch(coordinator, api, route)
-                            new_entities.append(new_entity)
-                            existing_entities[unique_id] = new_entity
-                    except Exception as e:
-                        _LOGGER.error("Error creating traffic route entity: %s", str(e))
-            
-            # Process port forward rules
-            if 'port_forward_rules' in coordinator.data:
-                for rule in coordinator.data['port_forward_rules']:
-                    try:
-                        name = rule.get('name', 'Unnamed')
-                        unique_id = f"pf_{name.lower().replace(' ', '_')}_{rule['_id'][-4:]}"
-                        current_unique_ids.add(unique_id)
-                        if unique_id not in existing_entities:
-                            new_entity = UDMPortForwardRuleSwitch(coordinator, api, rule)
-                            new_entities.append(new_entity)
-                            existing_entities[unique_id] = new_entity
-                    except Exception as e:
-                        _LOGGER.error("Error creating port forward rule entity: %s", str(e))
+        # Add legacy traffic rules
+        for rule in coordinator.data.get('traffic_rules', []):
+            entity_configs.append({
+                'type': 'legacy_traffic',
+                'rule': rule,
+                'data_key': 'traffic_rules'
+            })
 
-            # Process firewall rules based on capabilities
-            if api.capabilities.zone_based_firewall:
-                # Process zone-based firewall policies
-                if 'firewall_policies' in coordinator.data:
-                    for policy in coordinator.data['firewall_policies']:
-                        try:
-                            if not policy.get('predefined', False):
-                                unique_id = f"network_policy_{policy['_id']}"
-                                current_unique_ids.add(unique_id)
-                                if unique_id not in existing_entities:
-                                    new_entity = UDMFirewallPolicySwitch(coordinator, api, policy, zones_data)
-                                    new_entities.append(new_entity)
-                                    existing_entities[unique_id] = new_entity
-                        except Exception as e:
-                            _LOGGER.error("Error creating firewall policy entity: %s", str(e))
-            elif api.capabilities.legacy_firewall:
-                # Process legacy firewall rules
-                if 'firewall_rules' in coordinator.data:
-                    try:
-                        for rule in coordinator.data['firewall_rules'].get('data', []):
-                            try:
-                                unique_id = f"network_rule_firewall_{rule['_id']}"
-                                current_unique_ids.add(unique_id)
-                                if unique_id not in existing_entities:
-                                    new_entity = UDMLegacyFirewallRuleSwitch(coordinator, api, rule)
-                                    new_entities.append(new_entity)
-                                    existing_entities[unique_id] = new_entity
-                            except Exception as e:
-                                _LOGGER.error("Error creating legacy firewall rule entity: %s", str(e))
-
-                        # Process legacy traffic rules
-                        if 'traffic_rules' in coordinator.data:
-                            for rule in coordinator.data['traffic_rules']:
-                                try:
-                                    unique_id = f"network_rule_traffic_{rule['_id']}"
-                                    current_unique_ids.add(unique_id)
-                                    if unique_id not in existing_entities:
-                                        new_entity = UDMLegacyTrafficRuleSwitch(coordinator, api, rule)
-                                        new_entities.append(new_entity)
-                                        existing_entities[unique_id] = new_entity
-                                except Exception as e:
-                                    _LOGGER.error("Error creating legacy traffic rule entity: %s", str(e))
-                    except Exception as e:
-                        _LOGGER.error("Error processing legacy rules: %s", str(e))
-
-            # Remove any entities from the registry that are no longer provided by our integration
-            for entity_entry in async_entries_for_config_entry(entity_registry, entry.entry_id):
-                if entity_entry.unique_id not in current_unique_ids:
-                    entity_registry.async_remove(entity_entry.entity_id)
-                    if entity_entry.unique_id in existing_entities:
-                        existing_entities.pop(entity_entry.unique_id)
-                    _LOGGER.info("Removed stale entity %s (unique_id: %s)", entity_entry.entity_id, entity_entry.unique_id)
-
-            # Add new entities
-            if new_entities:
-                async_add_entities(new_entities)
-                _LOGGER.info("Added %d new entities", len(new_entities))
-
-        except Exception as e:
-            _LOGGER.exception("Unexpected error during entity update: %s", str(e))
-
-    # Set up initial entities
-    async_update_items()
-
-    # Register update listener
-    coordinator.async_add_listener(async_update_items)
-    entry.async_on_unload(lambda: coordinator.async_remove_listener(async_update_items))
+    # Create entities based on configs
+    for config in entity_configs:
+        unique_id = _get_unique_id(config)
+        if unique_id:
+            entity_loader.async_add_entity(
+                platform='switch',
+                unique_id=unique_id,
+                entity_factory=lambda c=config: _create_entity(coordinator, api, c),
+                data_key=config['data_key']
+            )
 
     return True
 
-def async_entries_for_config_entry(registry: EntityRegistry, config_entry_id: str) -> List[Any]:
-    """Get all entities for a config entry."""
-    return [
-        entry for entry in registry.entities.values()
-        if entry.config_entry_id == config_entry_id
-    ]
+def _get_unique_id(config: dict) -> str:
+    """Generate unique ID based on entity config."""
+    if config['type'] == 'firewall_policy':
+        return f"network_policy_{config['policy']['_id']}"
+    elif config['type'] == 'traffic_route':
+        return f"network_route_{config['route']['_id']}"
+    elif config['type'] == 'port_forward':
+        rule = config['rule']
+        name = rule.get('name', 'unnamed').lower().replace(' ', '_')
+        return f"port_forward_{name}_{rule['_id'][-4:]}"
+    elif config['type'] == 'legacy_firewall':
+        return f"network_rule_firewall_{config['rule']['_id']}"
+    elif config['type'] == 'legacy_traffic':
+        return f"network_rule_traffic_{config['rule']['_id']}"
+    return None
+
+def _create_entity(coordinator, api, config):
+    """Create appropriate entity based on config."""
+    if config['type'] == 'firewall_policy':
+        return UDMFirewallPolicySwitch(coordinator, api, config['policy'])
+    elif config['type'] == 'traffic_route':
+        return UDMTrafficRouteSwitch(coordinator, api, config['route'])
+    elif config['type'] == 'port_forward':
+        return UDMPortForwardRuleSwitch(coordinator, api, config['rule'])
+    elif config['type'] == 'legacy_firewall':
+        return UDMLegacyFirewallRuleSwitch(coordinator, api, config['rule'])
+    elif config['type'] == 'legacy_traffic':
+        return UDMLegacyTrafficRuleSwitch(coordinator, api, config['rule'])

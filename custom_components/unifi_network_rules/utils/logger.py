@@ -1,51 +1,59 @@
+"""Logging utilities for UniFi Network Rules."""
+from __future__ import annotations
 import asyncio
-import logging
 from functools import wraps
+from typing import Any, Callable, TypeVar
 
-_LOGGER = logging.getLogger(__name__)
+from ..const import LOGGER
 
-def log_call(func):
-    """Decorator to log function entry and exit."""
+F = TypeVar("F", bound=Callable[..., Any])
+
+def log_call(func: F) -> F:
+    """Log when a function is called."""
     @wraps(func)
-    async def async_wrapper(*args, **kwargs):
-        _LOGGER.debug("Entering: %s", func.__name__)
+    async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+        """Wrap async function."""
+        LOGGER.debug("Calling %s", func.__name__)
         try:
             result = await func(*args, **kwargs)
-            _LOGGER.debug("Exiting: %s", func.__name__)
+            LOGGER.debug("Completed %s", func.__name__)
             return result
-        except Exception as e:
-            _LOGGER.exception("Error in %s: %s", func.__name__, str(e))
+        except Exception as err:
+            LOGGER.error("Error in %s: %s", func.__name__, str(err))
             raise
 
     @wraps(func)
-    def sync_wrapper(*args, **kwargs):
-        _LOGGER.debug("Entering: %s", func.__name__)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        """Wrap sync function."""
+        LOGGER.debug("Calling %s", func.__name__)
         try:
             result = func(*args, **kwargs)
-            _LOGGER.debug("Exiting: %s", func.__name__)
+            LOGGER.debug("Completed %s", func.__name__)
             return result
-        except Exception as e:
-            _LOGGER.exception("Error in %s: %s", func.__name__, str(e))
+        except Exception as err:
+            LOGGER.error("Error in %s: %s", func.__name__, str(err))
             raise
 
-    return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
+    if asyncio.iscoroutinefunction(func):
+        return async_wrapper  # type: ignore[return-value]
+    return wrapper  # type: ignore[return-value]
 
 def debug(msg: str, *args, **kwargs):
     """Log a debug message."""
-    _LOGGER.debug(msg, *args, **kwargs)
+    LOGGER.debug(msg, *args, **kwargs)
 
 def info(msg: str, *args, **kwargs):
     """Log an info message."""
-    _LOGGER.info(msg, *args, **kwargs)
+    LOGGER.info(msg, *args, **kwargs)
 
 def error(msg: str, *args, **kwargs):
     """Log an error message."""
-    _LOGGER.error(msg, *args, **kwargs)
+    LOGGER.error(msg, *args, **kwargs)
 
 def warning(msg: str, *args, **kwargs):
     """Log a warning message."""
-    _LOGGER.warning(msg, *args, **kwargs)
+    LOGGER.warning(msg, *args, **kwargs)
 
 def exception(msg: str, *args, **kwargs):
     """Log an exception with traceback."""
-    _LOGGER.exception(msg, *args, **kwargs)
+    LOGGER.exception(msg, *args, **kwargs)

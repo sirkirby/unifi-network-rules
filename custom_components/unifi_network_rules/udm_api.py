@@ -5,10 +5,11 @@ from typing import Any, Dict, List, Tuple, Optional
 from datetime import datetime, timedelta
 import aiohttp
 import json
-from aiohttp import ClientTimeout, CookieJar
+from aiohttp import ClientTimeout, CookieJar, WSMsgType
 from dataclasses import dataclass
 
 from .const import (
+    DOMAIN,
     SITE_FEATURE_MIGRATION_ENDPOINT,
     FIREWALL_POLICIES_ENDPOINT,
     TRAFFIC_ROUTES_ENDPOINT,
@@ -23,7 +24,8 @@ from .const import (
     ZONE_BASED_FIREWALL_FEATURE,
     COOKIE_TOKEN,
     SESSION_TIMEOUT,
-    PORT_FORWARD_ENDPOINT
+    PORT_FORWARD_ENDPOINT,
+    LOGGER
 )
 from .utils import logger
 from .utils.logger import log_call
@@ -45,6 +47,11 @@ class UDMAPI:
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.capabilities = UDMCapabilities()
+        self.hass = None  # Will be set by the integration
+        
+        # Websocket state tracking
+        self._websocket_last_message = None
+        self._websocket_callback = None
         
         # Session management
         self._session: Optional[aiohttp.ClientSession] = None
@@ -61,6 +68,34 @@ class UDMAPI:
         self._request_lock = asyncio.Lock()
         self._last_request_time: Optional[datetime] = None
         self._min_request_interval = MIN_REQUEST_INTERVAL
+
+        self._websocket_capabilities = {
+            'firewall_policies': False,
+            'traffic_routes': True,
+            'port_forward_rules': True,
+            'legacy_firewall': True,
+            'legacy_traffic': True
+        }
+
+    @property
+    def websocket_last_message(self) -> Optional[datetime]:
+        """Get the timestamp of the last websocket message."""
+        return self._websocket_last_message
+
+    @websocket_last_message.setter
+    def websocket_last_message(self, value: Optional[datetime]) -> None:
+        """Set the timestamp of the last websocket message."""
+        self._websocket_last_message = value
+
+    @property
+    def websocket_callback(self):
+        """Get the websocket callback."""
+        return self._websocket_callback
+
+    @websocket_callback.setter
+    def websocket_callback(self, value):
+        """Set the websocket callback."""
+        self._websocket_callback = value
 
     @log_call
     async def detect_capabilities(self) -> bool:
@@ -162,7 +197,7 @@ class UDMAPI:
         """Implement rate limiting between requests."""
         if self._last_request_time:
             elapsed = datetime.now() - self._last_request_time
-            if elapsed.total_seconds() < self._min_request_interval:
+            if (elapsed.total_seconds() < self._min_request_interval):
                 wait_time = self._min_request_interval - elapsed.total_seconds()
                 logger.debug(f"Rate limiting: waiting {wait_time:.2f} seconds")
                 await asyncio.sleep(wait_time)
@@ -701,3 +736,108 @@ class UDMAPI:
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
+
+    async def _detect_websocket_capabilities(self) -> None:
+        """Test which features support websocket updates."""
+        try:
+            # Try to establish websocket connection
+            await self.start_websocket()
+            
+            # Wait for initial messages to determine capabilities
+            await asyncio.sleep(5)  # Give time for initial messages
+            
+            if hasattr(self, '_websocket') and self._websocket:
+                supported_types = self._websocket.get_supported_message_types()
+                
+                # Map message types to capabilities
+                self._websocket_capabilities = {
+                    'firewall_policies': 'firewall_policy' in supported_types,
+                    'traffic_routes': 'traffic_route' in supported_types,
+                    'port_forward_rules': 'port_forward' in supported_types,
+                    'legacy_firewall': 'firewall_rule' in supported_types,
+                    'legacy_traffic': 'traffic_rule' in supported_types
+                }
+                
+                logger.debug(
+                    "Detected websocket capabilities: %s", 
+                    {k: v for k, v in self._websocket_capabilities.items() if v}
+                )
+            else:
+                logger.warning("No websocket connection available for capability detection")
+                
+        except Exception as e:
+            logger.warning("Could not detect websocket capabilities: %s", str(e))
+            # If websocket detection fails, assume no websocket support
+            for feature in self._websocket_capabilities:
+                self._websocket_capabilities[feature] = False
+
+    async def _test_websocket_feature(self, feature: str) -> bool:
+        """Test if a specific feature supports websocket updates."""
+        # Implementation would depend on the UniFi API specifics
+        # This is a placeholder that should be implemented based on 
+        # the actual UniFi websocket API capabilities
+        return self._websocket_capabilities[feature]
+
+    def supports_websocket(self, feature: str) -> bool:
+        """Check if a feature supports websocket updates."""
+        return self._websocket_capabilities.get(feature, False)
+
+    async def start_websocket(self) -> None:
+        """Start the websocket connection."""
+        url = f"wss://{self.host}/proxy/network/wss/s/default/events"
+        session = await self._get_session()
+        
+        try:
+            # Ensure we have valid authentication before starting websocket
+            auth_success, auth_error = await self.ensure_authenticated()
+            if not auth_success:
+                raise Exception(f"Authentication failed: {auth_error}")
+
+            # Get the headers with authentication
+            headers = self._get_proxy_headers()
+            
+            # Create websocket connection
+            ws = await session.ws_connect(
+                url,
+                headers=headers,
+                ssl=False
+            )
+            
+            # Start listening for messages
+            async def _listen():
+                try:
+                    async for msg in ws:
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            try:
+                                data = json.loads(msg.data)
+                                self.websocket_last_message = datetime.now()
+                                if self.websocket_callback:
+                                    if asyncio.iscoroutinefunction(self.websocket_callback):
+                                        asyncio.create_task(self.websocket_callback(data))
+                                    else:
+                                        self.websocket_callback(data)
+                            except json.JSONDecodeError as e:
+                                LOGGER.error("Failed to parse websocket message: %s", e)
+                        elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                            LOGGER.debug("Websocket connection closed or error occurred")
+                            break
+                except Exception as e:
+                    LOGGER.error("Websocket listen error: %s", str(e))
+                finally:
+                    try:
+                        await ws.close()
+                    except Exception as e:
+                        LOGGER.debug("Error closing websocket: %s", str(e))
+
+            # Start the listen task
+            if self.hass and self.hass.loop:
+                self.hass.loop.create_task(_listen())
+            else:
+                LOGGER.error("Cannot start websocket: hass or loop not available")
+                raise RuntimeError("Home Assistant instance not properly initialized")
+            
+        except Exception as e:
+            LOGGER.error("Failed to start websocket: %s", str(e))
+            raise
+            
+        LOGGER.info("Websocket connection established")

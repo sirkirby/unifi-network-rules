@@ -1,4 +1,10 @@
+"""Constants for UniFi Network Rules integration."""
+import logging
+
 DOMAIN = "unifi_network_rules"
+
+# Initialize logger at module level
+LOGGER = logging.getLogger(DOMAIN)
 
 CONF_MAX_RETRIES = "max_retries"
 CONF_RETRY_DELAY = "retry_delay"
@@ -8,6 +14,19 @@ DEFAULT_RETRY_DELAY = 1
 CONF_UPDATE_INTERVAL = "update_interval"
 DEFAULT_UPDATE_INTERVAL = 1  # Changed from 5 to 1 minute for more responsive updates
 SESSION_TIMEOUT = 30
+
+# Events
+EVENT_RULE_UPDATED = f"{DOMAIN}_rule_updated"
+EVENT_RULE_DELETED = f"{DOMAIN}_rule_deleted"
+
+# Services
+SERVICE_APPLY_TEMPLATE = "apply_template"
+SERVICE_SAVE_TEMPLATE = "save_template"
+
+# Configuration
+CONF_TEMPLATE_ID = "template_id"
+CONF_TEMPLATE_VARIABLES = "variables"
+CONF_RULE_TYPE = "rule_type"
 
 # API Endpoints
 SITE_FEATURE_MIGRATION_ENDPOINT = "/proxy/network/v2/api/site/default/site-feature-migration"

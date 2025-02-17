@@ -1,148 +1,134 @@
+"""Config flow for UniFi Network Rules."""
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any
+
 import voluptuous as vol
+
 from homeassistant import config_entries, core, exceptions
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
-import homeassistant.helpers.config_validation as cv
-from .const import DOMAIN, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
+from homeassistant.data_entry_flow import FlowResult
+
+from .const import (
+    DOMAIN,
+    CONF_UPDATE_INTERVAL,
+    DEFAULT_UPDATE_INTERVAL,
+    LOGGER
+)
 from .udm_api import UDMAPI
-import logging
-from homeassistant.helpers.entity import EntityDescription
-from ipaddress import ip_address
-import re
 
-_LOGGER = logging.getLogger(__name__)
+class UnifiNetworkRulesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle a config flow for UniFi Network Rules."""
 
-# Define entity descriptions for entities used in this integration
-ENTITY_DESCRIPTIONS = {
-    "update_interval": EntityDescription(
-        key="update_interval",
-        name="Update Interval",
-        icon="mdi:update",
-        entity_category="config",
-    )
-}
-
-# Define a schema for configuration, adding basic validation
-DATA_SCHEMA = vol.Schema({
-    vol.Required(CONF_HOST): cv.string,
-    vol.Required(CONF_USERNAME): cv.string,
-    vol.Required(CONF_PASSWORD): cv.string,
-    vol.Optional(CONF_UPDATE_INTERVAL, default=DEFAULT_UPDATE_INTERVAL): vol.All(vol.Coerce(int), vol.Range(min=1, max=1440)),
-})
-
-async def validate_input(hass: core.HomeAssistant, data: dict):
-    """
-    Validate the user input allows us to connect.
-
-    Data has the keys from DATA_SCHEMA with values provided by the user.
-    """
-    api = UDMAPI(
-        host=data[CONF_HOST],
-        username=data[CONF_USERNAME],
-        password=data[CONF_PASSWORD]
-    )
-
-    # Try to authenticate first
-    auth_success, auth_error = await api.ensure_authenticated()
-    if not auth_success:
-        _LOGGER.error("Authentication failed: %s", auth_error)
-        raise InvalidAuth
-
-    # If authentication succeeds, try to detect capabilities
-    capabilities_success = await api.detect_capabilities()
-    if not capabilities_success:
-        _LOGGER.error(
-            "Failed to detect any capabilities. Check device status and permissions."
-        )
-        raise NoCapabilities
-
-    # Ensure at least one capability was detected
-    if not any([
-        api.capabilities.traffic_routes,
-        api.capabilities.zone_based_firewall,
-        api.capabilities.legacy_firewall
-    ]):
-        _LOGGER.error("No supported capabilities found on the device")
-        raise NoCapabilities
-
-    _LOGGER.info(
-        "Validated device with capabilities - Traffic Routes: %s, Zone-based Firewall: %s, Legacy Firewall: %s",
-        api.capabilities.traffic_routes,
-        api.capabilities.zone_based_firewall,
-        api.capabilities.legacy_firewall
-    )
-
-    await api.cleanup()
-
-    # Return info that you want to store in the config entry.
-    return {"title": f"UniFi Rules ({data[CONF_HOST]})"}
-
-class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """
-    Handle a config flow for Unifi Network Rule Manager.
-    """
     VERSION = 1
-    CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_POLL
 
-    async def async_step_user(self, user_input=None):
-        """
-        Handle the initial step of the config flow.
-        """
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Handle the initial step."""
         errors = {}
+
         if user_input is not None:
             try:
-                if CONF_UPDATE_INTERVAL in user_input:
-                    update_interval = user_input[CONF_UPDATE_INTERVAL]
-                    if not isinstance(update_interval, int) or update_interval < 1 or update_interval > 1440:
-                        raise InvalidUpdateInterval
-                info = await validate_input(self.hass, user_input)
-                return self.async_create_entry(title=info["title"], data=user_input)
+                # Create API instance
+                api = UDMAPI(
+                    user_input[CONF_HOST],
+                    user_input[CONF_USERNAME],
+                    user_input[CONF_PASSWORD]
+                )
+
+                # Test authentication
+                auth_success, auth_error = await api.authenticate_session()
+                if not auth_success:
+                    raise InvalidAuth(f"Authentication failed: {auth_error}")
+
+                # Test capabilities detection
+                try:
+                    capabilities_detected = await api.detect_capabilities()
+                    if not capabilities_detected:
+                        raise CannotConnect("Failed to detect UDM capabilities")
+                    
+                    # Log detected capabilities
+                    LOGGER.info(
+                        "Detected capabilities - Zone Firewall: %s, Legacy Firewall: %s, Traffic Routes: %s",
+                        api.capabilities.zone_based_firewall,
+                        api.capabilities.legacy_firewall,
+                        api.capabilities.traffic_routes
+                    )
+
+                    # Test websocket capability detection
+                    try:
+                        await api._detect_websocket_capabilities()
+                        
+                        # Log websocket support for different features
+                        LOGGER.info("WebSocket Support:")
+                        for feature, supported in api._websocket_capabilities.items():
+                            LOGGER.info("  %s: %s", feature, "Supported" if supported else "Not supported")
+                            
+                    except Exception as ws_err:
+                        LOGGER.warning(
+                            "WebSocket capability detection failed (will fall back to REST API): %s",
+                            str(ws_err)
+                        )
+
+                except Exception as cap_err:
+                    raise CannotConnect(f"Capability detection failed: {str(cap_err)}")
+
+                # Verify we have at least one working capability
+                if not any([
+                    api.capabilities.zone_based_firewall,
+                    api.capabilities.legacy_firewall,
+                    api.capabilities.traffic_routes
+                ]):
+                    raise CannotConnect("No supported firewall capabilities detected")
+
+                await self.async_set_unique_id(f"unifi_rules_{user_input[CONF_HOST]}")
+                self._abort_if_unique_id_configured()
+
+                # Clean up API instance
+                await api.cleanup()
+
+                return self.async_create_entry(
+                    title=f"UniFi Network Rules ({user_input[CONF_HOST]})",
+                    data={
+                        CONF_HOST: user_input[CONF_HOST],
+                        CONF_USERNAME: user_input[CONF_USERNAME],
+                        CONF_PASSWORD: user_input[CONF_PASSWORD],
+                        CONF_UPDATE_INTERVAL: user_input.get(
+                            CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
+                        ),
+                    },
+                )
+
             except InvalidAuth:
-                errors["base"] = "auth"
-            except NoCapabilities:
-                errors["base"] = "no_capabilities"
+                errors["base"] = "invalid_auth"
             except CannotConnect:
-                errors["base"] = "connect"
-            except InvalidUpdateInterval:
-                errors["base"] = "invalid_update_interval"
-            except InvalidHost:
-                errors["base"] = "invalid_host"
-            except vol.Invalid as vol_error:
-                _LOGGER.error("Validation error: %s", vol_error)
-                errors["base"] = "invalid_format"
-            except Exception: 
-                _LOGGER.exception("Unexpected exception")
+                errors["base"] = "cannot_connect"
+            except Exception:  # pylint: disable=broad-except
+                LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
+            finally:
+                if 'api' in locals():
+                    await api.cleanup()
 
         return self.async_show_form(
-            step_id="user", data_schema=DATA_SCHEMA, errors=errors
+            step_id="user",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_HOST): str,
+                    vol.Required(CONF_USERNAME): str,
+                    vol.Required(CONF_PASSWORD): str,
+                    vol.Optional(
+                        CONF_UPDATE_INTERVAL, 
+                        default=DEFAULT_UPDATE_INTERVAL
+                    ): int,
+                }
+            ),
+            errors=errors,
         )
 
 class CannotConnect(exceptions.HomeAssistantError):
-    """
-    Error to indicate we cannot connect.
-    """
-    pass
+    """Error to indicate we cannot connect."""
 
 class InvalidAuth(exceptions.HomeAssistantError):
-    """
-    Error to indicate there is invalid auth.
-    """
-    pass
-
-class InvalidHost(exceptions.HomeAssistantError):
-    """
-    Error to indicate there is invalid host address.
-    """
-    pass
-
-class InvalidUpdateInterval(exceptions.HomeAssistantError):
-    """
-    Error to indicate the update interval is invalid.
-    """
-    pass
-
-class NoCapabilities(exceptions.HomeAssistantError):
-    """
-    Error to indicate no supported capabilities were found.
-    """
-    pass
+    """Error to indicate there is invalid auth."""

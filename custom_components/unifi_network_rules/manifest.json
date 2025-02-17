@@ -1,14 +1,15 @@
 {
     "domain": "unifi_network_rules",
-    "name": "Unifi Network Rule Manager",
+    "name": "Unifi Network Rules",
     "codeowners": ["@sirkirby"],
     "config_flow": true,
     "dependencies": [],
     "documentation": "https://github.com/sirkirby/unifi-network-rules",
     "integration_type": "hub",
-    "iot_class": "local_polling",
+    "iot_class": ["local_push", "local_polling"],
     "issue_tracker": "https://github.com/sirkirby/unifi-network-rules/issues",
+    "loggers": ["aiounifi"],
     "quality_scale": "custom",
-    "requirements": ["aiohttp"],
-    "version": "1.5.0"
+    "requirements": ["aiohttp", "aiounifi"],
+    "version": "1.6.0"
 }
