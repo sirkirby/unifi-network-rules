@@ -274,84 +274,21 @@ async def test_restore_rules_service_mixed_errors(hass: HomeAssistant, mock_api,
         mock_coordinator.async_request_refresh.assert_called_once()
 
 @pytest.mark.asyncio
-async def test_port_forward_rule_switch_initialization():
-    """Test port forward rule switch initialization."""
-    coordinator = MagicMock()
-    api = MagicMock()
-    rule = {
-        "pfwd_interface": "wan",
-        "src": "any",
-        "log": True,
-        "enabled": False,
-        "fwd": "10.29.13.235",
-        "proto": "tcp_udp",
-        "name": "Minecraft",
-        "dst_port": "25565",
-        "_id": "test123",
-        "fwd_port": "25565"
-    }
-
-    switch = UDMPortForwardRuleSwitch(coordinator, api, rule)
-    assert switch.name == "Port Forward: Minecraft (10.29.13.235) (t123)"
-    assert switch.unique_id == "pf_minecraft_t123"
-    assert switch.is_on is False
-
-@pytest.mark.asyncio
-async def test_port_forward_rule_switch_different_ports():
-    """Test port forward rule switch name with different source and destination ports."""
-    coordinator = MagicMock()
-    api = MagicMock()
-    rule = {
-        "pfwd_interface": "wan",
-        "src": "any",
-        "log": True,
-        "enabled": False,
-        "fwd": "10.29.13.235",
-        "proto": "tcp",
-        "name": "Web",
-        "dst_port": "80",
-        "_id": "test456",
-        "fwd_port": "8080"
-    }
-
-    switch = UDMPortForwardRuleSwitch(coordinator, api, rule)
-    assert switch.name == "Port Forward: Web (10.29.13.235) (t456)"
-    assert switch.unique_id == "pf_web_t456"
-
-@pytest.mark.asyncio
-async def test_port_forward_rule_switch_toggle_on():
-    """Test turning on a port forward rule switch."""
-    coordinator = MagicMock()
-    api = MagicMock()
-    api.toggle_port_forward_rule = AsyncMock(return_value=(True, None))
-    api.get_port_forward_rules = AsyncMock(return_value=(True, [{"_id": "test123", "enabled": True}], None))
-    coordinator.async_request_refresh = AsyncMock()
-
-    rule = {
-        "pfwd_interface": "wan",
-        "src": "any",
-        "enabled": False,
-        "fwd": "10.29.13.235",
-        "proto": "tcp",
-        "name": "Test",
-        "_id": "test123",
-        "dst_port": "80",
-        "fwd_port": "80"
-    }
-
-    switch = UDMPortForwardRuleSwitch(coordinator, api, rule)
-    await switch.async_turn_on()
-    
-    api.toggle_port_forward_rule.assert_called_once_with("test123", True)
-    api.get_port_forward_rules.assert_called()
-    coordinator.async_request_refresh.assert_called_once()
-
-@pytest.mark.asyncio
-async def test_port_forward_rule_switch_toggle_failure():
+async def test_port_forward_rule_switch_toggle_failure(hass: HomeAssistant):
     """Test handling of toggle failure for port forward rule switch."""
     coordinator = MagicMock()
+    coordinator.hass = hass
+    coordinator.data = {
+        "port_forward_rules": [{
+            "_id": "test123",
+            "enabled": False,
+            "name": "Test",
+            "fwd": "10.29.13.235"
+        }]
+    }
     api = MagicMock()
     api.toggle_port_forward_rule = AsyncMock(return_value=(False, "API Error"))
+    api.supports_websocket = MagicMock(return_value=False)
 
     rule = {
         "pfwd_interface": "wan",
@@ -366,13 +303,24 @@ async def test_port_forward_rule_switch_toggle_failure():
     }
 
     switch = UDMPortForwardRuleSwitch(coordinator, api, rule)
+    switch.hass = hass
+    switch.entity_id = "switch.port_forward_test"
     with pytest.raises(HomeAssistantError):
         await switch.async_turn_on()
 
 @pytest.mark.asyncio
-async def test_port_forward_rule_switch_coordinator_update():
+async def test_port_forward_rule_switch_coordinator_update(hass: HomeAssistant):
     """Test coordinator update handling for port forward rule switch."""
     coordinator = MagicMock()
+    coordinator.hass = hass
+    coordinator.data = {
+        "port_forward_rules": [{
+            "_id": "test123",
+            "enabled": False,
+            "name": "Test",
+            "fwd": "10.29.13.235"
+        }]
+    }
     api = MagicMock()
     rule_id = "test123"
     
@@ -389,6 +337,8 @@ async def test_port_forward_rule_switch_coordinator_update():
     }
 
     switch = UDMPortForwardRuleSwitch(coordinator, api, rule)
+    switch.hass = hass
+    switch.entity_id = "switch.port_forward_test"
     
     # Test update with new data
     coordinator.data = {

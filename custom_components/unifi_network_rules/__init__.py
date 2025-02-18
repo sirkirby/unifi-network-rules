@@ -1,4 +1,6 @@
 """Support for UniFi Network Rules."""
+from __future__ import annotations
+from typing import Any, TYPE_CHECKING
 import json
 from datetime import timedelta
 import os
@@ -22,7 +24,9 @@ from .websocket import UnifiRuleWebsocket
 from .coordinator import UDMUpdateCoordinator
 from . import services
 from .utils.logger import log_call
-from .entity_loader import UnifiRuleEntityLoader
+
+if TYPE_CHECKING:
+    from .entity_loader import UnifiRuleEntityLoader
 
 PLATFORMS: list[str] = ["switch"]
 
@@ -81,6 +85,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     coordinator.config_entry = entry  # Set config entry before first refresh
 
+    # Import entity loader here to avoid circular imports
+    from .entity_loader import UnifiRuleEntityLoader
+    
     # Create entity loader
     entity_loader = UnifiRuleEntityLoader(hass, coordinator)
     
@@ -165,29 +172,30 @@ def cleanup_api(hass: HomeAssistant, entry: ConfigEntry):
 
 @log_call
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
-    LOGGER.debug("Starting unload")
+    """Handle unload of an entry."""
+    api = hass.data[DOMAIN][entry.entry_id]['api']
+    entity_loader = hass.data[DOMAIN][entry.entry_id]['entity_loader']
     
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    
-    if unload_ok:
-        if DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
-            entry_data = hass.data[DOMAIN][entry.entry_id]
+    try:
+        # Get all entities from registry for this domain
+        registry = hass.helpers.entity_registry.async_get(hass)
+        entities = [
+            entity_id for entity_id, entry in registry.entities.items()
+            if entry.domain == DOMAIN
+        ]
+        
+        # Remove all entities
+        for entity_id in entities:
+            registry.async_remove(entity_id)
             
-            # Stop websocket
-            if websocket := entry_data.get('websocket'):
-                await websocket.stop_and_wait()
-            
-            # Clean up entity loader
-            if 'entity_loader' in entry_data:
-                await entry_data['entity_loader'].async_unload_entities()
-            
-            # Clean up API
-            api = entry_data.get('api')
-            if api is not None:
-                await api.cleanup()
-                
-            hass.data[DOMAIN].pop(entry.entry_id)
-    
-    LOGGER.debug("Unload complete")
-    return unload_ok
+        LOGGER.info("Removed %d entities during unload", len(entities))
+        
+        # Cleanup resources
+        await api.cleanup()
+        await entity_loader.async_unload_entities()
+        
+        return True
+        
+    except Exception as e:
+        LOGGER.error("Error unloading entry: %s", str(e))
+        return False

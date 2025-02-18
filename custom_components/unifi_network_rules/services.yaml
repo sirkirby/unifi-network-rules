@@ -49,6 +49,50 @@ restore_rules:
             - "port_forward"
           multiple: true
 
+apply_template:
+  name: Apply Rule Template
+  description: Apply a rule template with the specified variables
+  fields:
+    template_id:
+      name: Template ID
+      description: ID of the template to apply
+      required: true
+      selector:
+        text:
+    variables:
+      name: Template Variables
+      description: Variables to use in the template
+      required: false
+      selector:
+        object:
+
+save_template:
+  name: Save Rule Template
+  description: Save a new rule template or update an existing one
+  fields:
+    template_id:
+      name: Template ID
+      description: Unique identifier for the template
+      required: true
+      selector:
+        text:
+    rule_type:
+      name: Rule Type
+      description: Type of rule this template creates
+      required: true
+      selector:
+        select:
+          options:
+            - "firewall_policy"
+            - "traffic_route"
+            - "port_forward"
+    template:
+      name: Template Definition
+      description: Template definition in JSON format
+      required: true
+      selector:
+        object:
+
 bulk_update_rules:
   name: Bulk Update Rules
   description: Enable or disable multiple policies and routes based on matching names.

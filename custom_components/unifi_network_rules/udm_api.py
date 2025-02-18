@@ -395,11 +395,49 @@ class UDMAPI:
 
             return False, None, last_error if last_error else "Max retries reached"
 
+    async def _process_rules_response(
+        self,
+        success: bool,
+        response: Any,
+        error: Optional[str],
+        rule_type: str
+    ) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
+        """Process rule response with consistent error handling."""
+        if not success:
+            return False, None, error
+
+        try:
+            if response is None:
+                logger.error("Empty response received")
+                return False, None, "Empty response"
+
+            # For legacy firewall rules, we expect {data: [...]}
+            if rule_type == "legacy firewall rules":
+                if not isinstance(response, dict) or 'data' not in response:
+                    logger.error(f"Invalid response format for {rule_type}: {response}")
+                    return False, None, "Invalid response format - missing data field"
+                rules = response['data']
+            else:
+                # Handle both direct array and {data: [...]} responses
+                rules = response.get('data', response) if isinstance(response, dict) else response
+            
+            if not isinstance(rules, list):
+                logger.error(f"Rules data is not a list: {type(rules)}")
+                return False, None, f"Invalid response format - expected list"
+
+            logger.debug(f"Successfully fetched {len(rules)} {rule_type}")
+            return True, rules, None
+
+        except Exception as e:
+            logger.exception(f"Error processing {rule_type}")
+            return False, None, f"Error processing response: {str(e)}"
+
     async def get_firewall_policies(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch firewall policies from the UDM."""
         url = f"https://{self.host}{FIREWALL_POLICIES_ENDPOINT}"
-        return await self._make_authenticated_request('get', url)
-    
+        success, response, error = await self._make_authenticated_request('get', url)
+        return await self._process_rules_response(success, response, error, "firewall policies")
+
     async def get_firewall_policy(self, policy_id: str) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
         """Fetch a single firewall policy by its policy_id."""
         success, policies, error = await self.get_firewall_policies()
@@ -415,7 +453,8 @@ class UDMAPI:
     async def get_traffic_routes(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch all traffic routes from the UDM."""
         url = f"https://{self.host}{TRAFFIC_ROUTES_ENDPOINT}"
-        return await self._make_authenticated_request('get', url)
+        success, response, error = await self._make_authenticated_request('get', url)
+        return await self._process_rules_response(success, response, error, "traffic routes")
 
     async def toggle_firewall_policy(self, policy_id: str, enabled: bool):
         """Toggle a firewall policy on or off."""
@@ -479,60 +518,13 @@ class UDMAPI:
         """Fetch legacy firewall rules from the UDM."""
         url = f"https://{self.host}{LEGACY_FIREWALL_RULES_ENDPOINT}"
         success, response, error = await self._make_authenticated_request('get', url)
-        
-        if not success:
-            return False, None, error
-            
-        try:
-            if not isinstance(response, dict):
-                logger.error(f"Unexpected response type: {type(response)}")
-                return False, None, "Invalid response format - not a dictionary"
-                
-            if 'data' not in response:
-                logger.error(f"No 'data' key in response: {response}")
-                return False, None, "Invalid response format - missing data key"
-                
-            rules = response['data']
-            if not isinstance(rules, list):
-                logger.error(f"Rules data is not a list: {type(rules)}")
-                return False, None, "Invalid rules format"
-                
-            logger.debug(f"Successfully fetched {len(rules)} legacy firewall rules")
-            for rule in rules:
-                logger.debug(f"Rule: {rule.get('name', 'Unnamed')} - Enabled: {rule.get('enabled', False)}")
-                
-            return True, rules, None
-            
-        except Exception as e:
-            logger.exception("Error processing legacy firewall rules")
-            return False, None, f"Error processing response: {str(e)}"
+        return await self._process_rules_response(success, response, error, "legacy firewall rules")
 
     async def get_legacy_traffic_rules(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch legacy traffic rules from the UDM."""
         url = f"https://{self.host}{LEGACY_TRAFFIC_RULES_ENDPOINT}"
         success, response, error = await self._make_authenticated_request('get', url)
-        
-        if not success:
-            return False, None, error
-            
-        try:
-            if response is None:
-                logger.error("Empty response received")
-                return False, None, "Empty response"
-                
-            if not isinstance(response, list):
-                logger.error(f"Unexpected response type: {type(response)}")
-                return False, None, f"Invalid response format - expected list, got {type(response)}"
-                
-            logger.debug(f"Successfully fetched {len(response)} legacy traffic rules")
-            for rule in response:
-                logger.debug(f"Traffic Rule: {rule.get('description', 'Unnamed')} - Enabled: {rule.get('enabled', False)}")
-                
-            return True, response, None
-            
-        except Exception as e:
-            logger.exception("Error processing legacy traffic rules")
-            return False, None, f"Error processing response: {str(e)}"
+        return await self._process_rules_response(success, response, error, "legacy traffic rules")
     
     async def get_legacy_firewall_rule(self, rule_id: str) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
         """Fetch a single legacy firewall rule by its rule_id.
@@ -641,30 +633,7 @@ class UDMAPI:
         """Fetch port forwarding rules from the UDM."""
         url = f"https://{self.host}{PORT_FORWARD_ENDPOINT}"
         success, response, error = await self._make_authenticated_request('get', url)
-        
-        if not success:
-            return False, None, error
-            
-        try:
-            if not isinstance(response, dict):
-                logger.error(f"Unexpected response type: {type(response)}")
-                return False, None, "Invalid response format - not a dictionary"
-                
-            if 'data' not in response:
-                logger.error(f"No 'data' key in response: {response}")
-                return False, None, "Invalid response format - missing data key"
-                
-            rules = response['data']
-            if not isinstance(rules, list):
-                logger.error(f"Rules data is not a list: {type(rules)}")
-                return False, None, "Invalid rules format"
-                
-            logger.debug(f"Successfully fetched {len(rules)} port forward rules")
-            return True, rules, None
-            
-        except Exception as e:
-            logger.exception("Error processing port forward rules")
-            return False, None, f"Error processing response: {str(e)}"
+        return await self._process_rules_response(success, response, error, "port forward rules")
 
     async def toggle_port_forward_rule(self, rule_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
         """Toggle a port forward rule."""
@@ -845,11 +814,67 @@ class UDMAPI:
     async def update_rule_state(self, rule_type: str, rule_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
         """Update the state of a rule."""
         try:
+            # Special handling for firewall policies which use a batch endpoint
+            if rule_type == 'firewall_policies' and self.capabilities.zone_based_firewall:
+                return await self.toggle_firewall_policy(rule_id, enabled)
+
+            # Get the current rule to preserve all other fields
             if rule_type == 'traffic_routes':
-                return await self.toggle_traffic_route(rule_id, enabled)
+                success, rules, error = await self.get_traffic_routes()
             elif rule_type == 'port_forward_rules':
-                return await self.toggle_port_forward_rule(rule_id, enabled)
-            return False, f"Unsupported rule type: {rule_type}"
+                success, rules, error = await self.get_port_forward_rules()
+            elif rule_type == 'firewall_rules' and self.capabilities.legacy_firewall:
+                success, rules, error = await self.get_legacy_firewall_rules()
+            elif rule_type == 'traffic_rules' and self.capabilities.legacy_firewall:
+                success, rules, error = await self.get_legacy_traffic_rules()
+            else:
+                return False, f"Unsupported rule type: {rule_type}"
+
+            if not success:
+                return False, f"Failed to fetch {rule_type}: {error}"
+
+            rule = next((r for r in rules if r.get('_id') == rule_id), None)
+            if not rule:
+                return False, f"{rule_type} with ID {rule_id} not found"
+
+            # Update the rule state
+            updated_rule = dict(rule)
+            updated_rule['enabled'] = enabled
+
+            # Determine the endpoint for the update
+            if rule_type == 'traffic_routes':
+                url = f"{TRAFFIC_ROUTES_ENDPOINT}/{rule_id}"
+            elif rule_type == 'port_forward_rules':
+                url = f"{PORT_FORWARD_ENDPOINT}/{rule_id}"
+            elif rule_type == 'firewall_rules':
+                url = f"{LEGACY_FIREWALL_RULES_ENDPOINT}/{rule_id}"
+            elif rule_type == 'traffic_rules':
+                url = f"{LEGACY_TRAFFIC_RULES_ENDPOINT}/{rule_id}"
+            else:
+                return False, f"No endpoint for rule type: {rule_type}"
+
+            # Make the update request
+            url = f"https://{self.host}{url}"
+            success, response, error = await self._make_authenticated_request('put', url, updated_rule)
+            
+            if not success:
+                return False, f"Failed to update {rule_type}: {error}"
+
+            return True, None
+
         except Exception as e:
             logger.error("Error updating rule state: %s", str(e))
             return False, str(e)
+
+    async def get_cookie(self) -> str:
+        """Get the authentication cookie for websocket connections."""
+        # Ensure we have a valid session first
+        auth_success, auth_error = await self.ensure_authenticated()
+        if not auth_success:
+            raise Exception(f"Failed to authenticate: {auth_error}")
+            
+        # Return the TOKEN cookie if we have it
+        if cookie := self._cookies.get(COOKIE_TOKEN):
+            return cookie
+            
+        raise Exception("No valid authentication cookie found")

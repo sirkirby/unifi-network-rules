@@ -1,8 +1,6 @@
 """UniFi Network Rules entity loader and management."""
 from __future__ import annotations
-
-import logging
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Callable, Generic, TypeVar, TYPE_CHECKING
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -14,6 +12,10 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import DOMAIN, LOGGER
 from .coordinator import UDMUpdateCoordinator
+from .utils.registry import async_get_registry
+
+if TYPE_CHECKING:
+    from homeassistant.helpers.entity_registry import EntityRegistry
 
 T = TypeVar("T", bound=Entity)
 
@@ -39,6 +41,10 @@ class UnifiRuleEntityLoader(Generic[T]):
         self._data_subscriptions: dict[str, set[str]] = {}  # Track entities by data type
         self._initialized = False
         
+    def _get_registry(self) -> EntityRegistry:
+        """Get the entity registry."""
+        return async_get_registry(self.hass)
+
     @callback
     def async_setup_platform(
         self,
@@ -47,11 +53,28 @@ class UnifiRuleEntityLoader(Generic[T]):
     ) -> None:
         """Set up an entity platform."""
         self._async_add_entities[platform] = async_add_entities
+        self._initialized = True
         
-        # Add any pending entities for this platform
+        # Add any pending entities
         if platform in self._pending_entities and self._pending_entities[platform]:
             async_add_entities(self._pending_entities.pop(platform))
-        self._initialized = True
+            
+    def _cleanup_stale_entities(self, platform: str) -> None:
+        """Clean up stale entities from the registry."""
+        registry = self._get_registry()
+        removed = []
+
+        # Get all entities for our domain
+        for entity_id, entry in registry.entities.items():
+            if entry.domain == DOMAIN and entry.platform == platform:
+                # Check if entity is still valid
+                if entry.unique_id not in self._entity_definitions:
+                    registry.async_remove(entity_id)
+                    removed.append(entity_id)
+                    LOGGER.debug("Removed stale entity %s", entity_id)
+
+        if removed:
+            LOGGER.info("Cleaned up %d stale entities: %s", len(removed), removed)
             
     @callback
     def async_add_entity(
@@ -62,47 +85,62 @@ class UnifiRuleEntityLoader(Generic[T]):
         data_key: str,
     ) -> None:
         """Add an entity to a platform with data key tracking."""
-        # Don't add entities if coordinator isn't ready
-        if not self.coordinator.data:
-            LOGGER.debug("Skipping entity add, coordinator not ready: %s", unique_id)
-            return
+        try:
+            # Don't add entities if coordinator isn't ready
+            if not self.coordinator.data:
+                LOGGER.debug("Skipping entity add, coordinator not ready: %s", unique_id)
+                return
 
-        if not self._initialized:
-            LOGGER.debug("Entity loader not initialized yet, queueing entity: %s", unique_id)
-            if platform not in self._pending_entities:
-                self._pending_entities[platform] = []
-            self._pending_entities[platform].append(entity_factory())
-            return
+            # If this is our first entity, clean up any stale ones
+            if not self._entity_definitions:
+                self._cleanup_stale_entities(platform)
+
+            # Check if entity is already tracked
+            if unique_id in self._entity_definitions:
+                LOGGER.debug("Entity %s already tracked", unique_id)
+                return
+
+            # Create and validate entity
+            entity = entity_factory()
+            if not hasattr(entity, 'unique_id') or entity.unique_id != unique_id:
+                LOGGER.error(
+                    "Entity factory created entity with mismatched unique_id. Expected: %s, Got: %s",
+                    unique_id,
+                    getattr(entity, 'unique_id', None)
+                )
+                return
+
+            # Store entity definition
+            entity_def = EntityDefinition(
+                unique_id=unique_id,
+                platform=platform,
+                factory=entity_factory,
+                data_key=data_key
+            )
+            self._entity_definitions[unique_id] = entity_def
+
+            # Track by platform
+            if platform not in self.entities:
+                self.entities[platform] = set()
+            self.entities[platform].add(unique_id)
             
-        if platform not in self.entities:
-            self.entities[platform] = set()
-            
-        if unique_id in self.entities[platform]:
-            return
-            
-        LOGGER.debug("Adding entity %s for platform %s", unique_id, platform)
-        self.entities[platform].add(unique_id)
-        entity_def = EntityDefinition(
-            unique_id=unique_id,
-            platform=platform,
-            factory=entity_factory,
-            data_key=data_key
-        )
-        self._entity_definitions[unique_id] = entity_def
-        
-        # Track entity by its data type
-        if data_key not in self._data_subscriptions:
-            self._data_subscriptions[data_key] = set()
-        self._data_subscriptions[data_key].add(unique_id)
-        
-        entity = entity_factory()
-        
-        if platform in self._async_add_entities:
-            self._async_add_entities[platform]([entity])
-        else:
-            if platform not in self._pending_entities:
-                self._pending_entities[platform] = []
-            self._pending_entities[platform].append(entity)
+            # Track by data type
+            if data_key not in self._data_subscriptions:
+                self._data_subscriptions[data_key] = set()
+            self._data_subscriptions[data_key].add(unique_id)
+
+            # Add entity to HA
+            if self._initialized and platform in self._async_add_entities:
+                LOGGER.debug("Adding entity %s to Home Assistant", unique_id)
+                self._async_add_entities[platform]([entity])
+            else:
+                LOGGER.debug("Queueing entity %s for later addition", unique_id)
+                if platform not in self._pending_entities:
+                    self._pending_entities[platform] = []
+                self._pending_entities[platform].append(entity)
+
+        except Exception as e:
+            LOGGER.error("Error adding entity %s: %s", unique_id, str(e))
             
     @callback
     def async_remove_entity(
@@ -111,74 +149,71 @@ class UnifiRuleEntityLoader(Generic[T]):
         unique_id: str,
     ) -> None:
         """Remove an entity from a platform."""
-        if platform in self.entities:
-            self.entities[platform].discard(unique_id)
-            
-            # Remove from data type tracking
-            entity_def = self._entity_definitions.get(unique_id)
-            if entity_def and entity_def.data_key in self._data_subscriptions:
-                self._data_subscriptions[entity_def.data_key].discard(unique_id)
-                if not self._data_subscriptions[entity_def.data_key]:
-                    del self._data_subscriptions[entity_def.data_key]
-            
-            self._entity_definitions.pop(unique_id, None)
+        try:
+            if platform in self.entities:
+                self.entities[platform].discard(unique_id)
+                
+                # Remove from data type tracking
+                entity_def = self._entity_definitions.get(unique_id)
+                if entity_def and entity_def.data_key in self._data_subscriptions:
+                    self._data_subscriptions[entity_def.data_key].discard(unique_id)
+                    if not self._data_subscriptions[entity_def.data_key]:
+                        del self._data_subscriptions[entity_def.data_key]
+                
+                self._entity_definitions.pop(unique_id, None)
+
+            # Remove from entity registry if it exists
+            registry = self._get_registry()
+            entity_id = registry.async_get_entity_id(platform, DOMAIN, unique_id)
+            if entity_id:
+                registry.async_remove(entity_id)
+                LOGGER.debug("Removed entity %s from registry", entity_id)
+
+        except Exception as e:
+            LOGGER.error("Error removing entity %s: %s", unique_id, str(e))
             
     async def async_handle_coordinator_update(self, data: dict) -> None:
         """Handle coordinator data updates."""
         if not data:
+            LOGGER.warning("No data in coordinator update")
             return
 
         LOGGER.debug("Handling coordinator update with data keys: %s", list(data.keys()))
-        
-        update_stats = {
-            'total': 0,
-            'removed': 0,
-            'updated': 0
-        }
-        
-        # Process updates for each data type
+
+        # Build set of valid rule IDs from all data types
+        valid_rule_ids = set()
         for data_key, rules in data.items():
-            if data_key not in self._data_subscriptions:
-                continue
-                
-            update_stats['total'] += 1
-            
-            # Get the actual rules list, handling nested data structures
+            # Handle nested data structures
             if isinstance(rules, dict) and 'data' in rules:
                 rules = rules['data']
-            elif not isinstance(rules, list):
-                LOGGER.warning("Unexpected data format for %s: %s", data_key, type(rules))
-                continue
+            if isinstance(rules, list):
+                for rule in rules:
+                    if isinstance(rule, dict) and '_id' in rule:
+                        valid_rule_ids.add(rule['_id'])
 
-            # Build set of current rule IDs
-            current_rule_ids = {rule.get('_id') for rule in rules if rule.get('_id')}
-            
-            # Check entities subscribed to this data type
-            for unique_id in list(self._data_subscriptions[data_key]):
+        # Check all tracked entities against valid rules
+        removed_entities = []
+        for data_key, subscriptions in list(self._data_subscriptions.items()):
+            for unique_id in list(subscriptions):
                 entity_def = self._entity_definitions.get(unique_id)
                 if not entity_def:
                     continue
-                    
+
                 # Extract rule ID from unique_id
                 rule_id = self._extract_rule_id(unique_id)
                 if not rule_id:
+                    LOGGER.warning("Could not extract rule ID from unique_id: %s", unique_id)
                     continue
-                
-                # Remove entity if its rule no longer exists
-                if rule_id not in current_rule_ids:
-                    LOGGER.debug("Removing entity %s as rule %s no longer exists", 
+
+                # Remove entity if rule no longer exists
+                if rule_id not in valid_rule_ids:
+                    LOGGER.debug("Removing entity for non-existent rule: %s (rule_id: %s)", 
                                unique_id, rule_id)
                     self.async_remove_entity(entity_def.platform, unique_id)
-                    update_stats['removed'] += 1
-                else:
-                    update_stats['updated'] += 1
+                    removed_entities.append(unique_id)
 
-        LOGGER.debug(
-            "Coordinator update complete - Total: %d, Updated: %d, Removed: %d",
-            update_stats['total'],
-            update_stats['updated'],
-            update_stats['removed']
-        )
+        if removed_entities:
+            LOGGER.info("Removed %d stale entities: %s", len(removed_entities), removed_entities)
 
     def _extract_rule_id(self, unique_id: str) -> str | None:
         """Extract rule ID from entity unique_id."""

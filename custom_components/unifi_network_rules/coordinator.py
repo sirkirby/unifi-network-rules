@@ -60,53 +60,56 @@ class UDMUpdateCoordinator(DataUpdateCoordinator):
             data = {}
             fetch_errors = []
             
-            # Always fetch port forward rules
+            # Always fetch port forward rules first
             try:
                 port_fwd_success, port_fwd_rules, port_fwd_error = await self.api.get_port_forward_rules()
-                if not port_fwd_success:
-                    fetch_errors.append(f"Failed to fetch port forwarding rules: {port_fwd_error}")
-                else:
+                if port_fwd_success:
                     data['port_forward_rules'] = port_fwd_rules
+                else:
+                    fetch_errors.append(f"Failed to fetch port forwarding rules: {port_fwd_error}")
             except Exception as e:
                 fetch_errors.append(f"Error fetching port forwarding rules: {str(e)}")
             
-            # Always fetch traffic routes
+            # Fetch traffic routes if supported
             if self.api.capabilities.traffic_routes:
                 try:
                     routes_success, routes, routes_error = await self.api.get_traffic_routes()
-                    if not routes_success:
-                        fetch_errors.append(f"Failed to fetch traffic routes: {routes_error}")
-                    else:
+                    if routes_success:
                         data['traffic_routes'] = routes
+                    else:
+                        fetch_errors.append(f"Failed to fetch traffic routes: {routes_error}")
                 except Exception as e:
                     fetch_errors.append(f"Error fetching traffic routes: {str(e)}")
             
-            # Fetch firewall data based on capabilities
+            # Handle firewall data based on capabilities
             if self.api.capabilities.zone_based_firewall:
                 try:
                     policies_success, policies, policies_error = await self.api.get_firewall_policies()
-                    if not policies_success:
-                        fetch_errors.append(f"Failed to fetch policies: {policies_error}")
-                    else:
+                    if policies_success:
+                        # Filter out predefined policies
                         data['firewall_policies'] = [
-                            policy for policy in (policies or [])
-                            if not policy.get('predefined', False)
+                            p for p in policies
+                            if not p.get('predefined', False)
                         ]
+                    else:
+                        fetch_errors.append(f"Failed to fetch policies: {policies_error}")
                 except Exception as e:
                     fetch_errors.append(f"Error fetching firewall policies: {str(e)}")
             elif self.api.capabilities.legacy_firewall:
                 try:
+                    # Legacy firewall rules
                     rules_success, rules, rules_error = await self.api.get_legacy_firewall_rules()
-                    if not rules_success:
+                    if rules_success:
+                        data['firewall_rules'] = {'data': rules}
+                    else:
                         fetch_errors.append(f"Failed to fetch legacy firewall rules: {rules_error}")
-                    else:
-                        data['firewall_rules'] = {'data': rules or []}
-                        
+                    
+                    # Legacy traffic rules
                     traffic_success, traffic, traffic_error = await self.api.get_legacy_traffic_rules()
-                    if not traffic_success:
-                        fetch_errors.append(f"Failed to fetch legacy traffic rules: {traffic_error}")
+                    if traffic_success:
+                        data['traffic_rules'] = traffic
                     else:
-                        data['traffic_rules'] = traffic or []
+                        fetch_errors.append(f"Failed to fetch legacy traffic rules: {traffic_error}")
                 except Exception as e:
                     fetch_errors.append(f"Error fetching legacy rules: {str(e)}")
             
@@ -114,31 +117,73 @@ class UDMUpdateCoordinator(DataUpdateCoordinator):
             if not data and fetch_errors:
                 raise UpdateFailed("\n".join(fetch_errors))
                 
-            # If we have some data, log errors but return what we have
+            # Log any errors but return what data we have
             if fetch_errors:
                 LOGGER.warning("Some data fetching failed:\n%s", "\n".join(fetch_errors))
                 
+            # Log successful data fetch for debugging
+            LOGGER.debug("Fetched data: %s", {k: len(v) if isinstance(v, list) else len(v.get('data', [])) for k, v in data.items()})
+                
             return data
             
+        except ConfigEntryAuthFailed:
+            raise
         except Exception as e:
-            LOGGER.exception("Unexpected error in coordinator update: %s", str(e))
+            LOGGER.exception("Unexpected error in coordinator update")
             raise UpdateFailed(f"Data update failed: {str(e)}")
 
     @callback
-    def handle_websocket_message(self, msg: dict) -> None:
+    def handle_websocket_message(self, msg: dict | list) -> None:
         """Handle websocket messages."""
         if not self.data:
             LOGGER.debug("No coordinator data available for websocket update")
             return
 
-        msg_type = msg.get("meta", {}).get("message")
-        if not msg_type:
-            return
-        
-        data = msg.get("data", {})
-        LOGGER.debug("Received websocket message: %s with data: %s", msg_type, data)
-
         try:
+            # If we receive a list, process each message individually
+            if isinstance(msg, list):
+                for single_msg in msg:
+                    if isinstance(single_msg, dict):
+                        self._process_single_message(single_msg)
+                    else:
+                        LOGGER.warning("Invalid message in list: %s", type(single_msg))
+                return
+
+            # Handle single message
+            if isinstance(msg, dict):
+                self._process_single_message(msg)
+            else:
+                LOGGER.warning("Invalid websocket message format: %s", type(msg))
+
+        except Exception as err:
+            LOGGER.error("Error handling websocket message: %s - %s", msg, err)
+
+    def _process_single_message(self, msg: dict) -> None:
+        """Process a single websocket message."""
+        try:
+            meta = msg.get("meta", {})
+            if not isinstance(meta, dict):
+                LOGGER.warning("Invalid meta format in message: %s", type(meta))
+                return
+
+            msg_type = meta.get("message")
+            if not msg_type:
+                LOGGER.debug("No message type in websocket data")
+                return
+
+            data = msg.get("data", {})
+            # Some messages might have list data, handle it appropriately
+            if not isinstance(data, (dict, list)):
+                LOGGER.debug("Unexpected data type in message: %s", type(data))
+                return
+
+            LOGGER.debug("Processing websocket message: %s with data: %s", msg_type, data)
+
+            # Convert list data to dict if needed
+            if isinstance(data, list) and len(data) > 0:
+                data = data[0] if isinstance(data[0], dict) else {}
+
+            # Process message based on type
             if msg_type in ("firewall_rule_add", "firewall_rule_update", "firewall_rule_remove"):
                 self._handle_firewall_rule_message(msg_type, data)
             elif msg_type in ("port_forward_add", "port_forward_update", "port_forward_remove"):
@@ -151,8 +196,44 @@ class UDMUpdateCoordinator(DataUpdateCoordinator):
                 self._handle_firewall_policy_message(msg_type, data)
             else:
                 LOGGER.debug("Unhandled message type: %s", msg_type)
+
         except Exception as err:
-            LOGGER.error("Error handling websocket message: %s - %s", msg_type, err)
+            LOGGER.error("Error processing single message: %s - %s", msg, err)
+
+    def _verify_entities(self) -> None:
+        """Verify all entities still correspond to existing rules."""
+        if not self.hass or not self.data:
+            return
+            
+        try:
+            # Get entity loader from config entry
+            if self.config_entry and DOMAIN in self.hass.data:
+                entry_data = self.hass.data[DOMAIN].get(self.config_entry.entry_id, {})
+                entity_loader = entry_data.get('entity_loader')
+                if entity_loader:
+                    # Use entity loader's coordinator update handler to clean up entities
+                    self.hass.async_create_task(
+                        entity_loader.async_handle_coordinator_update(self.data),
+                        name="verify_entities"
+                    )
+        except Exception as err:
+            LOGGER.error("Error verifying entities: %s", err)
+
+    def _normalize_rule_data(self, data: Any, rule_type: str) -> list:
+        """Normalize rule data to a consistent format."""
+        if not data:
+            return []
+            
+        # Handle legacy rule format that uses {data: [...]}
+        if isinstance(data, dict) and 'data' in data:
+            data = data['data']
+            
+        # Ensure we always return a list
+        if not isinstance(data, list):
+            LOGGER.warning("Unexpected data format for %s: %s", rule_type, type(data))
+            return []
+            
+        return data
 
     def _update_data_list(self, data_key: str, action: str, item_data: dict) -> None:
         """Update a list in coordinator data."""
@@ -164,11 +245,7 @@ class UDMUpdateCoordinator(DataUpdateCoordinator):
             self.data[data_key] = []
             
         existing_data = self.data[data_key]
-        if isinstance(existing_data, dict) and 'data' in existing_data:
-            # Handle nested data structure (used by legacy firewall rules)
-            data_list = existing_data['data']
-        else:
-            data_list = existing_data
+        data_list = self._normalize_rule_data(existing_data, data_key)
 
         item_id = item_data.get("_id")
         
@@ -180,7 +257,6 @@ class UDMUpdateCoordinator(DataUpdateCoordinator):
             if action.endswith("_add"):
                 if data_key == "firewall_policies" and item_data.get("predefined", False):
                     return
-                # Don't add if item already exists
                 if not any(item.get("_id") == item_id for item in data_list):
                     data_list.append(item_data)
                 
@@ -188,17 +264,10 @@ class UDMUpdateCoordinator(DataUpdateCoordinator):
                 updated = False
                 for i, existing in enumerate(data_list):
                     if existing.get("_id") == item_id:
-                        if data_key == "firewall_policies" and item_data.get("predefined", False):
-                            data_list.pop(i)
-                        else:
-                            # Special handling for traffic routes and port forwards
-                            if data_key in ('traffic_routes', 'port_forward_rules'):
-                                # Create a new dict with updated values
-                                new_data = dict(existing)
-                                new_data.update(item_data)
-                                data_list[i] = new_data
-                            else:
-                                data_list[i] = {**existing, **item_data}  # Merge data
+                        # Create a new dict to avoid modifying existing data
+                        updated_item = dict(existing)
+                        updated_item.update(item_data)
+                        data_list[i] = updated_item
                         updated = True
                         break
                         
@@ -212,14 +281,11 @@ class UDMUpdateCoordinator(DataUpdateCoordinator):
                     if item.get("_id") != item_id
                 ]
 
-            # Update the main data structure if needed
-            if isinstance(existing_data, dict) and 'data' in existing_data:
-                self.data[data_key]['data'] = data_list
-            else:
-                self.data[data_key] = data_list
+            # Update the main data structure
+            self.data[data_key] = data_list
 
             # Store previous state for change detection
-            self._previous_data[data_key] = data_list.copy() if isinstance(data_list, list) else {'data': data_list.copy()}
+            self._previous_data[data_key] = data_list.copy()
             
             # Trigger entity updates
             self.async_set_updated_data(self.data)
@@ -231,239 +297,105 @@ class UDMUpdateCoordinator(DataUpdateCoordinator):
             )
 
     @callback
-    def _handle_firewall_rule_message(self, action: str, data: dict) -> None:
-        """Handle firewall rule message."""
-        if self.api.capabilities.legacy_firewall:
-            if 'firewall_rules' not in self.data:
-                self.data['firewall_rules'] = {'data': []}
-            self._update_data_list('firewall_rules', action, data)
-            # Create task for websocket update
-            self.hass.async_create_task(
-                self._handle_websocket_update('firewall_rules', action, data),
-                name="unifi_rules_ws_update"
-            )
-
-    @callback
     async def _handle_websocket_update(self, rule_type: str, action: str, data: dict) -> bool:
         """Handle websocket-based update."""
         try:
             update_start = datetime.now()
             
-            # Special handling for traffic routes and port forwards
-            if rule_type in ('traffic_routes', 'port_forward_rules'):
-                # Ensure the data exists in the coordinator
-                if rule_type not in self.data:
-                    self.data[rule_type] = []
-                
-                # Find and update the specific rule
-                rule_id = data.get('_id')
-                if rule_id:
-                    existing_data = self.data[rule_type]
-                    current_state = None
-                    
-                    for i, item in enumerate(existing_data):
-                        if item.get('_id') == rule_id:
-                            # Store current state
-                            current_state = dict(item)
-                            
-                            # Create new dict to avoid modifying existing data
-                            updated_item = dict(item)
-                            updated_item.update(data)
-                            
-                            # Ensure boolean type for enabled state
-                            if 'enabled' in updated_item:
-                                updated_item['enabled'] = bool(updated_item['enabled'])
-                            
-                            # Update API state first
-                            success, error = await self.api.update_rule_state(
-                                rule_type, 
-                                rule_id, 
-                                updated_item.get('enabled', False)
-                            )
-                            
-                            if success:
-                                # Only update coordinator data if API update succeeded
-                                self.data[rule_type][i] = updated_item
-                                # Force a coordinator update to refresh entities
-                                self.async_set_updated_data(self.data)
-                            else:
-                                # Restore previous state if API update failed
-                                if current_state:
-                                    self.data[rule_type][i] = current_state
-                                    self.async_set_updated_data(self.data)
-                                LOGGER.error("Failed to update rule state: %s", error)
-                                return False
-                            
-                            break
-                    else:
-                        # Rule not found, might be a new rule
-                        if action.endswith('_add'):
-                            self.data[rule_type].append(data)
-            else:
-                # Standard update for other rule types
-                self._update_data_list(rule_type, action, data)
+            # Store current state for verification
+            rule_id = data.get('_id')
+            if rule_id:
+                current_state = self.get_rule(rule_id)
+
+            # Ensure the data exists in coordinator
+            if rule_type not in self.data:
+                self.data[rule_type] = []
+
+            # Normalize input data
+            if 'enabled' in data:
+                data['enabled'] = bool(data['enabled'])
+
+            # Try API update first
+            success, error = await self.api.update_rule_state(rule_type, rule_id, data.get('enabled', False))
             
+            if success:
+                # Update coordinator data
+                self._update_data_list(rule_type, action, data)
+                self.async_set_updated_data(self.data)
+            else:
+                # Restore previous state if API update failed
+                if current_state:
+                    self._update_data_list(rule_type, 'update', current_state)
+                    self.async_set_updated_data(self.data)
+                LOGGER.error("Failed to update rule state: %s", error)
+                return False
+
             update_duration = (datetime.now() - update_start).total_seconds()
             LOGGER.debug(
                 "Websocket update for %s completed in %.3f seconds (action: %s)", 
                 rule_type, update_duration, action
             )
             
-            # Track websocket performance
-            if not hasattr(self, '_websocket_stats'):
-                self._websocket_stats = {}
-            
-            if rule_type not in self._websocket_stats:
-                self._websocket_stats[rule_type] = {
-                    'success_count': 0,
-                    'failure_count': 0,
-                    'total_duration': 0,
-                    'last_success': None
-                }
-            
-            stats = self._websocket_stats[rule_type]
-            stats['success_count'] += 1
-            stats['total_duration'] += update_duration
-            stats['last_success'] = datetime.now()
-            
-            # Log performance stats periodically
-            if stats['success_count'] % 10 == 0:
-                avg_duration = stats['total_duration'] / stats['success_count']
-                LOGGER.info(
-                    "%s websocket stats - Success: %d, Failures: %d, Avg Duration: %.3fs",
-                    rule_type,
-                    stats['success_count'],
-                    stats['failure_count'],
-                    avg_duration
-                )
-            
             return True
             
         except Exception as err:
-            LOGGER.warning(
+            LOGGER.error(
                 "Failed to process websocket update for %s (%s): %s", 
                 rule_type, action, str(err)
             )
-            
-            # Track failure
-            if hasattr(self, '_websocket_stats') and rule_type in self._websocket_stats:
-                self._websocket_stats[rule_type]['failure_count'] += 1
-            
             return False
+
+    @callback
+    def _handle_rule_message(self, rule_type: str, action: str, data: dict) -> None:
+        """Generic handler for rule messages."""
+        try:
+            # Create a copy of the original data
+            rule_data = dict(data)
+            
+            # Ensure the enabled state is properly set
+            if 'enabled' in rule_data:
+                rule_data['enabled'] = bool(rule_data['enabled'])
+            
+            if rule_type not in self.data:
+                self.data[rule_type] = []
+            
+            # Create update task
+            self.hass.async_create_task(
+                self._handle_websocket_update(rule_type, action, rule_data),
+                name=f"unifi_rules_{rule_type}_update"
+            )
+
+        except Exception as err:
+            LOGGER.error("Error in %s message handler: %s", rule_type, err)
+
+    @callback
+    def _handle_firewall_rule_message(self, action: str, data: dict) -> None:
+        """Handle firewall rule message."""
+        if self.api.capabilities.legacy_firewall:
+            self._handle_rule_message('firewall_rules', action, data)
 
     @callback
     def _handle_firewall_policy_message(self, action: str, data: dict) -> None:
         """Handle firewall policy message."""
         if self.api.capabilities.zone_based_firewall:
-            self.hass.async_create_task(
-                self._handle_websocket_update('firewall_policies', action, data),
-                name="unifi_rules_ws_update"
-            )
+            self._handle_rule_message('firewall_policies', action, data)
 
     @callback
     def _handle_traffic_rule_message(self, action: str, data: dict) -> None:
         """Handle traffic rule message."""
         if self.api.capabilities.legacy_firewall:
-            self.hass.async_create_task(
-                self._handle_websocket_update('traffic_rules', action, data),
-                name="unifi_rules_ws_update"
-            )
+            self._handle_rule_message('traffic_rules', action, data)
 
     @callback
     def _handle_traffic_route_message(self, action: str, data: dict) -> None:
         """Handle traffic route message."""
-        try:
-            # Create a copy of the original data to avoid mutation
-            route_data = dict(data)
-            
-            # Ensure the enabled state is properly set
-            if 'enabled' in route_data:
-                route_data['enabled'] = bool(route_data['enabled'])
-            
-            if 'traffic_routes' not in self.data:
-                self.data['traffic_routes'] = []
-            
-            # Store current state for verification
-            rule_id = route_data.get('_id')
-            if rule_id:
-                previous_state = next(
-                    (route for route in self.data['traffic_routes'] 
-                     if route.get('_id') == rule_id),
-                    None
-                )
-            
-            # Handle the update with retries and state verification
-            async def update_with_retry():
-                for attempt in range(3):  # Try up to 3 times
-                    try:
-                        await self._handle_websocket_update('traffic_routes', action, route_data)
-                        
-                        # Verify state was properly updated
-                        current_state = next(
-                            (route for route in self.data['traffic_routes']
-                             if route.get('_id') == rule_id),
-                            None
-                        )
-                        
-                        if current_state and current_state.get('enabled') == route_data.get('enabled'):
-                            return True
-                            
-                        if attempt < 2:  # Don't sleep on last attempt
-                            await asyncio.sleep(1)
-                            
-                    except Exception as e:
-                        if attempt == 2:  # Last attempt
-                            LOGGER.error("Failed to update traffic route after 3 attempts: %s", e)
-                            if previous_state:
-                                # Restore previous state in coordinator
-                                self._update_data_list('traffic_routes', 'update', previous_state)
-                            return False
-                        await asyncio.sleep(1)  # Wait before retry
-                return False
-            
-            self.hass.async_create_task(
-                update_with_retry(),
-                name="unifi_rules_traffic_update"
-            )
-
-        except Exception as err:
-            LOGGER.error("Error in traffic route message handler: %s", err)
+        self._handle_rule_message('traffic_routes', action, data)
 
     @callback
     def _handle_port_forward_message(self, action: str, data: dict) -> None:
         """Handle port forward message."""
-        try:
-            # Create a copy of the original data to avoid mutation
-            port_data = dict(data)
-            
-            # Ensure the enabled state is properly set
-            if 'enabled' in port_data:
-                port_data['enabled'] = bool(port_data['enabled'])
-            
-            if 'port_forward_rules' not in self.data:
-                self.data['port_forward_rules'] = []
-            
-            # Handle the update with retries
-            async def update_with_retry():
-                for attempt in range(3):  # Try up to 3 times
-                    try:
-                        await self._handle_websocket_update('port_forward_rules', action, port_data)
-                        return True
-                    except Exception as e:
-                        if attempt == 2:  # Last attempt
-                            LOGGER.error("Failed to update port forward rule after 3 attempts: %s", e)
-                            return False
-                        await asyncio.sleep(1)  # Wait before retry
-                return False
-            
-            self.hass.async_create_task(
-                update_with_retry(),
-                name="unifi_rules_portfwd_update"
-            )
+        self._handle_rule_message('port_forward_rules', action, data)
 
-        except Exception as err:
-            LOGGER.error("Error in port forward message handler: %s", err)
-    
     @callback
     def _check_rule_changes(self, rule_type: str, new_rules: list) -> None:
         """Compare new rules with previous data and fire events for changes."""
@@ -524,16 +456,15 @@ class UDMUpdateCoordinator(DataUpdateCoordinator):
 
         # Helper function to find rule in a rule set
         def find_rule(rules):
-            if isinstance(rules, dict) and 'data' in rules:
-                rules = rules['data']
-            return next(
-                (rule for rule in rules if rule.get('_id') == rule_id),
-                None
-            )
+            # Normalize the rules data first
+            rules = self._normalize_rule_data(rules, '')
+            return next((rule for rule in rules if rule.get('_id') == rule_id), None)
 
-        # Check each rule type
-        for rule_type in ['firewall_policies', 'traffic_routes', 
-                         'firewall_rules', 'traffic_rules', 'port_forward_rules']:
+        # Check each rule type in order
+        rule_types = ['firewall_policies', 'traffic_routes', 'port_forward_rules', 
+                     'firewall_rules', 'traffic_rules']
+                     
+        for rule_type in rule_types:
             if rule_type in self.data:
                 if rule := find_rule(self.data[rule_type]):
                     return rule
@@ -616,6 +547,7 @@ class UDMUpdateCoordinator(DataUpdateCoordinator):
                 if rule_type not in self._tracked_rules:
                     self._tracked_rules[rule_type] = set()
                 self._tracked_rules[rule_type].add(rule_id)
+                LOGGER.debug("Started tracking rule %s of type %s", rule_id, rule_type)
                 return True
         return False
 
@@ -624,10 +556,24 @@ class UDMUpdateCoordinator(DataUpdateCoordinator):
         if not hasattr(self, '_tracked_rules'):
             return False
 
-        for rule_type, rules in self._tracked_rules.items():
+        for rule_type, rules in list(self._tracked_rules.items()):
             if rule_id in rules:
                 rules.remove(rule_id)
                 if not rules:
                     del self._tracked_rules[rule_type]
+                LOGGER.debug("Stopped tracking rule %s of type %s", rule_id, rule_type)
+                
+                # Check if rule still exists and notify if it doesn't
+                if not self.get_rule(rule_id):
+                    LOGGER.info("Rule %s no longer exists in coordinator data", rule_id)
+                    # Fire event for rule deletion if Home Assistant is available
+                    if self.hass:
+                        self.hass.bus.async_fire(
+                            EVENT_RULE_DELETED,
+                            {
+                                "rule_id": rule_id,
+                                "rule_type": rule_type
+                            }
+                        )
                 return True
         return False
