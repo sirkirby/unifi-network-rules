@@ -161,29 +161,43 @@ class UDMFirewallPolicySwitch(UDMBaseSwitch):
     @log_call
     async def _toggle(self, new_state: bool) -> None:
         """Toggle the firewall policy state."""
-        if self._websocket_supported:
-            # Use websocket-based update if supported
-            success = await self.coordinator._handle_websocket_update(
-                'firewall_policies',
-                'update',
-                {**self._item_data, 'enabled': new_state}
-            )
-            if not success:
-                # Fall back to REST API if websocket update fails
+        try:
+            self._pending_state = new_state
+            self.async_write_ha_state()
+            
+            if self._websocket_supported:
+                # Create update task and wait for result
+                update_task = self.coordinator._handle_websocket_update(
+                    'firewall_policies',
+                    'update',
+                    {**self._item_data, 'enabled': new_state}
+                )
+                success = await update_task
+                
+                if not success:
+                    # Fall back to REST API if websocket update fails
+                    await self._execute_toggle(
+                        new_state,
+                        self._api.toggle_firewall_policy,
+                        self._api.get_firewall_policy,
+                        "firewall policy"
+                    )
+            else:
+                # Use REST API directly
                 await self._execute_toggle(
                     new_state,
                     self._api.toggle_firewall_policy,
                     self._api.get_firewall_policy,
                     "firewall policy"
                 )
-        else:
-            # Use REST API directly
-            await self._execute_toggle(
-                new_state,
-                self._api.toggle_firewall_policy,
-                self._api.get_firewall_policy,
-                "firewall policy"
-            )
+                
+            self._pending_state = None
+            self.async_write_ha_state()
+            
+        except Exception as e:
+            self._pending_state = None
+            self.async_write_ha_state()
+            raise HomeAssistantError(f"Error toggling firewall policy: {str(e)}")
 
 class UDMTrafficRouteSwitch(UDMBaseSwitch):
     """Representation of a UDM Traffic Route Switch."""
@@ -208,26 +222,53 @@ class UDMTrafficRouteSwitch(UDMBaseSwitch):
     @log_call
     async def _toggle(self, new_state: bool) -> None:
         """Toggle the traffic route state."""
-        if self._websocket_supported:
-            success = await self.coordinator._handle_websocket_update(
-                'traffic_routes',
-                'update',
-                {**self._item_data, 'enabled': new_state}
-            )
-            if not success:
+        try:
+            self._pending_state = new_state
+            self.async_write_ha_state()
+            
+            if self._websocket_supported:
+                # Create a copy of current state for verification
+                original_data = dict(self._item_data)
+                
+                # Create update task
+                update_task = self.coordinator._handle_websocket_update(
+                    'traffic_routes',
+                    'update',
+                    {**self._item_data, 'enabled': new_state}
+                )
+                success = await update_task
+                
+                if not success:
+                    # Fall back to REST API
+                    await self._execute_toggle(
+                        new_state,
+                        self._api.toggle_traffic_route,
+                        lambda x: self.coordinator.get_rule(self._item_id),  # Use coordinator's cached data
+                        "traffic route"
+                    )
+            else:
                 await self._execute_toggle(
                     new_state,
                     self._api.toggle_traffic_route,
-                    self._api.get_traffic_routes,
+                    lambda x: self.coordinator.get_rule(self._item_id),  # Use coordinator's cached data
                     "traffic route"
                 )
-        else:
-            await self._execute_toggle(
-                new_state,
-                self._api.toggle_traffic_route,
-                self._api.get_traffic_routes,
-                "traffic route"
-            )
+            
+            # Wait briefly for state to propagate
+            await asyncio.sleep(0.5)
+            
+            # Verify state change using coordinator data
+            current_rule = self.coordinator.get_rule(self._item_id)
+            if current_rule and current_rule.get('enabled') == new_state:
+                self._item_data = current_rule
+            
+            self._pending_state = None
+            self.async_write_ha_state()
+            
+        except Exception as e:
+            self._pending_state = None
+            self.async_write_ha_state()
+            raise HomeAssistantError(f"Error toggling traffic route: {str(e)}")
 
 class UDMLegacyRuleSwitch(UDMBaseSwitch):
     """Base class for legacy rule switches."""
@@ -260,26 +301,40 @@ class UDMLegacyFirewallRuleSwitch(UDMLegacyRuleSwitch):
     @log_call
     async def _toggle(self, new_state: bool) -> None:
         """Toggle the rule state."""
-        if self._websocket_supported:
-            success = await self.coordinator._handle_websocket_update(
-                'firewall_rules',
-                'update',
-                {**self._item_data, 'enabled': new_state}
-            )
-            if not success:
+        try:
+            self._pending_state = new_state
+            self.async_write_ha_state()
+            
+            if self._websocket_supported:
+                update_task = self.coordinator._handle_websocket_update(
+                    'firewall_rules',
+                    'update',
+                    {**self._item_data, 'enabled': new_state}
+                )
+                success = await update_task
+                
+                if not success:
+                    await self._execute_toggle(
+                        new_state,
+                        self._api.toggle_legacy_firewall_rule,
+                        self._api.get_legacy_firewall_rule,
+                        "legacy firewall rule"
+                    )
+            else:
                 await self._execute_toggle(
                     new_state,
                     self._api.toggle_legacy_firewall_rule,
                     self._api.get_legacy_firewall_rule,
                     "legacy firewall rule"
                 )
-        else:
-            await self._execute_toggle(
-                new_state,
-                self._api.toggle_legacy_firewall_rule,
-                self._api.get_legacy_firewall_rule,
-                "legacy firewall rule"
-            )
+                
+            self._pending_state = None
+            self.async_write_ha_state()
+            
+        except Exception as e:
+            self._pending_state = None
+            self.async_write_ha_state()
+            raise HomeAssistantError(f"Error toggling legacy firewall rule: {str(e)}")
 
 class UDMLegacyTrafficRuleSwitch(UDMLegacyRuleSwitch):
     """Representation of a UDM Legacy Traffic Rule Switch."""
@@ -301,26 +356,40 @@ class UDMLegacyTrafficRuleSwitch(UDMLegacyRuleSwitch):
     @log_call
     async def _toggle(self, new_state: bool) -> None:
         """Toggle the rule state."""
-        if self._websocket_supported:
-            success = await self.coordinator._handle_websocket_update(
-                'traffic_rules',
-                'update',
-                {**self._item_data, 'enabled': new_state}
-            )
-            if not success:
+        try:
+            self._pending_state = new_state
+            self.async_write_ha_state()
+            
+            if self._websocket_supported:
+                update_task = self.coordinator._handle_websocket_update(
+                    'traffic_rules',
+                    'update',
+                    {**self._item_data, 'enabled': new_state}
+                )
+                success = await update_task
+                
+                if not success:
+                    await self._execute_toggle(
+                        new_state,
+                        self._api.toggle_legacy_traffic_rule,
+                        lambda x: (True, self._item_data, None),
+                        "legacy traffic rule"
+                    )
+            else:
                 await self._execute_toggle(
                     new_state,
                     self._api.toggle_legacy_traffic_rule,
-                    lambda x: (True, self._item_data, None),  # No direct get method for traffic rules
+                    lambda x: (True, self._item_data, None),
                     "legacy traffic rule"
                 )
-        else:
-            await self._execute_toggle(
-                new_state,
-                self._api.toggle_legacy_traffic_rule,
-                lambda x: (True, self._item_data, None),
-                "legacy traffic rule"
-            )
+                
+            self._pending_state = None
+            self.async_write_ha_state()
+            
+        except Exception as e:
+            self._pending_state = None
+            self.async_write_ha_state()
+            raise HomeAssistantError(f"Error toggling legacy traffic rule: {str(e)}")
 
 class UDMPortForwardRuleSwitch(UDMBaseSwitch):
     """Representation of a UDM Port Forward Rule Switch."""
@@ -348,26 +417,40 @@ class UDMPortForwardRuleSwitch(UDMBaseSwitch):
     @log_call
     async def _toggle(self, new_state: bool) -> None:
         """Toggle the port forward rule state."""
-        if self._websocket_supported:
-            success = await self.coordinator._handle_websocket_update(
-                'port_forward_rules',
-                'update',
-                {**self._item_data, 'enabled': new_state}
-            )
-            if not success:
+        try:
+            self._pending_state = new_state
+            self.async_write_ha_state()
+            
+            if self._websocket_supported:
+                update_task = self.coordinator._handle_websocket_update(
+                    'port_forward_rules',
+                    'update',
+                    {**self._item_data, 'enabled': new_state}
+                )
+                success = await update_task
+                
+                if not success:
+                    await self._execute_toggle(
+                        new_state,
+                        self._api.toggle_port_forward_rule,
+                        lambda x: (True, self._item_data, None),
+                        "port forward rule"
+                    )
+            else:
                 await self._execute_toggle(
                     new_state,
                     self._api.toggle_port_forward_rule,
                     lambda x: (True, self._item_data, None),
                     "port forward rule"
                 )
-        else:
-            await self._execute_toggle(
-                new_state,
-                self._api.toggle_port_forward_rule,
-                lambda x: (True, self._item_data, None),
-                "port forward rule"
-            )
+                
+            self._pending_state = None
+            self.async_write_ha_state()
+            
+        except Exception as e:
+            self._pending_state = None
+            self.async_write_ha_state()
+            raise HomeAssistantError(f"Error toggling port forward rule: {str(e)}")
 
 @log_call
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> bool:

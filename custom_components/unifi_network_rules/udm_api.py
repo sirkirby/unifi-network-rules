@@ -841,3 +841,15 @@ class UDMAPI:
             raise
             
         LOGGER.info("Websocket connection established")
+
+    async def update_rule_state(self, rule_type: str, rule_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
+        """Update the state of a rule."""
+        try:
+            if rule_type == 'traffic_routes':
+                return await self.toggle_traffic_route(rule_id, enabled)
+            elif rule_type == 'port_forward_rules':
+                return await self.toggle_port_forward_rule(rule_id, enabled)
+            return False, f"Unsupported rule type: {rule_type}"
+        except Exception as e:
+            logger.error("Error updating rule state: %s", str(e))
+            return False, str(e)

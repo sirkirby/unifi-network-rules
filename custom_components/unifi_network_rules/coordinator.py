@@ -1,6 +1,7 @@
 """Data update coordinator for UniFi Network Rules."""
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta, datetime
 from typing import Any, Dict, Optional
 
@@ -155,34 +156,79 @@ class UDMUpdateCoordinator(DataUpdateCoordinator):
 
     def _update_data_list(self, data_key: str, action: str, item_data: dict) -> None:
         """Update a list in coordinator data."""
-        if data_key not in self.data:
-            self.data[data_key] = []
-
-        item_id = item_data.get("_id")
-        if not item_id:
+        if not isinstance(item_data, dict) or '_id' not in item_data:
+            LOGGER.warning("Invalid item data for %s update: %s", data_key, item_data)
             return
 
-        # Handle action
-        if action.endswith("_add"):
-            if data_key == "firewall_policies" and item_data.get("predefined", False):
-                return
-            self.data[data_key].append(item_data)
-        elif action.endswith("_update"):
-            for i, existing in enumerate(self.data[data_key]):
-                if existing.get("_id") == item_id:
-                    if data_key == "firewall_policies" and item_data.get("predefined", False):
-                        self.data[data_key].pop(i)
-                    else:
-                        self.data[data_key][i] = item_data
-                    break
-        elif action.endswith("_remove"):
-            self.data[data_key] = [
-                item for item in self.data[data_key]
-                if item.get("_id") != item_id
-            ]
+        if data_key not in self.data:
+            self.data[data_key] = []
+            
+        existing_data = self.data[data_key]
+        if isinstance(existing_data, dict) and 'data' in existing_data:
+            # Handle nested data structure (used by legacy firewall rules)
+            data_list = existing_data['data']
+        else:
+            data_list = existing_data
 
-        # Trigger entity updates
-        self.async_set_updated_data(self.data)
+        item_id = item_data.get("_id")
+        
+        try:
+            # Ensure consistent data types for enabled state
+            if 'enabled' in item_data:
+                item_data['enabled'] = bool(item_data['enabled'])
+
+            if action.endswith("_add"):
+                if data_key == "firewall_policies" and item_data.get("predefined", False):
+                    return
+                # Don't add if item already exists
+                if not any(item.get("_id") == item_id for item in data_list):
+                    data_list.append(item_data)
+                
+            elif action.endswith("_update"):
+                updated = False
+                for i, existing in enumerate(data_list):
+                    if existing.get("_id") == item_id:
+                        if data_key == "firewall_policies" and item_data.get("predefined", False):
+                            data_list.pop(i)
+                        else:
+                            # Special handling for traffic routes and port forwards
+                            if data_key in ('traffic_routes', 'port_forward_rules'):
+                                # Create a new dict with updated values
+                                new_data = dict(existing)
+                                new_data.update(item_data)
+                                data_list[i] = new_data
+                            else:
+                                data_list[i] = {**existing, **item_data}  # Merge data
+                        updated = True
+                        break
+                        
+                # If item wasn't found but should exist, append it
+                if not updated:
+                    data_list.append(item_data)
+                        
+            elif action.endswith("_remove"):
+                data_list[:] = [
+                    item for item in data_list
+                    if item.get("_id") != item_id
+                ]
+
+            # Update the main data structure if needed
+            if isinstance(existing_data, dict) and 'data' in existing_data:
+                self.data[data_key]['data'] = data_list
+            else:
+                self.data[data_key] = data_list
+
+            # Store previous state for change detection
+            self._previous_data[data_key] = data_list.copy() if isinstance(data_list, list) else {'data': data_list.copy()}
+            
+            # Trigger entity updates
+            self.async_set_updated_data(self.data)
+            
+        except Exception as err:
+            LOGGER.error(
+                "Error updating data list for %s (%s): %s",
+                data_key, action, str(err)
+            )
 
     @callback
     def _handle_firewall_rule_message(self, action: str, data: dict) -> None:
@@ -191,17 +237,71 @@ class UDMUpdateCoordinator(DataUpdateCoordinator):
             if 'firewall_rules' not in self.data:
                 self.data['firewall_rules'] = {'data': []}
             self._update_data_list('firewall_rules', action, data)
-            # Attempt websocket-based update first
-            if not self._handle_websocket_update('firewall_rules', action, data):
-                # Fall back to REST API if websocket update fails
-                self.hass.async_create_task(self.async_refresh_rules('firewall_rules'))
+            # Create task for websocket update
+            self.hass.async_create_task(
+                self._handle_websocket_update('firewall_rules', action, data),
+                name="unifi_rules_ws_update"
+            )
 
     @callback
-    def _handle_websocket_update(self, rule_type: str, action: str, data: dict) -> bool:
-        """Handle websocket-based update with fallback support."""
+    async def _handle_websocket_update(self, rule_type: str, action: str, data: dict) -> bool:
+        """Handle websocket-based update."""
         try:
             update_start = datetime.now()
-            self._update_data_list(rule_type, action, data)
+            
+            # Special handling for traffic routes and port forwards
+            if rule_type in ('traffic_routes', 'port_forward_rules'):
+                # Ensure the data exists in the coordinator
+                if rule_type not in self.data:
+                    self.data[rule_type] = []
+                
+                # Find and update the specific rule
+                rule_id = data.get('_id')
+                if rule_id:
+                    existing_data = self.data[rule_type]
+                    current_state = None
+                    
+                    for i, item in enumerate(existing_data):
+                        if item.get('_id') == rule_id:
+                            # Store current state
+                            current_state = dict(item)
+                            
+                            # Create new dict to avoid modifying existing data
+                            updated_item = dict(item)
+                            updated_item.update(data)
+                            
+                            # Ensure boolean type for enabled state
+                            if 'enabled' in updated_item:
+                                updated_item['enabled'] = bool(updated_item['enabled'])
+                            
+                            # Update API state first
+                            success, error = await self.api.update_rule_state(
+                                rule_type, 
+                                rule_id, 
+                                updated_item.get('enabled', False)
+                            )
+                            
+                            if success:
+                                # Only update coordinator data if API update succeeded
+                                self.data[rule_type][i] = updated_item
+                                # Force a coordinator update to refresh entities
+                                self.async_set_updated_data(self.data)
+                            else:
+                                # Restore previous state if API update failed
+                                if current_state:
+                                    self.data[rule_type][i] = current_state
+                                    self.async_set_updated_data(self.data)
+                                LOGGER.error("Failed to update rule state: %s", error)
+                                return False
+                            
+                            break
+                    else:
+                        # Rule not found, might be a new rule
+                        if action.endswith('_add'):
+                            self.data[rule_type].append(data)
+            else:
+                # Standard update for other rule types
+                self._update_data_list(rule_type, action, data)
             
             update_duration = (datetime.now() - update_start).total_seconds()
             LOGGER.debug(
@@ -255,27 +355,114 @@ class UDMUpdateCoordinator(DataUpdateCoordinator):
     def _handle_firewall_policy_message(self, action: str, data: dict) -> None:
         """Handle firewall policy message."""
         if self.api.capabilities.zone_based_firewall:
-            if not self._handle_websocket_update('firewall_policies', action, data):
-                self.hass.async_create_task(self.async_refresh_rules('firewall_policies'))
+            self.hass.async_create_task(
+                self._handle_websocket_update('firewall_policies', action, data),
+                name="unifi_rules_ws_update"
+            )
 
     @callback
     def _handle_traffic_rule_message(self, action: str, data: dict) -> None:
         """Handle traffic rule message."""
         if self.api.capabilities.legacy_firewall:
-            if not self._handle_websocket_update('traffic_rules', action, data):
-                self.hass.async_create_task(self.async_refresh_rules('traffic_rules'))
+            self.hass.async_create_task(
+                self._handle_websocket_update('traffic_rules', action, data),
+                name="unifi_rules_ws_update"
+            )
 
     @callback
     def _handle_traffic_route_message(self, action: str, data: dict) -> None:
         """Handle traffic route message."""
-        if not self._handle_websocket_update('traffic_routes', action, data):
-            self.hass.async_create_task(self.async_refresh_rules('traffic_routes'))
+        try:
+            # Create a copy of the original data to avoid mutation
+            route_data = dict(data)
+            
+            # Ensure the enabled state is properly set
+            if 'enabled' in route_data:
+                route_data['enabled'] = bool(route_data['enabled'])
+            
+            if 'traffic_routes' not in self.data:
+                self.data['traffic_routes'] = []
+            
+            # Store current state for verification
+            rule_id = route_data.get('_id')
+            if rule_id:
+                previous_state = next(
+                    (route for route in self.data['traffic_routes'] 
+                     if route.get('_id') == rule_id),
+                    None
+                )
+            
+            # Handle the update with retries and state verification
+            async def update_with_retry():
+                for attempt in range(3):  # Try up to 3 times
+                    try:
+                        await self._handle_websocket_update('traffic_routes', action, route_data)
+                        
+                        # Verify state was properly updated
+                        current_state = next(
+                            (route for route in self.data['traffic_routes']
+                             if route.get('_id') == rule_id),
+                            None
+                        )
+                        
+                        if current_state and current_state.get('enabled') == route_data.get('enabled'):
+                            return True
+                            
+                        if attempt < 2:  # Don't sleep on last attempt
+                            await asyncio.sleep(1)
+                            
+                    except Exception as e:
+                        if attempt == 2:  # Last attempt
+                            LOGGER.error("Failed to update traffic route after 3 attempts: %s", e)
+                            if previous_state:
+                                # Restore previous state in coordinator
+                                self._update_data_list('traffic_routes', 'update', previous_state)
+                            return False
+                        await asyncio.sleep(1)  # Wait before retry
+                return False
+            
+            self.hass.async_create_task(
+                update_with_retry(),
+                name="unifi_rules_traffic_update"
+            )
+
+        except Exception as err:
+            LOGGER.error("Error in traffic route message handler: %s", err)
 
     @callback
     def _handle_port_forward_message(self, action: str, data: dict) -> None:
         """Handle port forward message."""
-        if not self._handle_websocket_update('port_forward_rules', action, data):
-            self.hass.async_create_task(self.async_refresh_rules('port_forward_rules'))
+        try:
+            # Create a copy of the original data to avoid mutation
+            port_data = dict(data)
+            
+            # Ensure the enabled state is properly set
+            if 'enabled' in port_data:
+                port_data['enabled'] = bool(port_data['enabled'])
+            
+            if 'port_forward_rules' not in self.data:
+                self.data['port_forward_rules'] = []
+            
+            # Handle the update with retries
+            async def update_with_retry():
+                for attempt in range(3):  # Try up to 3 times
+                    try:
+                        await self._handle_websocket_update('port_forward_rules', action, port_data)
+                        return True
+                    except Exception as e:
+                        if attempt == 2:  # Last attempt
+                            LOGGER.error("Failed to update port forward rule after 3 attempts: %s", e)
+                            return False
+                        await asyncio.sleep(1)  # Wait before retry
+                return False
+            
+            self.hass.async_create_task(
+                update_with_retry(),
+                name="unifi_rules_portfwd_update"
+            )
+
+        except Exception as err:
+            LOGGER.error("Error in port forward message handler: %s", err)
     
     @callback
     def _check_rule_changes(self, rule_type: str, new_rules: list) -> None:

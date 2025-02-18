@@ -10,6 +10,7 @@ import aiounifi
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, LOGGER
 from .udm_api import UDMAPI  # Add import for type checking
@@ -138,7 +139,7 @@ class UnifiRuleWebsocket:
     def _async_watch_websocket(self, now: datetime) -> None:
         """Watch websocket status and reconnect if needed."""
         # Check websocket status based on last message time from API
-        if not hasattr(self.api, 'websocket_last_message'):
+        if not hasattr(self.api, 'websocket_last_message') or self.api.websocket_last_message is None:
             return
 
         LOGGER.debug(
@@ -147,19 +148,20 @@ class UnifiRuleWebsocket:
         )
         
         # Check if we haven't received a message in too long
-        if self.api.websocket_last_message:
+        if isinstance(self.api.websocket_last_message, datetime):
             time_since_last = now - self.api.websocket_last_message
             if time_since_last > timedelta(minutes=2):
                 LOGGER.warning("No websocket message received in %s, reconnecting", time_since_last)
-                self.ws_task.cancel()
+                if self.ws_task:
+                    self.ws_task.cancel()
                 self.start_websocket()
 
     @callback
     def handle_websocket_message(self, msg: dict) -> None:
         """Handle websocket message."""
         try:
-            # Update last message time first
-            self.api.websocket_last_message = datetime.now()
+            # Update last message time first with timezone-aware datetime
+            self.api.websocket_last_message = dt_util.utcnow()
             
             # Forward to coordinator callback if set
             if self.coordinator_callback:

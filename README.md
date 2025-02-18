@@ -307,6 +307,15 @@ If you are having trouble getting the integration to work, please check the foll
 3. Ensure you are using the IP address of the UDM, not the hostname.
 4. Verify your local account has proper admin privileges.
 
+### Enable debug logging
+
+```yaml
+logger:
+  default: info
+  logs:
+    custom_components.unifi_network_rules: debug
+```
+
 ### Verify your local account is working
 
 Run this on a computer connected to the same network as your UDM or directly on your Home Assistant instance to verify connectivity to the UDM and that your credentials are valid.
@@ -342,18 +351,6 @@ The integration supports:
 - Port forwarding rules (read and update) on all systems
 
 Note: The new service operations (create/delete) are only available for zone-based firewall policies. Legacy rule support will be used automatically on older systems.
-
-## Port Forwarding Rules
-
-The integration now supports managing port forwarding rules from your UniFi Dream Machine/Router. Each port forwarding rule is represented as a switch entity that lets you enable or disable it. The rule name includes:
-- The name you assigned in UniFi
-- The protocol (TCP, UDP, or both)
-- The port configuration (e.g., "port 80->80" or "port 80->8080")
-- The destination IP address
-
-Example entity name: `Port Forward: Minecraft (tcp_udp port 25565 to 10.29.13.235)`
-
-Note: Creating new port forwarding rules through the integration is only supported for backup/restore purposes. Configure new rules through the UniFi interface.
 
 ## Contributions
 
