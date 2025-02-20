@@ -8,9 +8,8 @@ from homeassistant.const import CONF_TYPE, CONF_PLATFORM
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.trigger import TriggerActionType, TriggerInfo, TriggerProtocol
-from homeassistant.helpers.typing import ConfigType
 
-from .const import DOMAIN, LOGGER, EVENT_RULE_UPDATED, EVENT_RULE_DELETED
+from .const import DOMAIN, LOGGER
 from .rule_template import RuleType
 
 # Trigger types
@@ -18,6 +17,20 @@ TRIGGER_RULE_ENABLED = "rule_enabled"
 TRIGGER_RULE_DISABLED = "rule_disabled"
 TRIGGER_RULE_CHANGED = "rule_changed"
 TRIGGER_RULE_DELETED = "rule_deleted"
+
+# Message types from aiounifi websocket
+# These are the raw message types that come from the UniFi controller websocket
+# firewall: Updates to firewall policies and rules
+# portForward: Changes to port forwarding rules
+# routing: Changes to network routes and routing policies
+WS_MSG_FIREWALL_UPDATE = "firewall"
+WS_MSG_PORT_FORWARD = "portForward"
+WS_MSG_ROUTING = "routing"
+
+# Example message structures:
+# Firewall update: {"firewall": {"_id": "123", "enabled": true, ...}}
+# Port forward: {"portForward": {"_id": "456", "enabled": false, "name": "HTTP", ...}}
+# Routing: {"routing": {"_id": "789", "enabled": true, "name": "VPN Route", ...}}
 
 # Configuration schema
 TRIGGER_SCHEMA = vol.Schema(
@@ -41,7 +54,7 @@ TRIGGER_SCHEMA = vol.Schema(
 
 async def async_attach_trigger(
     hass: HomeAssistant,
-    config: ConfigType,
+    config: dict,
     action: TriggerActionType,
     trigger_info: TriggerInfo,
 ) -> CALLBACK_TYPE:
@@ -58,7 +71,6 @@ async def async_attach_trigger(
     if "name_filter" in config:
         trigger_data["name_filter"] = config["name_filter"]
 
-    # Create trigger protocol
     trigger = UnifiRuleTriggerProtocol(
         hass,
         config,
@@ -74,7 +86,7 @@ class UnifiRuleTriggerProtocol(TriggerProtocol):
     def __init__(
         self,
         hass: HomeAssistant,
-        config: ConfigType,
+        config: dict,
         action: TriggerActionType,
         trigger_info: TriggerInfo,
         trigger_data: Dict[str, Any],
@@ -86,6 +98,7 @@ class UnifiRuleTriggerProtocol(TriggerProtocol):
         self.trigger_info = trigger_info
         self.trigger_data = trigger_data
         self.remove_handler: Optional[CALLBACK_TYPE] = None
+        self._rule_cache: Dict[str, Dict[str, Any]] = {}
 
     async def async_attach(self) -> CALLBACK_TYPE:
         """Attach trigger."""
@@ -99,72 +112,119 @@ class UnifiRuleTriggerProtocol(TriggerProtocol):
             event_filter["rule_type"] = self.config["rule_type"]
 
         @callback
-        def _handle_event(event):
-            """Handle the event."""
-            # Check if event matches all filters
-            if not all(
-                event.data.get(k) == v
-                for k, v in event_filter.items()
-            ):
-                return
-
-            # Apply name filter if specified
-            if name_filter:
-                rule_name = event.data.get("new_state", {}).get("name", "")
-                if not rule_name or name_filter.lower() not in rule_name.lower():
-                    return
-
-            # Check trigger type and rule state
-            trigger_type = self.config[CONF_TYPE]
-            
-            if trigger_type in [TRIGGER_RULE_ENABLED, TRIGGER_RULE_DISABLED]:
-                new_state = event.data.get("new_state", {})
-                old_state = event.data.get("old_state", {})
+        def _handle_websocket_msg(msg: Dict[str, Any]) -> None:
+            """Handle websocket message."""
+            try:
+                msg_type = None
+                rule_data = None
                 
-                # Skip if no state change
-                if old_state.get("enabled") == new_state.get("enabled"):
-                    return
+                # Determine message type and extract rule data
+                if WS_MSG_FIREWALL_UPDATE in msg:
+                    msg_type = RuleType.FIREWALL_POLICY.value
+                    rule_data = msg[WS_MSG_FIREWALL_UPDATE]
+                elif WS_MSG_PORT_FORWARD in msg:
+                    msg_type = RuleType.PORT_FORWARD.value
+                    rule_data = msg[WS_MSG_PORT_FORWARD]
+                elif WS_MSG_ROUTING in msg:
+                    msg_type = RuleType.TRAFFIC_ROUTE.value
+                    rule_data = msg[WS_MSG_ROUTING]
                 
-                # Check if state matches trigger type
-                if (trigger_type == TRIGGER_RULE_ENABLED and not new_state.get("enabled", False)) or \
-                   (trigger_type == TRIGGER_RULE_DISABLED and new_state.get("enabled", False)):
+                if not msg_type or not rule_data or "_id" not in rule_data:
                     return
 
-            elif trigger_type == TRIGGER_RULE_CHANGED:
-                # Trigger on any change except enable/disable
-                new_state = event.data.get("new_state", {})
-                old_state = event.data.get("old_state", {})
-                
-                if not old_state or not new_state:
+                # Apply filters
+                if "rule_type" in event_filter and event_filter["rule_type"] != msg_type:
                     return
-                    
-                # Remove enabled state for comparison
-                new_state_copy = dict(new_state)
-                old_state_copy = dict(old_state)
-                new_state_copy.pop("enabled", None)
-                old_state_copy.pop("enabled", None)
-                
-                if new_state_copy == old_state_copy:
+                if "rule_id" in event_filter and event_filter["rule_id"] != rule_data["_id"]:
                     return
+                if name_filter:
+                    rule_name = rule_data.get("name", "")
+                    if not rule_name or name_filter.lower() not in rule_name.lower():
+                        return
 
-            # Run the trigger action
-            self.async_run(event.data)
+                # Get previous state from cache
+                rule_id = rule_data["_id"]
+                old_state = self._rule_cache.get(rule_id)
+                
+                # Handle different trigger types
+                trigger_type = self.config[CONF_TYPE]
+                should_trigger = False
 
-        # Subscribe to appropriate events based on trigger type
-        if self.config[CONF_TYPE] == TRIGGER_RULE_DELETED:
-            self.remove_handler = await self.hass.helpers.event.async_track_event(
-                self.hass,
-                EVENT_RULE_DELETED,
-                _handle_event,
-            )
-        else:
-            self.remove_handler = await self.hass.helpers.event.async_track_event(
-                self.hass,
-                EVENT_RULE_UPDATED,
-                _handle_event,
-            )
+                if trigger_type in [TRIGGER_RULE_ENABLED, TRIGGER_RULE_DISABLED]:
+                    old_enabled = old_state.get("enabled", False) if old_state else False
+                    new_enabled = rule_data.get("enabled", False)
+                    if old_enabled != new_enabled:
+                        should_trigger = (
+                            (trigger_type == TRIGGER_RULE_ENABLED and new_enabled) or
+                            (trigger_type == TRIGGER_RULE_DISABLED and not new_enabled)
+                        )
+
+                elif trigger_type == TRIGGER_RULE_CHANGED:
+                    if old_state is not None:
+                        # Compare states excluding enabled flag and metadata
+                        old_copy = {k: v for k, v in old_state.items() 
+                                  if not k.startswith('_') and k != 'enabled'}
+                        new_copy = {k: v for k, v in rule_data.items() 
+                                  if not k.startswith('_') and k != 'enabled'}
+                        should_trigger = old_copy != new_copy
+
+                elif trigger_type == TRIGGER_RULE_DELETED:
+                    if old_state is not None and msg.get('meta', {}).get('deleted'):
+                        should_trigger = True
+                        # Remove from cache
+                        self._rule_cache.pop(rule_id, None)
+
+                # Update cache unless deleted
+                if trigger_type != TRIGGER_RULE_DELETED:
+                    self._rule_cache[rule_id] = rule_data
+
+                # Trigger action if conditions met
+                if should_trigger:
+                    self.async_run({
+                        "rule_id": rule_id,
+                        "rule_type": msg_type,
+                        "old_state": old_state,
+                        "new_state": rule_data if trigger_type != TRIGGER_RULE_DELETED else None,
+                        "trigger_type": trigger_type
+                    })
+
+            except Exception as err:
+                LOGGER.error("Error handling websocket message: %s", str(err))
+
+        # Get initial state for the rules we're watching
+        entry_data = self.hass.data[DOMAIN]
+        for config_entry_data in entry_data.values():
+            if "coordinator" in config_entry_data:
+                coordinator = config_entry_data["coordinator"]
+                if coordinator.data:
+                    self._update_rule_cache(coordinator.data)
+
+            if "websocket" in config_entry_data:
+                websocket = config_entry_data["websocket"]
+                # Store the previous callback if it exists
+                previous_callback = websocket.api.websocket.callback
+                
+                @callback
+                def combined_callback(msg: Dict[str, Any]) -> None:
+                    """Handle both our trigger and any previous callback."""
+                    _handle_websocket_msg(msg)
+                    if previous_callback:
+                        previous_callback(msg)
+                
+                websocket.api.websocket.callback = combined_callback
+                # Store remove function to restore previous callback
+                self.remove_handler = lambda: setattr(websocket.api.websocket, 'callback', previous_callback)
+                break
 
         return self.async_detach
+
+    def _update_rule_cache(self, data: Dict[str, Any]) -> None:
+        """Update rule cache from coordinator data."""
+        for rules in data.values():
+            if isinstance(rules, list):
+                for rule in rules:
+                    if isinstance(rule, dict) and "_id" in rule:
+                        self._rule_cache[rule["_id"]] = rule
 
     async def async_detach(self) -> None:
         """Detach trigger."""
@@ -183,12 +243,3 @@ class UnifiRuleTriggerProtocol(TriggerProtocol):
                 },
             },
         )
-
-    @callback
-    def async_validate_trigger_config(self, **kwargs) -> bool:
-        """Validate trigger configuration."""
-        try:
-            TRIGGER_SCHEMA(self.config)
-            return True
-        except vol.Invalid:
-            return False

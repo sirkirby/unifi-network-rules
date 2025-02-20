@@ -1,4 +1,4 @@
 homeassistant
 asyncio
 aiohttp
-aiounifi
+aiounifi>=82.0.0

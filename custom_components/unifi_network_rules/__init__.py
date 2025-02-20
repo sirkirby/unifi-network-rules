@@ -1,9 +1,7 @@
 """Support for UniFi Network Rules."""
 from __future__ import annotations
 from typing import Any
-import json
 from datetime import timedelta
-import os
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -34,47 +32,63 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up UniFi Network Rules from a config entry."""
+    if DOMAIN not in hass.data:
+        hass.data[DOMAIN] = {}
+
+    if entry.entry_id in hass.data[DOMAIN]:
+        LOGGER.debug("Entry %s already setup, cleaning up first", entry.entry_id)
+        await async_unload_entry(hass, entry)
+    
+    LOGGER.debug("Setting up UniFi Network Rules integration")
+    
     host = entry.data[CONF_HOST]
     username = entry.data[CONF_USERNAME]
     password = entry.data[CONF_PASSWORD]
     update_interval = entry.data.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
 
     api = UDMAPI(host, username, password)
-    api.hass = hass
 
     try:
-        if not await api.authenticate_session():
-            raise ConfigEntryNotReady("Failed to authenticate")
-        if not await api.detect_capabilities():
-            raise ConfigEntryNotReady("Failed to detect capabilities")
+        # Initialize the API first
+        await api.async_init(hass)
 
+        # Initialize coordinator
         coordinator = UnifiRuleUpdateCoordinator(
             hass,
             api,
             timedelta(seconds=update_interval)
         )
 
-        await coordinator.async_config_entry_first_refresh()
-
-        websocket = UnifiRuleWebsocket(hass, api, f"unifi_rules-{entry.entry_id}")
-        websocket.coordinator = coordinator  # Store coordinator reference
+        # Initialize websocket connection
+        websocket = UnifiRuleWebsocket(hass, api, f"{DOMAIN}-{entry.entry_id}")
         websocket.set_message_handler(coordinator.handle_websocket_message)
-
+        
+        # Store references in hass.data
         hass.data[DOMAIN][entry.entry_id] = {
-            'api': api,
-            'coordinator': coordinator,
-            'websocket': websocket
+            "api": api,
+            "coordinator": coordinator,
+            "websocket": websocket
         }
 
-        websocket.start()
+        # Set up services first
         await services.async_setup_services(hass)
+        
+        # Perform initial data refresh before platform setup
+        await coordinator.async_config_entry_first_refresh()
+
+        # Set up the platforms
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+        # Start websocket last after everything is set up
+        websocket.start()
 
         return True
 
     except Exception as err:
-        await api.cleanup()
-        raise ConfigEntryNotReady(f"Failed to setup: {err}") from err
+        LOGGER.exception("Failed to setup UniFi Network Rules: %s", str(err))
+        if entry.entry_id in hass.data[DOMAIN]:
+            await async_unload_entry(hass, entry)
+        raise ConfigEntryNotReady(f"Setup failed: {err}") from err
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Handle unload of an entry."""
@@ -82,18 +96,20 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
             entry_data = hass.data[DOMAIN][entry.entry_id]
             
-            if 'websocket' in entry_data:
-                await entry_data['websocket'].stop_and_wait()
+            unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
             
-            if 'api' in entry_data:
-                await entry_data['api'].cleanup()
-        
-        unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-        
-        if unload_ok:
-            hass.data[DOMAIN].pop(entry.entry_id)
+            if "websocket" in entry_data:
+                await entry_data["websocket"].stop_and_wait()
             
-        return unload_ok
+            if "api" in entry_data:
+                await entry_data["api"].cleanup()
+            
+            if unload_ok:
+                hass.data[DOMAIN].pop(entry.entry_id)
+            
+            return unload_ok
+        
+        return True
         
     except Exception as e:
         LOGGER.error("Error unloading entry: %s", str(e))

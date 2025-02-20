@@ -2,21 +2,21 @@
   "config": {
     "step": {
       "user": {
-        "title": "Connect to UniFi Network",
-        "description": "Set up UniFi Network Rules integration.",
+        "title": "UniFi Network Rules",
+        "description": "Set up UniFi Network Rules to manage your UniFi Dream Machine.",
         "data": {
           "host": "Host",
           "username": "Username",
           "password": "Password",
-          "update_interval": "Update interval (minutes)"
+          "update_interval": "Update interval (seconds)"
         }
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect to UniFi Network. Please check your host address and network connectivity.",
-      "invalid_auth": "Invalid authentication credentials. Please check your username and password.",
+      "cannot_connect": "Failed to connect",
+      "invalid_auth": "Invalid authentication",
       "no_capabilities": "No supported firewall capabilities detected on this device.",
-      "unknown": "Unexpected error occurred"
+      "unknown": "Unexpected error"
     },
     "abort": {
       "already_configured": "Device is already configured"
