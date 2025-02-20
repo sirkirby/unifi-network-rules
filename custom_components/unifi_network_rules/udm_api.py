@@ -29,12 +29,17 @@ from .const import (
 )
 from .utils import logger
 from .utils.logger import log_call
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+from .const import DOMAIN, LOGGER
+from .services import SIGNAL_ENTITIES_CLEANUP
 
 @dataclass
 class UDMCapabilities:
     """Class to store UDM capabilities."""
     zone_based_firewall: bool = False
     legacy_firewall: bool = False
+    legacy_traffic: bool = False
     traffic_routes: bool = False
 
 class UDMAPI:
@@ -142,6 +147,7 @@ class UDMAPI:
                 logger.debug("Zone-based firewall not detected, checking legacy endpoints")
                 legacy_success, legacy_rules, legacy_error = await self.get_legacy_firewall_rules()
                 self.capabilities.legacy_firewall = legacy_success and isinstance(legacy_rules, list)
+                self.capabilities.legacy_traffic = self.capabilities.legacy_firewall
                            
                 if not self.capabilities.legacy_firewall:
                     logger.error("Failed to detect legacy firewall capability: %s", legacy_error)
@@ -456,59 +462,75 @@ class UDMAPI:
         success, response, error = await self._make_authenticated_request('get', url)
         return await self._process_rules_response(success, response, error, "traffic routes")
 
-    async def toggle_firewall_policy(self, policy_id: str, enabled: bool):
+    async def toggle_firewall_policy(self, policy_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
         """Toggle a firewall policy on or off."""
-        url = f"https://{self.host}{FIREWALL_POLICY_TOGGLE_ENDPOINT}"
-        payload = [{"_id": policy_id, "enabled": enabled}]
-
-        logger.info("Sending firewall policy toggle request: %s", payload)
-
-        success, response, error = await self._make_authenticated_request('put', url, payload)
-        logger.info("PUT response - Success: %s, Response: %s, Error: %s", success, response, error)
-
+        # First get the current policy to preserve all fields
+        success, policy, error = await self.get_firewall_policy(policy_id)
         if not success:
-            logger.error("Failed to toggle firewall policy %s: %s", policy_id, error)
-            if response:
-                logger.error("Response content: %s", await response.text())
-            return False, error
+            return False, f"Failed to fetch policy: {error}"
 
-        logger.info("Toggled firewall policy %s to %s successfully", policy_id, enabled)
+        # Update the policy with new enabled state
+        policy['enabled'] = enabled
+        
+        # PUT the update
+        url = f"https://{self.host}{FIREWALL_POLICIES_ENDPOINT}/{policy_id}"
+        success, response, error = await self._make_authenticated_request('put', url, policy)
+        
+        if not success:
+            return False, f"Failed to update policy: {error}"
+            
         return True, None
 
     async def toggle_traffic_route(self, route_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
         """Toggle a traffic route."""
         # First get all traffic routes
-        logger.info("Fetching all routes from URL: %s", TRAFFIC_ROUTES_ENDPOINT)
         success, all_routes, error = await self.get_traffic_routes()
-        logger.info("GET all routes response - Success: %s, Total Routes: %s, Error: %s", 
-                    success, len(all_routes) if all_routes else 0, error)
-        
         if not success:
-            logger.error("Failed to fetch all routes: %s", error)
-            return False, f"Failed to fetch all routes: {error}"
+            return False, f"Failed to fetch routes: {error}"
 
         # Find our specific route
         route = next((r for r in all_routes if r.get('_id') == route_id), None)
         if not route:
-            logger.error("Route ID %s not found in routes list", route_id)
-            return False, f"Route ID {route_id} not found"
+            return False, f"Route {route_id} not found"
 
         # Create updated route with new enabled state
         updated_route = dict(route)
         updated_route['enabled'] = enabled
         
-        # PUT the update back
-        update_url = f"https://{self.host}{TRAFFIC_ROUTES_ENDPOINT}/{route_id}"
-        logger.info("Sending PUT request to %s with route: %s", update_url, updated_route)
-        success, response, error = await self._make_authenticated_request('put', update_url, updated_route)
-        logger.info("PUT response - Success: %s, Response: %s, Error: %s", success, response, error)
+        # PUT the update
+        url = f"https://{self.host}{TRAFFIC_ROUTES_ENDPOINT}/{route_id}"
+        success, response, error = await self._make_authenticated_request('put', url, updated_route)
         
-        if success:
-            logger.info(f"Toggled traffic route {route_id} to {'on' if enabled else 'off'}")
-            return True, None
+        if not success:
+            return False, f"Failed to update route: {error}"
             
-        return False, f"Failed to update route: {error}"
-    
+        return True, None
+
+    async def toggle_port_forward_rule(self, rule_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
+        """Toggle a port forward rule."""
+        # First get all port forward rules
+        success, rules, error = await self.get_port_forward_rules()
+        if not success:
+            return False, f"Failed to fetch rules: {error}"
+
+        # Find our specific rule
+        rule = next((r for r in rules if r.get('_id') == rule_id), None)
+        if not rule:
+            return False, f"Rule {rule_id} not found"
+
+        # Create updated rule with new enabled state
+        updated_rule = dict(rule)
+        updated_rule['enabled'] = enabled
+        
+        # PUT the update
+        url = f"https://{self.host}{PORT_FORWARD_ENDPOINT}/{rule_id}"
+        success, response, error = await self._make_authenticated_request('put', url, updated_rule)
+        
+        if not success:
+            return False, f"Failed to update rule: {error}"
+            
+        return True, None
+
     async def get_firewall_zone_matrix(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch firewall zone matrix from the UDM."""
         url = f"https://{self.host}{FIREWALL_ZONE_MATRIX_ENDPOINT}"
@@ -594,7 +616,7 @@ class UDMAPI:
         return True, None
 
     async def update_firewall_policy(self, policy_id: str, policy_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
-        """Update a firewall policy with complete state data."""
+        """Update a firewall policy."""
         url = f"https://{self.host}{FIREWALL_POLICIES_ENDPOINT}/{policy_id}"
         success, response, error = await self._make_authenticated_request('put', url, policy_data)
         if not success:
@@ -603,7 +625,7 @@ class UDMAPI:
         return True, None
 
     async def update_traffic_route(self, route_id: str, route_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
-        """Update a traffic route with complete state data."""
+        """Update a traffic route."""
         url = f"https://{self.host}{TRAFFIC_ROUTES_ENDPOINT}/{route_id}"
         success, response, error = await self._make_authenticated_request('put', url, route_data)
         if not success:
@@ -620,14 +642,21 @@ class UDMAPI:
             return False, error
         return True, None
 
-    async def delete_firewall_policies(self, policy_ids: List[str]) -> Tuple[bool, Optional[str]]:
-        """Delete one or more firewall policies."""
-        url = f"https://{self.host}{FIREWALL_POLICIES_DELETE_ENDPOINT}"
-        success, response, error = await self._make_authenticated_request('post', url, policy_ids)
-        if not success:
-            logger.error(f"Failed to delete firewall policies: {error}")
-            return False, error
-        return True, None
+    async def delete_firewall_policies(self, rule_ids: list[str]) -> tuple[bool, str]:
+        """Delete firewall policies."""
+        try:
+            url = f"https://{self.host}{FIREWALL_POLICIES_DELETE_ENDPOINT}"
+            success, response, error = await self._make_authenticated_request('post', url, rule_ids)
+            
+            if not success:
+                return False, f"Failed to delete firewall policies: {error}"
+
+            return True, ""
+        except Exception as e:
+            return False, str(e)
+
+    # Removed unverified delete endpoints for traffic routes, port forwarding, and legacy rules
+    # These should only be added once we've confirmed the endpoints exist and work
 
     async def get_port_forward_rules(self) -> Tuple[bool, Optional[List[Dict[str, Any]]], Optional[str]]:
         """Fetch port forwarding rules from the UDM."""
@@ -635,32 +664,8 @@ class UDMAPI:
         success, response, error = await self._make_authenticated_request('get', url)
         return await self._process_rules_response(success, response, error, "port forward rules")
 
-    async def toggle_port_forward_rule(self, rule_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
-        """Toggle a port forward rule."""
-        # First get all rules to find the one we want to update
-        success, rules, error = await self.get_port_forward_rules()
-        
-        if not success:
-            return False, f"Failed to fetch rules: {error}"
-        if not rules:
-            return False, f"Rule {rule_id} not found"
-        rule = next((r for r in rules if r['_id'] == rule_id), None)
-        if not rule:
-            return False, f"Rule {rule_id} not found"
-        # Create a copy and update the enabled state
-        updated_rule = dict(rule)
-        updated_rule['enabled'] = enabled
-        
-        # Send the update
-        url = f"https://{self.host}{PORT_FORWARD_ENDPOINT}/{rule_id}"
-        success, response, error = await self._make_authenticated_request('put', url, updated_rule)
-        if not success:
-            return False, f"Failed to update rule: {error}"
-            
-        return True, None
-
     async def update_port_forward_rule(self, rule_id: str, rule_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
-        """Update a port forward rule with complete state data."""
+        """Update a port forward rule."""
         url = f"https://{self.host}{PORT_FORWARD_ENDPOINT}/{rule_id}"
         success, response, error = await self._make_authenticated_request('put', url, rule_data)
         if not success:
@@ -742,9 +747,6 @@ class UDMAPI:
 
     async def _test_websocket_feature(self, feature: str) -> bool:
         """Test if a specific feature supports websocket updates."""
-        # Implementation would depend on the UniFi API specifics
-        # This is a placeholder that should be implemented based on 
-        # the actual UniFi websocket API capabilities
         return self._websocket_capabilities[feature]
 
     def supports_websocket(self, feature: str) -> bool:
@@ -810,61 +812,6 @@ class UDMAPI:
             raise
             
         LOGGER.info("Websocket connection established")
-
-    async def update_rule_state(self, rule_type: str, rule_id: str, enabled: bool) -> Tuple[bool, Optional[str]]:
-        """Update the state of a rule."""
-        try:
-            # Special handling for firewall policies which use a batch endpoint
-            if rule_type == 'firewall_policies' and self.capabilities.zone_based_firewall:
-                return await self.toggle_firewall_policy(rule_id, enabled)
-
-            # Get the current rule to preserve all other fields
-            if rule_type == 'traffic_routes':
-                success, rules, error = await self.get_traffic_routes()
-            elif rule_type == 'port_forward_rules':
-                success, rules, error = await self.get_port_forward_rules()
-            elif rule_type == 'firewall_rules' and self.capabilities.legacy_firewall:
-                success, rules, error = await self.get_legacy_firewall_rules()
-            elif rule_type == 'traffic_rules' and self.capabilities.legacy_firewall:
-                success, rules, error = await self.get_legacy_traffic_rules()
-            else:
-                return False, f"Unsupported rule type: {rule_type}"
-
-            if not success:
-                return False, f"Failed to fetch {rule_type}: {error}"
-
-            rule = next((r for r in rules if r.get('_id') == rule_id), None)
-            if not rule:
-                return False, f"{rule_type} with ID {rule_id} not found"
-
-            # Update the rule state
-            updated_rule = dict(rule)
-            updated_rule['enabled'] = enabled
-
-            # Determine the endpoint for the update
-            if rule_type == 'traffic_routes':
-                url = f"{TRAFFIC_ROUTES_ENDPOINT}/{rule_id}"
-            elif rule_type == 'port_forward_rules':
-                url = f"{PORT_FORWARD_ENDPOINT}/{rule_id}"
-            elif rule_type == 'firewall_rules':
-                url = f"{LEGACY_FIREWALL_RULES_ENDPOINT}/{rule_id}"
-            elif rule_type == 'traffic_rules':
-                url = f"{LEGACY_TRAFFIC_RULES_ENDPOINT}/{rule_id}"
-            else:
-                return False, f"No endpoint for rule type: {rule_type}"
-
-            # Make the update request
-            url = f"https://{self.host}{url}"
-            success, response, error = await self._make_authenticated_request('put', url, updated_rule)
-            
-            if not success:
-                return False, f"Failed to update {rule_type}: {error}"
-
-            return True, None
-
-        except Exception as e:
-            logger.error("Error updating rule state: %s", str(e))
-            return False, str(e)
 
     async def get_cookie(self) -> str:
         """Get the authentication cookie for websocket connections."""

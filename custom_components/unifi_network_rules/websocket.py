@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta
+import json
 
 import aiohttp
 from aiohttp import ClientWebSocketResponse, WSMsgType
@@ -13,7 +14,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, LOGGER
-from .udm_api import UDMAPI  # Add import for type checking
+from .udm_api import UDMAPI
 
 RETRY_TIMER = 15
 CHECK_WEBSOCKET_INTERVAL = timedelta(minutes=1)
@@ -38,35 +39,58 @@ class UnifiRuleWebsocket:
         self._initialized = False
         self._ws = None
         self._connection_event = asyncio.Event()
+        self._message_handler = None
 
         self.available = False
         self._ws_reconnect_delay = RETRY_TIMER
-        self.coordinator_callback = None
+
+    def set_message_handler(self, handler):
+        """Set the message handler callback."""
+        self._message_handler = handler
 
     @callback
     def start(self) -> None:
         """Start websocket connection."""
+        # Cancel any existing check
+        if self._cancel_websocket_check:
+            self._cancel_websocket_check()
+            
+        # Start new connection
         self.reconnect()
         
         # Setup periodic connection check
-        if not self._cancel_websocket_check:
-            self._cancel_websocket_check = async_track_time_interval(
-                self.hass, self._check_websocket_health, CHECK_WEBSOCKET_INTERVAL
-            )
+        self._cancel_websocket_check = async_track_time_interval(
+            self.hass, 
+            self._check_websocket_health,
+            CHECK_WEBSOCKET_INTERVAL
+        )
 
     def reconnect(self, log: bool = False) -> None:
         """Prepare to reconnect UniFi session."""
         async def _reconnect() -> None:
-            """Trigger a reconnect and notify HA."""
-            self.start_websocket()
             if log:
-                LOGGER.warning(
-                    "Connected. Please report if this message appears unreasonably often as it indicates an unstable connection"
-                )
+                LOGGER.warning("Attempting to reconnect websocket...")
+                
+            # Ensure previous connection is closed
+            if self._ws:
+                await self._ws.close()
+                self._ws = None
+                
+            # Start new connection
+            self.start_websocket()
+            
+            # Wait for connection to be established
+            if await self.wait_for_connection(timeout=30):
+                if log:
+                    LOGGER.info("Successfully reconnected websocket")
+            else:
+                LOGGER.error("Failed to establish websocket connection")
+                # Schedule another reconnect attempt
+                self.hass.loop.call_later(RETRY_TIMER, lambda: self.reconnect(True))
 
         if log:
             LOGGER.warning("Disconnected. Reconnecting...")
-        self.hass.loop.create_task(_reconnect())
+        self.hass.async_create_task(_reconnect())
 
     @callback
     def start_websocket(self) -> None:
@@ -92,7 +116,8 @@ class UnifiRuleWebsocket:
                     url,
                     headers=headers,
                     ssl=False,
-                    heartbeat=30
+                    heartbeat=30,
+                    receive_timeout=60
                 ) as ws:
                     self._ws = ws
                     self._initialized = True
@@ -105,17 +130,24 @@ class UnifiRuleWebsocket:
                                 await self._handle_ws_message(msg.data)
                             except Exception as err:
                                 LOGGER.error("Error handling message: %s", err)
-                        elif msg.type in (WSMsgType.CLOSED, WSMsgType.ERROR):
+                        elif msg.type == WSMsgType.ERROR:
+                            LOGGER.error("Websocket error: %s", ws.exception())
+                            break
+                        elif msg.type == WSMsgType.CLOSED:
                             LOGGER.debug("Websocket connection closed")
                             break
-                        
-                    LOGGER.debug("Websocket connection loop ended")
-                    
+                        elif msg.type == WSMsgType.PING:
+                            await ws.pong()
+
         except asyncio.CancelledError:
             LOGGER.debug("Websocket task cancelled")
             raise
-        except Exception as err:
+        except aiohttp.ClientError as err:
             LOGGER.error("Websocket connection error: %s", err)
+            self._handle_ws_error()
+            raise
+        except Exception as err:
+            LOGGER.error("Unexpected websocket error: %s", err)
             self._handle_ws_error()
             raise
         finally:
@@ -129,7 +161,8 @@ class UnifiRuleWebsocket:
         """Handle websocket error."""
         if self.ws_task is not None:
             self.ws_task.cancel()
-        self.reconnect()
+        # Add delay before reconnect to prevent rapid reconnection attempts
+        self.hass.loop.call_later(5, self.reconnect)
 
     async def stop_and_wait(self) -> None:
         """Close websocket connection and wait for it to close."""
@@ -162,32 +195,23 @@ class UnifiRuleWebsocket:
 
     async def _handle_ws_message(self, message: str) -> None:
         """Handle incoming websocket message."""
-        if not self.coordinator_callback:
+        if not self._message_handler:
             return
             
         try:
-            # Try to parse message as JSON if it's a string
             if isinstance(message, str):
                 try:
-                    import json
-                    parsed_message = json.loads(message)
-                except json.JSONDecodeError as e:
-                    LOGGER.warning("Failed to parse websocket message as JSON: %s - %s", message, str(e))
+                    data = json.loads(message)
+                except json.JSONDecodeError:
                     return
             else:
-                parsed_message = message
-
-            if self.hass and self.coordinator_callback:
-                # Handle both async and non-async callbacks
-                if asyncio.iscoroutinefunction(self.coordinator_callback):
-                    self.hass.async_create_task(
-                        self.coordinator_callback(parsed_message),
-                        name="unifi_rules_ws_callback"
-                    )
+                data = message
+            
+            if data and self.hass and self._message_handler:
+                if asyncio.iscoroutinefunction(self._message_handler):
+                    await self._message_handler(data)
                 else:
-                    # For non-async callbacks, run directly
-                    self.coordinator_callback(parsed_message)
-
+                    self._message_handler(data)
         except Exception as e:
             LOGGER.error("Error processing websocket message: %s", str(e))
 

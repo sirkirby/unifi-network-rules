@@ -1,304 +1,176 @@
-from homeassistant.core import HomeAssistant, ServiceCall, HomeAssistantError
-from homeassistant.const import ATTR_ENTITY_ID
-from .utils import logger
-import asyncio
+"""Services for UniFi Network Rules integration."""
+from __future__ import annotations
+
+from typing import Any
+import voluptuous as vol
 import json
 import os
-import voluptuous as vol
-import homeassistant.helpers.config_validation as cv
+import asyncio
 
-SERVICE_FILENAME = "filename"
-SERVICE_NAME_FILTER = "name_filter"
-SERVICE_STATE = "state"
-SERVICE_RULE_ID = "rule_id"
-SERVICE_RULE_TYPE = "rule_type"
+from homeassistant.core import HomeAssistant, ServiceCall, HomeAssistantError, callback
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 
-REFRESH_SERVICE = "refresh"
-BACKUP_SERVICE = "backup_rules"
-RESTORE_SERVICE = "restore_rules"
-BULK_UPDATE_SERVICE = "bulk_update_rules"
-DELETE_RULE_SERVICE = "delete_rule"
+from .const import DOMAIN, LOGGER
+from .rule_template import RuleType
 
+# Service names
+SERVICE_REFRESH = "refresh"
+SERVICE_BACKUP = "backup_rules"
+SERVICE_RESTORE = "restore_rules"
+SERVICE_BULK_UPDATE = "bulk_update_rules"
+SERVICE_DELETE_RULE = "delete_rule"
+SERVICE_APPLY_TEMPLATE = "apply_template"
+SERVICE_SAVE_TEMPLATE = "save_template"
 
-from .rule_template import (
-    RuleType,
-    FirewallPolicyTemplate,
-    TrafficRouteTemplate,
-    PortForwardTemplate
-)
+# Schema fields
+CONF_FILENAME = "filename"
+CONF_RULE_IDS = "rule_ids"
+CONF_NAME_FILTER = "name_filter"
+CONF_RULE_TYPES = "rule_types"
+CONF_TEMPLATE_ID = "template_id"
+CONF_TEMPLATE = "template"
+CONF_VARIABLES = "variables"
+CONF_STATE = "state"
+CONF_RULE_ID = "rule_id"
+CONF_RULE_TYPE = "rule_type"
 
-from .const import (
-    DOMAIN,
-    SERVICE_APPLY_TEMPLATE,
-    SERVICE_SAVE_TEMPLATE,
-    CONF_TEMPLATE_ID,
-    CONF_TEMPLATE_VARIABLES,
-    CONF_RULE_TYPE,
-    LOGGER
-)
-
-BACKUP_SCHEMA = vol.Schema({
-    vol.Required(SERVICE_FILENAME): cv.string,
-})
-
-RESTORE_SCHEMA = vol.Schema({
-    vol.Required(SERVICE_FILENAME): cv.string,
-    vol.Optional("rule_ids"): vol.All(cv.ensure_list, [cv.string]),
-    vol.Optional("name_filter"): cv.string,
-    vol.Optional("rule_types"): vol.All(cv.ensure_list, [vol.In(["policy", "route", "firewall", "traffic", "port_forward"])])
-})
-
-BULK_UPDATE_SCHEMA = vol.Schema({
-    vol.Required(SERVICE_NAME_FILTER): cv.string,
-    vol.Required(SERVICE_STATE): cv.boolean,
-})
-
-DELETE_RULE_SCHEMA = vol.Schema({
-    vol.Required(SERVICE_RULE_ID): cv.string,
-    vol.Required(SERVICE_RULE_TYPE): vol.In(["policy"]),
-})
-
-TEMPLATE_SAVE_SCHEMA = vol.Schema({
-    vol.Required(CONF_TEMPLATE_ID): cv.string,
-    vol.Required(CONF_RULE_TYPE): vol.In([
-        RuleType.FIREWALL_POLICY.value,
-        RuleType.TRAFFIC_ROUTE.value,
-        RuleType.PORT_FORWARD.value,
-    ]),
-    vol.Required("template"): dict,
-})
-
-TEMPLATE_APPLY_SCHEMA = vol.Schema({
-    vol.Required(CONF_TEMPLATE_ID): cv.string,
-    vol.Optional(CONF_TEMPLATE_VARIABLES, default={}): dict,
-})
+# Signal for entity cleanup
+SIGNAL_ENTITIES_CLEANUP = f"{DOMAIN}_cleanup"
 
 async def async_refresh_service(hass: HomeAssistant, call: ServiceCall) -> None:
     """Service to refresh UniFi data."""
-    domain_data = hass.data.get("unifi_network_rules", {})
-    tasks = []
-
-    for entry in domain_data.values():
-        coordinator = entry.get("coordinator")
+    for entry_data in hass.data[DOMAIN].values():
+        coordinator = entry_data.get("coordinator")
         if coordinator:
-            try:
-                tasks.append(coordinator.async_request_refresh())
-            except Exception as e:
-                LOGGER.error(f"Error scheduling coordinator refresh: {str(e)}")
-
-    if tasks:
-        try:
-            await asyncio.gather(*tasks, return_exceptions=True)
-            LOGGER.debug(f"Coordinator refresh triggered via service for {len(tasks)} coordinator(s)")
-        except Exception as e:
-            LOGGER.error(f"Error during coordinator refresh: {str(e)}")
-    else:
-        LOGGER.debug("Coordinator not found during service call")
+            await coordinator.async_refresh()
 
 async def async_backup_rules_service(hass: HomeAssistant, call: ServiceCall) -> None:
     """Service to backup rules to a file."""
-    filename = call.data[SERVICE_FILENAME]
-    domain_data = hass.data.get("unifi_network_rules", {})
+    filename = call.data[CONF_FILENAME]
     backup_data = {}
 
-    for entry_id, entry_data in domain_data.items():
+    for entry_id, entry_data in hass.data[DOMAIN].items():
         coordinator = entry_data.get("coordinator")
         if coordinator and coordinator.data:
-            entry_backup = {}
-            
-            # Only include non-empty data in backup
-            if firewall_policies := coordinator.data.get("firewall_policies"):
-                entry_backup["firewall_policies"] = firewall_policies
-            
-            if traffic_routes := coordinator.data.get("traffic_routes"):
-                entry_backup["traffic_routes"] = traffic_routes
-            
-            if firewall_rules := coordinator.data.get("firewall_rules"):
-                entry_backup["firewall_rules"] = firewall_rules
-            
-            if traffic_rules := coordinator.data.get("traffic_rules"):
-                entry_backup["traffic_rules"] = traffic_rules
-            
-            if port_forward_rules := coordinator.data.get("port_forward_rules"):
-                entry_backup["port_forward_rules"] = port_forward_rules
-
-            if entry_backup:
-                backup_data[entry_id] = entry_backup
+            backup_data[entry_id] = {
+                rule_type: rules
+                for rule_type, rules in coordinator.data.items()
+                if rules  # Only include non-empty data
+            }
 
     if not backup_data:
-        LOGGER.error("No data available to backup")
-        return None
+        raise HomeAssistantError("No data available to backup")
 
     try:
         backup_path = hass.config.path(filename)
-        json_data = json.dumps(backup_data, indent=2, ensure_ascii=False)
         with open(backup_path, 'w', encoding='utf-8') as f:
-            f.write(json_data)
-        LOGGER.info(f"Rules backup created successfully at {backup_path}")
-        return backup_data
+            json.dump(backup_data, f, indent=2, ensure_ascii=False)
+        LOGGER.info("Rules backup created at %s", backup_path)
     except Exception as e:
-        LOGGER.error(f"Failed to create backup: {str(e)}")
-        return None
+        raise HomeAssistantError(f"Failed to create backup: {str(e)}")
 
 async def async_restore_rules_service(hass: HomeAssistant, call: ServiceCall) -> None:
     """Service to restore rules from a file."""
-    filename = call.data[SERVICE_FILENAME]
-    rule_ids = call.data.get("rule_ids", [])
-    name_filter = call.data.get("name_filter", "")
-    rule_types = call.data.get("rule_types", ["policy", "route", "firewall", "traffic", "port_forward"])
-    
-    domain_data = hass.data.get("unifi_network_rules", {})
-    backup_path = hass.config.path(filename)
+    filename = call.data[CONF_FILENAME]
+    rule_ids = call.data.get(CONF_RULE_IDS, [])
+    name_filter = call.data.get(CONF_NAME_FILTER, "").lower()
+    rule_types = call.data.get(CONF_RULE_TYPES, [])
 
+    backup_path = hass.config.path(filename)
     if not os.path.exists(backup_path):
-        LOGGER.error(f"Backup file not found: {backup_path}")
-        return
+        raise HomeAssistantError(f"Backup file not found: {backup_path}")
 
     try:
         with open(backup_path, 'r') as f:
             backup_data = json.load(f)
     except Exception as e:
-        LOGGER.error(f"Failed to read backup file: {str(e)}")
-        return
+        raise HomeAssistantError(f"Failed to read backup file: {str(e)}")
 
-    def should_restore_rule(rule, rule_type):
-        """Check if a rule should be restored based on filters."""
-        if rule_ids and rule["_id"] not in rule_ids:
-            return False
-        if name_filter and name_filter.lower() not in rule.get("name", "").lower():
-            return False
-        if rule_type not in rule_types:
-            return False
-        return True
-
-    for entry_id, entry_data in domain_data.items():
+    for entry_id, entry_data in hass.data[DOMAIN].items():
         if entry_id not in backup_data:
-            LOGGER.warning(f"No backup data found for entry {entry_id}")
             continue
 
         api = entry_data.get("api")
         if not api:
-            LOGGER.error(f"No API instance found for entry {entry_id}")
             continue
 
         backup_entry = backup_data[entry_id]
 
-        # Restore firewall policies if available
-        if api.capabilities.zone_based_firewall and "firewall_policies" in backup_entry:
+        # Helper to check if a rule should be restored
+        def should_restore(rule: dict, rule_type: str) -> bool:
+            if rule_ids and rule["_id"] not in rule_ids:
+                return False
+            if name_filter and name_filter not in rule.get("name", "").lower():
+                return False
+            if rule_types and rule_type not in rule_types:
+                return False
+            return True
+
+        # Restore firewall policies
+        if "firewall_policies" in backup_entry and api.capabilities.zone_based_firewall:
             for policy in backup_entry["firewall_policies"]:
-                if should_restore_rule(policy, "policy"):
-                    try:
-                        success, error = await api.update_firewall_policy(policy["_id"], policy)
-                        if not success:
-                            LOGGER.error(f"Failed to restore firewall policy {policy['_id']}: {error}")
-                    except Exception as e:
-                        LOGGER.error(f"Error restoring firewall policy {policy['_id']}: {str(e)}")
+                if should_restore(policy, "policy"):
+                    await api.update_firewall_policy(policy["_id"], policy)
 
-        # Restore traffic routes if available
-        if api.capabilities.traffic_routes and "traffic_routes" in backup_entry:
+        # Restore traffic routes
+        if "traffic_routes" in backup_entry and api.capabilities.traffic_routes:
             for route in backup_entry["traffic_routes"]:
-                if should_restore_rule(route, "route"):
-                    try:
-                        success, error = await api.update_traffic_route(route["_id"], route)
-                        if not success:
-                            LOGGER.error(f"Failed to restore traffic route {route['_id']}: {error}")
-                    except Exception as e:
-                        LOGGER.error(f"Error restoring traffic route {route['_id']}: {str(e)}")
+                if should_restore(route, "route"):
+                    await api.update_traffic_route(route["_id"], route)
 
-        # Restore legacy firewall rules if available
-        if "firewall_rules" in backup_entry:
-            for rule in backup_entry["firewall_rules"]:
-                if should_restore_rule(rule, "firewall"):
-                    try:
-                        success, error = await api.update_legacy_firewall_rule(rule["_id"], rule)
-                        if not success:
-                            LOGGER.error(f"Failed to restore legacy firewall rule {rule['_id']}: {error}")
-                    except Exception as e:
-                        LOGGER.error(f"Error restoring legacy firewall rule {rule['_id']}: {str(e)}")
-
-        # Restore legacy traffic rules if available
-        if "traffic_rules" in backup_entry:
-            for rule in backup_entry["traffic_rules"]:
-                if should_restore_rule(rule, "traffic"):
-                    try:
-                        success, error = await api.update_legacy_traffic_rule(rule["_id"], rule)
-                        if not success:
-                            LOGGER.error(f"Failed to restore legacy traffic rule {rule['_id']}: {error}")
-                    except Exception as e:
-                        LOGGER.error(f"Error restoring legacy traffic rule {rule['_id']}: {str(e)}")
-
-        # Restore port forward rules if available
+        # Restore port forward rules
         if "port_forward_rules" in backup_entry:
             for rule in backup_entry["port_forward_rules"]:
-                if should_restore_rule(rule, "port_forward"):
-                    try:
-                        success, error = await api.update_port_forward_rule(rule["_id"], rule)
-                        if not success:
-                            LOGGER.error(f"Failed to restore port forward rule {rule['_id']}: {error}")
-                    except Exception as e:
-                        LOGGER.error(f"Error restoring port forward rule {rule['_id']}: {str(e)}")
+                if should_restore(rule, "port_forward"):
+                    await api.update_port_forward_rule(rule["_id"], rule)
 
-        # Refresh the coordinator after restore
+        # Restore legacy firewall rules
+        if "legacy_firewall_rules" in backup_entry and api.capabilities.legacy_firewall:
+            for rule in backup_entry["legacy_firewall_rules"]:
+                if should_restore(rule, "legacy_firewall"):
+                    await api.update_legacy_firewall_rule(rule["_id"], rule)
+
+        # Restore legacy traffic rules
+        if "legacy_traffic_rules" in backup_entry and api.capabilities.legacy_traffic:
+            for rule in backup_entry["legacy_traffic_rules"]:
+                if should_restore(rule, "legacy_traffic"):
+                    await api.update_legacy_traffic_rule(rule["_id"], rule)
+
+        # Refresh coordinator after restore
         coordinator = entry_data.get("coordinator")
         if coordinator:
-            await coordinator.async_request_refresh()
-
-    LOGGER.info("Rules restore completed")
+            await coordinator.async_refresh()
 
 async def async_bulk_update_rules_service(hass: HomeAssistant, call: ServiceCall) -> None:
     """Service to enable/disable multiple rules based on name matching."""
-    name_filter = call.data[SERVICE_NAME_FILTER].lower()
-    desired_state = call.data[SERVICE_STATE]
-    domain_data = hass.data.get("unifi_network_rules", {})
-    
-    for entry_id, entry_data in domain_data.items():
+    name_filter = call.data[CONF_NAME_FILTER].lower()
+    desired_state = call.data[CONF_STATE]
+
+    for entry_data in hass.data[DOMAIN].values():
         coordinator = entry_data.get("coordinator")
         api = entry_data.get("api")
-        if not coordinator or not api:
+        if not coordinator or not api or not coordinator.data:
             continue
-            
-        # Get all rules that match the name filter
-        matched_rules = []
-        if coordinator.data:
-            # Check firewall policies
-            if api.capabilities.zone_based_firewall:
-                for policy in coordinator.data.get("firewall_policies", []):
-                    if name_filter in policy.get("name", "").lower():
-                        matched_rules.append(("policy", policy))
-                    
-            # Check traffic routes
-            if api.capabilities.traffic_routes:
-                for route in coordinator.data.get("traffic_routes", []):
-                    if name_filter in route.get("name", "").lower():
-                        matched_rules.append(("route", route))
-        
-        # Update each matched rule
-        for rule_type, rule in matched_rules:
-            try:
-                rule_copy = rule.copy()
-                rule_copy["enabled"] = desired_state
-                
-                if rule_type == "policy":
-                    success, error = await api.update_firewall_policy(rule["_id"], rule_copy)
-                else:  # route
-                    success, error = await api.update_traffic_route(rule["_id"], rule_copy)
-                    
-                if not success:
-                    LOGGER.error(f"Failed to update {rule_type} rule {rule['_id']}: {error}")
-                else:
-                    LOGGER.info(f"Successfully updated {rule_type} rule '{rule.get('name')}' to {desired_state}")
-                    
-            except Exception as e:
-                LOGGER.error(f"Error updating {rule_type} rule {rule['_id']}: {str(e)}")
-        
-        # Refresh the coordinator after updates
-        await coordinator.async_request_refresh()
+
+        # Find and update matching rules
+        for rule_type, rules in coordinator.data.items():
+            rule_list = rules if isinstance(rules, list) else rules.get("data", [])
+            for rule in rule_list:
+                if name_filter in rule.get("name", "").lower():
+                    rule_copy = rule.copy()
+                    rule_copy["enabled"] = desired_state
+                    await api.update_rule_state(rule_type, rule["_id"], desired_state)
+
+        # Refresh after updates
+        await coordinator.async_refresh()
 
 async def async_delete_rule_service(hass: HomeAssistant, call: ServiceCall) -> None:
     """Service to delete a rule."""
-    rule_id = call.data[SERVICE_RULE_ID]
-    rule_type = call.data[SERVICE_RULE_TYPE]
-    domain_data = hass.data.get("unifi_network_rules", {})
+    rule_id = call.data[CONF_RULE_ID]
+    rule_type = call.data[CONF_RULE_TYPE]
+    domain_data = hass.data.get(DOMAIN, {})
     
     for entry_id, entry_data in domain_data.items():
         api = entry_data.get("api")
@@ -306,15 +178,29 @@ async def async_delete_rule_service(hass: HomeAssistant, call: ServiceCall) -> N
             continue
             
         try:
+            success = False
+            error = None
+            
             if rule_type == "policy":
                 success, error = await api.delete_firewall_policies([rule_id])
-                if not success:
-                    LOGGER.error(f"Failed to delete firewall policy: {error}")
-                else:
-                    LOGGER.info(f"Successfully deleted firewall policy {rule_id}")
+            elif rule_type == "route":
+                success, error = await api.delete_traffic_routes([rule_id])
+            elif rule_type == "port_forward":
+                success, error = await api.delete_port_forward_rules([rule_id])
+            elif rule_type == "legacy_firewall" and api.capabilities.legacy_firewall:
+                success, error = await api.delete_legacy_firewall_rules([rule_id])
+            elif rule_type == "legacy_traffic" and api.capabilities.legacy_traffic:
+                success, error = await api.delete_legacy_traffic_rules([rule_id])
             else:
-                LOGGER.error(f"Unsupported rule type for deletion: {rule_type}")
+                LOGGER.error(f"Deletion not supported for rule type: {rule_type}")
                 continue
+                
+            if not success:
+                LOGGER.error(f"Failed to delete {rule_type} rule: {error}")
+            else:
+                LOGGER.info(f"Successfully deleted {rule_type} rule {rule_id}")
+                # Trigger cleanup after successful deletion
+                async_dispatcher_send(hass, SIGNAL_ENTITIES_CLEANUP)
                 
             # Refresh the coordinator
             coordinator = entry_data.get("coordinator")
@@ -327,168 +213,230 @@ async def async_delete_rule_service(hass: HomeAssistant, call: ServiceCall) -> N
 async def async_apply_template_service(hass: HomeAssistant, call: ServiceCall) -> None:
     """Service to apply a rule template."""
     template_id = call.data[CONF_TEMPLATE_ID]
-    variables = call.data.get(CONF_TEMPLATE_VARIABLES, {})
+    variables = call.data.get(CONF_VARIABLES, {})
     
     template_registry = hass.data[DOMAIN].get("template_registry")
     if not template_registry:
-        LOGGER.error("Template registry not initialized")
         raise HomeAssistantError("Template registry not initialized")
         
     template = template_registry.get_template(template_id)
     if not template:
-        LOGGER.error("Template '%s' not found", template_id)
-        raise ValueError(f"Template {template_id} not found")
+        raise HomeAssistantError(f"Template {template_id} not found")
         
     try:
-        # Convert template to rule with variables
         rule = template.to_rule(**variables)
-        LOGGER.debug("Generated rule from template: %s", rule)
     except (KeyError, ValueError) as e:
-        LOGGER.error("Error applying template variables: %s", str(e))
         raise HomeAssistantError(f"Error applying template: {str(e)}")
-        
-    # Apply the rule based on its type
-    success = False
-    error = None
-    
+
+    # Create the rule using the appropriate API method
     for entry_data in hass.data[DOMAIN].values():
         api = entry_data.get("api")
         if not api:
             continue
-            
-        try:
-            if template.rule_type == RuleType.FIREWALL_POLICY and api.capabilities.zone_based_firewall:
-                success, error = await api.create_firewall_policy(rule)
-            elif template.rule_type == RuleType.TRAFFIC_ROUTE and api.capabilities.traffic_routes:
-                success, error = await api.create_traffic_route(rule)
-            elif template.rule_type == RuleType.PORT_FORWARD:
-                success, error = await api.create_port_forward_rule(rule)
-                
-            if success:
-                LOGGER.info("Successfully applied template '%s'", template_id)
-                # Refresh coordinator after successful application
-                coordinator = entry_data.get("coordinator")
-                if coordinator:
-                    await coordinator.async_request_refresh()
-                return
-                
-        except Exception as e:
-            error = str(e)
-            LOGGER.error("Error applying template: %s", error)
-            
-    if not success:
-        raise HomeAssistantError(f"Failed to apply template: {error}")
+
+        if template.rule_type == RuleType.FIREWALL_POLICY and api.capabilities.zone_based_firewall:
+            await api.create_firewall_policy(rule)
+        elif template.rule_type == RuleType.TRAFFIC_ROUTE and api.capabilities.traffic_routes:
+            await api.create_traffic_route(rule)
+        elif template.rule_type == RuleType.PORT_FORWARD:
+            await api.create_port_forward_rule(rule)
+
+        # Refresh coordinator after creating rule
+        coordinator = entry_data.get("coordinator")
+        if coordinator:
+            await coordinator.async_refresh()
+        break
 
 async def async_save_template_service(hass: HomeAssistant, call: ServiceCall) -> None:
     """Service to save a rule template."""
     template_id = call.data[CONF_TEMPLATE_ID]
     rule_type = call.data[CONF_RULE_TYPE]
-    template_data = call.data["template"]
+    template_data = call.data[CONF_TEMPLATE]
     
     template_registry = hass.data[DOMAIN].get("template_registry")
     if not template_registry:
         raise HomeAssistantError("Template registry not initialized")
         
     try:
-        # Ensure name and description are provided
-        if "name" not in template_data or "description" not in template_data:
-            raise ValueError("Template must include 'name' and 'description'")
-        
-        # Create appropriate template type
-        if rule_type == RuleType.FIREWALL_POLICY.value:
-            template = FirewallPolicyTemplate(**template_data)
-        elif rule_type == RuleType.TRAFFIC_ROUTE.value:
-            template = TrafficRouteTemplate(**template_data)
-        elif rule_type == RuleType.PORT_FORWARD.value:
-            template = PortForwardTemplate(**template_data)
-        else:
-            raise ValueError(f"Unsupported rule type: {rule_type}")
-            
+        template = template_registry.create_template(rule_type, template_data)
         template_registry.register_template(template_id, template)
-        LOGGER.info("Template '%s' saved successfully", template_id)
-        
-    except TypeError as e:
-        LOGGER.error("Invalid template data: %s", str(e))
-        raise HomeAssistantError(f"Invalid template data: {str(e)}")
     except Exception as e:
-        LOGGER.error("Error saving template: %s", str(e))
         raise HomeAssistantError(f"Error saving template: {str(e)}")
 
-async def async_setup_services(hass: HomeAssistant) -> None:
-    """Set up services for the UniFi Network Rules integration."""
-    async def wrapped_refresh_service(call: ServiceCall) -> None:
-        """Wrapped refresh service that ensures proper call argument."""
-        await async_refresh_service(hass, call)
+async def async_cleanup_unavailable_entities(hass: HomeAssistant, call: ServiceCall = None) -> None:
+    """Clean up unavailable entities."""
+    registry = async_get_entity_registry(hass)
+    removed = []
+    
+    if DOMAIN not in hass.data:
+        LOGGER.warning("No UniFi Network Rules integration data found")
+        return
 
-    async def wrapped_backup_service(call: ServiceCall) -> None:
-        """Wrapped backup service that ensures proper call argument."""
-        await async_backup_rules_service(hass, call)
-
-    async def wrapped_restore_service(call: ServiceCall) -> None:
-        """Wrapped restore service that ensures proper call argument."""
-        await async_restore_rules_service(hass, call)
-
-    async def wrapped_bulk_update_service(call: ServiceCall) -> None:
-        """Wrapped bulk update service that ensures proper call argument."""
-        await async_bulk_update_rules_service(hass, call)
+    for entity_id, entry in list(registry.entities.items()):
+        if entry.domain == DOMAIN and not entry.disabled:
+            try:
+                rule_id = entry.unique_id.split('_')[-1]
+                config_entry_id = entry.config_entry_id
+                
+                # Check if rule exists in any coordinator
+                exists = False
+                for entry_id, config_entry_data in hass.data[DOMAIN].items():
+                    coordinator = config_entry_data.get('coordinator')
+                    if coordinator and coordinator.get_rule(rule_id):
+                        exists = True
+                        break
+                        
+                if not exists:
+                    # First disable the entity
+                    registry.async_update_entity(
+                        entity_id,
+                        disabled_by="integration"
+                    )
+                    
+                    # Remove from config entry
+                    if config_entry_id:
+                        registry.async_update_entity(
+                            entity_id,
+                            remove_config_entry_id=config_entry_id
+                        )
+                    
+                    # Force remove entity state
+                    if hass.states.get(entity_id) is not None:
+                        hass.states.async_remove(entity_id)
+                    
+                    # Finally remove from registry
+                    registry.async_remove(entity_id)
+                    removed.append(entity_id)
+                    
+                    LOGGER.info("Removed unavailable entity %s (rule_id: %s)", entity_id, rule_id)
+            except Exception as entity_err:
+                LOGGER.error("Error processing entity %s: %s", entity_id, str(entity_err))
+                
+    if removed:
+        LOGGER.info("Cleanup completed. Removed %d entities: %s", len(removed), removed)
+        # Force reload after cleanup
+        await _reload_integration_entities(hass)
         
-    async def wrapped_delete_rule_service(call: ServiceCall) -> None:
-        """Wrapped delete rule service that ensures proper call argument."""
-        await async_delete_rule_service(hass, call)
+        # Give Home Assistant a moment to process the changes
+        await asyncio.sleep(1)
+        
+        # Double-check and force remove any remaining states
+        for entity_id in removed:
+            if hass.states.get(entity_id) is not None:
+                hass.states.async_remove(entity_id)
+    else:
+        LOGGER.info("No unavailable entities found to clean up")
 
-    async def wrapped_apply_template_service(call: ServiceCall) -> None:
-        """Wrapped apply template service that ensures proper call argument."""
-        await async_apply_template_service(hass, call)
-    
-    async def wrapped_save_template_service(call: ServiceCall) -> None:
-        """Wrapped save template service that ensures proper call argument."""
-        await async_save_template_service(hass, call)
+async def _reload_integration_entities(hass: HomeAssistant) -> None:
+    """Reload integration entities to ensure clean state."""
+    try:
+        # Notify the coordinator to refresh
+        for config_entry_data in hass.data[DOMAIN].values():
+            coordinator = config_entry_data.get('coordinator')
+            if coordinator:
+                await coordinator.async_refresh()
+                
+        # Force platform reload
+        for platform in hass.data.get("entity_platform", {}).get("switch", []):
+            if platform.domain == DOMAIN:
+                await platform.async_reset()
+    except Exception as err:
+        LOGGER.error("Error reloading integration entities: %s", str(err))
 
+@callback
+def async_trigger_cleanup(hass: HomeAssistant) -> None:
+    """Trigger entity cleanup."""
+    async_dispatcher_send(hass, SIGNAL_ENTITIES_CLEANUP)
+
+async def _async_cleanup_task(hass: HomeAssistant) -> None:
+    """Run the cleanup task."""
+    try:
+        await async_cleanup_unavailable_entities(hass)
+    except Exception as err:
+        LOGGER.error("Error during automatic entity cleanup: %s", str(err))
+
+async def async_setup_services(hass: HomeAssistant) -> None:
+    """Set up services."""
+    
+    # Refresh service
     hass.services.async_register(
         DOMAIN,
-        REFRESH_SERVICE,
-        wrapped_refresh_service,
-        schema=None,
+        SERVICE_REFRESH,
+        async_refresh_service,
+        schema=vol.Schema({})
     )
     
+    # Backup service
     hass.services.async_register(
         DOMAIN,
-        BACKUP_SERVICE,
-        wrapped_backup_service,
-        schema=BACKUP_SCHEMA,
+        SERVICE_BACKUP,
+        async_backup_rules_service,
+        schema=vol.Schema({
+            vol.Required(CONF_FILENAME): cv.string
+        })
     )
     
+    # Restore service
     hass.services.async_register(
         DOMAIN,
-        RESTORE_SERVICE,
-        wrapped_restore_service,
-        schema=RESTORE_SCHEMA,
+        SERVICE_RESTORE,
+        async_restore_rules_service,
+        schema=vol.Schema({
+            vol.Required(CONF_FILENAME): cv.string,
+            vol.Optional(CONF_RULE_IDS): vol.All(cv.ensure_list, [cv.string]),
+            vol.Optional(CONF_NAME_FILTER): cv.string,
+            vol.Optional(CONF_RULE_TYPES): vol.All(cv.ensure_list, 
+                [vol.In(["policy", "route", "firewall", "traffic", "port_forward"])])
+        })
     )
     
+    # Bulk update service
     hass.services.async_register(
         DOMAIN,
-        BULK_UPDATE_SERVICE,
-        wrapped_bulk_update_service,
-        schema=BULK_UPDATE_SCHEMA,
+        SERVICE_BULK_UPDATE,
+        async_bulk_update_rules_service,
+        schema=vol.Schema({
+            vol.Required(CONF_NAME_FILTER): cv.string,
+            vol.Required(CONF_STATE): cv.boolean
+        })
     )
     
+    # Delete rule service
     hass.services.async_register(
         DOMAIN,
-        DELETE_RULE_SERVICE,
-        wrapped_delete_rule_service,
-        schema=DELETE_RULE_SCHEMA,
+        SERVICE_DELETE_RULE,
+        async_delete_rule_service,
+        schema=vol.Schema({
+            vol.Required(CONF_RULE_ID): cv.string,
+            vol.Required(CONF_RULE_TYPE): vol.In([
+                "policy", "route", "port_forward", 
+                "legacy_firewall", "legacy_traffic"
+            ])
+        })
     )
     
+    # Template services
     hass.services.async_register(
         DOMAIN,
         SERVICE_APPLY_TEMPLATE,
-        wrapped_apply_template_service,
-        schema=TEMPLATE_APPLY_SCHEMA,
+        async_apply_template_service,
+        schema=vol.Schema({
+            vol.Required(CONF_TEMPLATE_ID): cv.string,
+            vol.Optional(CONF_VARIABLES, default={}): dict
+        })
     )
     
     hass.services.async_register(
         DOMAIN,
         SERVICE_SAVE_TEMPLATE,
-        wrapped_save_template_service,
-        schema=TEMPLATE_SAVE_SCHEMA,
+        async_save_template_service,
+        schema=vol.Schema({
+            vol.Required(CONF_TEMPLATE_ID): cv.string,
+            vol.Required(CONF_RULE_TYPE): vol.In([
+                RuleType.FIREWALL_POLICY.value,
+                RuleType.TRAFFIC_ROUTE.value,
+                RuleType.PORT_FORWARD.value
+            ]),
+            vol.Required(CONF_TEMPLATE): dict
+        })
     )
