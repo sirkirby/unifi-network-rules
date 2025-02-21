@@ -40,7 +40,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             password=entry.data[CONF_PASSWORD],
             verify_ssl=entry.data.get(CONF_VERIFY_SSL, False),
         )
+        
+        # Initialize API with required interfaces
         await api.async_init(hass)
+        
+        # Register required interfaces after initialization
+        if hasattr(api.controller, "register_interface"):
+            # Register interfaces based on UniFi OS version
+            from aiounifi.interfaces.firewall_policies import FirewallPolicies
+            from aiounifi.interfaces.firewall_zones import FirewallZones
+            from aiounifi.interfaces.port_forwarding import PortForwarding
+            from aiounifi.interfaces.traffic_rules import TrafficRules
+            from aiounifi.interfaces.traffic_routes import TrafficRoutes
+            from aiounifi.interfaces.wlans import Wlans
+            
+            api.controller.register_interface(FirewallPolicies)
+            api.controller.register_interface(FirewallZones)
+            api.controller.register_interface(PortForwarding)
+            api.controller.register_interface(TrafficRules)
+            api.controller.register_interface(TrafficRoutes)
+            api.controller.register_interface(Wlans)
+            
+            # Initialize interfaces
+            await api.controller.initialize()
 
         # Create and start websocket
         websocket = UnifiRuleWebsocket(hass, api, entry.entry_id)
@@ -64,7 +86,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "coordinator": coordinator,
             "websocket": websocket,
         }
-
+        
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
         # Register cleanup using callback directly

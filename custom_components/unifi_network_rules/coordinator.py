@@ -75,8 +75,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 "port_forwards": [],
                 "traffic_routes": [],
                 "firewall_zones": [],
-                "wlans": [],
-                "dpi_groups": []
+                "wlans": []
             }
             
             # Gather all rule types in parallel
@@ -86,8 +85,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 self._update_port_forwards(rules_data),
                 self._update_traffic_routes(rules_data),
                 self._update_firewall_zones(rules_data),
-                self._update_wlans(rules_data),
-                self._update_dpi_groups(rules_data)
+                self._update_wlans(rules_data)
             ]
             
             await asyncio.gather(*tasks)
@@ -106,8 +104,16 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
     async def _update_firewall_policies(self, data: Dict[str, List[Any]]) -> None:
         """Update firewall policies."""
         try:
-            policies = await self.api.get_firewall_policies()
-            data["firewall_policies"] = policies if policies else []
+            await self.api.controller.firewall_policies.update()
+            policies = self.api.controller.firewall_policies.values()
+            # Log policy details for debugging
+            for policy in policies:
+                LOGGER.debug(
+                    "Firewall policy details - ID: %s, Attrs: %s",
+                    getattr(policy, "id", "unknown"),
+                    dir(policy)
+                )
+            data["firewall_policies"] = list(policies)
         except Exception as err:
             LOGGER.error("Error fetching firewall policies: %s", err)
             data["firewall_policies"] = []
@@ -115,8 +121,16 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
     async def _update_traffic_rules(self, data: Dict[str, List[Any]]) -> None:
         """Update traffic rules."""
         try:
-            rules = await self.api.get_traffic_rules()
-            data["traffic_rules"] = rules if rules else []
+            await self.api.controller.traffic_rules.update()
+            rules = self.api.controller.traffic_rules.values()
+            # Log rule details for debugging
+            for rule in rules:
+                LOGGER.debug(
+                    "Traffic rule details - ID: %s, Attrs: %s",
+                    getattr(rule, "id", "unknown"),
+                    dir(rule)
+                )
+            data["traffic_rules"] = list(rules)
         except Exception as err:
             LOGGER.error("Error fetching traffic rules: %s", err)
             data["traffic_rules"] = []
@@ -124,8 +138,16 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
     async def _update_port_forwards(self, data: Dict[str, List[Any]]) -> None:
         """Update port forwards."""
         try:
-            forwards = await self.api.get_port_forwards()
-            data["port_forwards"] = forwards if forwards else []
+            await self.api.controller.port_forwarding.update()
+            forwards = self.api.controller.port_forwarding.values()
+            # Log forward details for debugging
+            for forward in forwards:
+                LOGGER.debug(
+                    "Port forward details - ID: %s, Attrs: %s",
+                    getattr(forward, "id", "unknown"),
+                    dir(forward)
+                )
+            data["port_forwards"] = list(forwards)
         except Exception as err:
             LOGGER.error("Error fetching port forwards: %s", err)
             data["port_forwards"] = []
@@ -133,12 +155,13 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
     async def _update_traffic_routes(self, data: Dict[str, List[Any]]) -> None:
         """Update traffic routes."""
         try:
-            routes = await self.api.get_traffic_routes()
+            await self.api.controller.traffic_routes.update()
+            routes = self.api.controller.traffic_routes.values()
             if routes:
                 LOGGER.debug("Retrieved traffic routes: %d items", len(routes))
                 for route in routes:
                     _log_rule_info(route)
-                data["traffic_routes"] = routes
+                data["traffic_routes"] = list(routes)
             else:
                 data["traffic_routes"] = []
         except Exception as err:
@@ -148,8 +171,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
     async def _update_firewall_zones(self, data: Dict[str, List[Any]]) -> None:
         """Update firewall zones."""
         try:
-            zones = await self.api.get_firewall_zones()
-            data["firewall_zones"] = zones if zones else []
+            await self.api.controller.firewall_zones.update()
+            zones = self.api.controller.firewall_zones.values()
+            data["firewall_zones"] = list(zones) if zones else []
         except Exception as err:
             LOGGER.error("Error fetching firewall zones: %s", err)
             data["firewall_zones"] = []
@@ -157,20 +181,12 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
     async def _update_wlans(self, data: Dict[str, List[Any]]) -> None:
         """Update WLANs."""
         try:
-            wlans = await self.api.get_wlans()
-            data["wlans"] = wlans if wlans else []
+            await self.api.controller.wlans.update()
+            wlans = self.api.controller.wlans.values()
+            data["wlans"] = list(wlans) if wlans else []
         except Exception as err:
             LOGGER.error("Error fetching WLANs: %s", err)
             data["wlans"] = []
-
-    async def _update_dpi_groups(self, data: Dict[str, List[Any]]) -> None:
-        """Update DPI groups."""
-        try:
-            groups = await self.api.get_dpi_groups()
-            data["dpi_groups"] = groups if groups else []
-        except Exception as err:
-            LOGGER.error("Error fetching DPI groups: %s", err)
-            data["dpi_groups"] = []
 
     @callback
     def _handle_websocket_message(self, message: dict[str, Any]) -> None:
@@ -194,9 +210,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             elif "routing" in message:
                 should_refresh = True
                 LOGGER.debug("Routing change detected")
-            elif "dpi" in message:
-                should_refresh = True
-                LOGGER.debug("DPI change detected")
             elif "wlan" in message:
                 should_refresh = True
                 LOGGER.debug("WLAN change detected")

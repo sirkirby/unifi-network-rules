@@ -18,6 +18,7 @@ from aiounifi.models.port_forward import PortForward
 
 from .const import DOMAIN, LOGGER
 from .coordinator import UnifiRuleUpdateCoordinator
+from .utils import get_rule_id, get_rule_name, get_rule_enabled
 
 PARALLEL_UPDATES = 1
 RULE_TYPES: Final = {
@@ -29,34 +30,6 @@ RULE_TYPES: Final = {
 
 # Track entities across the platform
 _ENTITY_CACHE = defaultdict(set)
-
-def _get_rule_id(rule: Any) -> str | None:
-    """Get the ID from a rule object."""
-    if isinstance(rule, TrafficRoute):
-        return rule.id
-    if isinstance(rule, (FirewallPolicy, TrafficRule, PortForward)):
-        return getattr(rule, "id", None)
-    if isinstance(rule, dict):
-        return rule.get("_id")
-    return None
-
-def _get_rule_name(rule: Any) -> str | None:
-    """Get the name/description from a rule object."""
-    if isinstance(rule, TrafficRoute):
-        return rule.description
-    if isinstance(rule, (FirewallPolicy, TrafficRule, PortForward)):
-        return getattr(rule, "name", None) or getattr(rule, "description", None)
-    if isinstance(rule, dict):
-        return rule.get("name") or rule.get("description")
-    return None
-
-def _get_rule_enabled(rule: Any) -> bool:
-    """Get the enabled state from a rule object."""
-    if isinstance(rule, (TrafficRoute, FirewallPolicy, TrafficRule, PortForward)):
-        return rule.enabled
-    if isinstance(rule, dict):
-        return rule.get("enabled", False)
-    return False
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -91,7 +64,7 @@ async def async_setup_entry(
                         dir(rule) if not isinstance(rule, dict) else list(rule.keys())
                     )
                     
-                    rule_id = _get_rule_id(rule)
+                    rule_id = get_rule_id(rule)
                     if not rule_id:
                         LOGGER.warning(
                             "Rule without ID found in %s: %s (type: %s)", 
@@ -144,12 +117,12 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         )
         
         # Get rule ID using helper function
-        self._rule_id = _get_rule_id(rule_data)
+        self._rule_id = get_rule_id(rule_data)
         if not self._rule_id:
             raise ValueError("Rule must have an ID")
         
         # Get rule name using helper function
-        name = _get_rule_name(rule_data) or f"Rule {self._rule_id}"
+        name = get_rule_name(rule_data) or f"Rule {self._rule_id}"
         self._attr_name = name
             
         self._attr_unique_id = f"{rule_type}_{self._rule_id}"
@@ -174,32 +147,88 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         if rule is None:
             return False
             
-        return _get_rule_enabled(rule)
+        return get_rule_enabled(rule)
 
     def _get_current_rule(self) -> Any | None:
         """Get current rule data from coordinator."""
         try:
             rules = self.coordinator.data.get(self._rule_type, [])
             for rule in rules:
-                if _get_rule_id(rule) == self._rule_id:
+                if get_rule_id(rule) == self._rule_id:
                     return rule
             return None
         except Exception as err:
             LOGGER.error("Error getting rule data: %s", err)
             return None
 
+    def _to_dict(self, obj: Any) -> dict:
+        """Convert a rule object to a dictionary."""
+        if isinstance(obj, dict):
+            return obj.copy()
+        base_data = {
+            "_id": getattr(obj, "id", None),
+            "enabled": getattr(obj, "enabled", False)
+        }
+        
+        if isinstance(obj, PortForward):
+            # PortForward specific conversion
+            port_data = {
+                "dst_port": getattr(obj, "dst", ""),  # Use dst instead of dst_port
+                "fwd_port": getattr(obj, "fwd", ""),  # Use fwd instead of fwd_port
+                "name": getattr(obj, "name", ""),
+                "pfwd_interface": getattr(obj, "pfwd_interface", "wan"),
+                "proto": getattr(obj, "proto", "tcp_udp"),
+                "src": getattr(obj, "src", "any")
+            }
+            base_data.update(port_data)
+            
+        elif isinstance(obj, TrafficRoute):
+            # TrafficRoute specific conversion
+            route_data = {
+                "description": getattr(obj, "description", ""),
+                "matching_address": getattr(obj, "matching_address", ""),
+                "target_gateway": getattr(obj, "target_gateway", ""),
+                "priority": getattr(obj, "priority", 0),
+                "source": getattr(obj, "source", "any")
+            }
+            base_data.update(route_data)
+            
+        elif isinstance(obj, FirewallPolicy):
+            # FirewallPolicy specific conversion
+            policy_data = {
+                "name": getattr(obj, "name", ""),
+                "description": getattr(obj, "description", ""),
+                "action": getattr(obj, "action", None),
+                "source": getattr(obj, "source", {}),
+                "destination": getattr(obj, "destination", {}),
+                "protocol": getattr(obj, "protocol", "all"),
+                "ports": getattr(obj, "ports", [])
+            }
+            base_data.update(policy_data)
+            
+        return {k: v for k, v in base_data.items() if v is not None}
+
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable the rule."""
         try:
+            current_rule = self._get_current_rule()
+            if not current_rule:
+                LOGGER.error("Cannot enable rule - current rule data not found")
+                return
+                
+            # Convert rule to dict while preserving all properties
+            rule_data = self._to_dict(current_rule)
+            rule_data["enabled"] = True
+            
             success = False
             if self._rule_type == "firewall_policies":
-                success = await self.coordinator.api.update_firewall_policy(self._rule_id, {"enabled": True})
+                success = await self.coordinator.api.update_firewall_policy(self._rule_id, rule_data)
             elif self._rule_type == "traffic_rules":
-                success = await self.coordinator.api.update_traffic_rule(self._rule_id, {"enabled": True})
+                success = await self.coordinator.api.update_traffic_rule(self._rule_id, rule_data)
             elif self._rule_type == "port_forwards":
-                success = await self.coordinator.api.update_port_forward(self._rule_id, {"enabled": True})
+                success = await self.coordinator.api.update_port_forward(self._rule_id, rule_data)
             elif self._rule_type == "traffic_routes":
-                success = await self.coordinator.api.update_traffic_route(self._rule_id, {"enabled": True})
+                success = await self.coordinator.api.update_traffic_route(self._rule_id, rule_data)
                 
             if success:
                 await self.coordinator.async_refresh()
@@ -212,15 +241,24 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable the rule."""
         try:
+            current_rule = self._get_current_rule()
+            if not current_rule:
+                LOGGER.error("Cannot disable rule - current rule data not found")
+                return
+                
+            # Convert rule to dict while preserving all properties
+            rule_data = self._to_dict(current_rule)
+            rule_data["enabled"] = False
+            
             success = False
             if self._rule_type == "firewall_policies":
-                success = await self.coordinator.api.update_firewall_policy(self._rule_id, {"enabled": False})
+                success = await self.coordinator.api.update_firewall_policy(self._rule_id, rule_data)
             elif self._rule_type == "traffic_rules":
-                success = await self.coordinator.api.update_traffic_rule(self._rule_id, {"enabled": False})
+                success = await self.coordinator.api.update_traffic_rule(self._rule_id, rule_data)
             elif self._rule_type == "port_forwards":
-                success = await self.coordinator.api.update_port_forward(self._rule_id, {"enabled": False})
+                success = await self.coordinator.api.update_port_forward(self._rule_id, rule_data)
             elif self._rule_type == "traffic_routes":
-                success = await self.coordinator.api.update_traffic_route(self._rule_id, {"enabled": False})
+                success = await self.coordinator.api.update_traffic_route(self._rule_id, rule_data)
                 
             if success:
                 await self.coordinator.async_refresh()

@@ -9,6 +9,10 @@ import aiohttp
 
 from aiounifi import Controller
 from aiounifi.models.configuration import Configuration
+from aiounifi.models.traffic_route import TrafficRoute, TrafficRouteSaveRequest
+from aiounifi.models.firewall_policy import FirewallPolicy, FirewallPolicyUpdateRequest
+from aiounifi.models.traffic_rule import TrafficRule, TrafficRuleEnableRequest
+from aiounifi.models.port_forward import PortForward, PortForwardEnableRequest
 from aiounifi.errors import (
     AiounifiException,
     BadGateway,
@@ -25,6 +29,7 @@ from homeassistant.const import CONF_VERIFY_SSL
 from homeassistant.exceptions import HomeAssistantError
 
 from .const import LOGGER
+from .utils import get_rule_id
 
 class UnifiNetworkRulesError(HomeAssistantError):
     """Base error for UniFi Network Rules."""
@@ -44,7 +49,7 @@ class UDMAPI:
         self.password = password
         self.verify_ssl = verify_ssl
         self._session = None
-        self.api = None
+        self.controller = None  # Store Controller instance directly
         self._initialized = False
         self._hass_session = False  # Track if we're using HA's session
         self._ws_callback = None
@@ -84,32 +89,56 @@ class UDMAPI:
                     site="default",
                     ssl_context=ssl_context,
                 )
-                self.api = Controller(config)
+                self.controller = Controller(config)
 
                 async with asyncio.timeout(10):
-                    await self.api.login()
-                    # Load initial data
-                    await self.api.clients.update()
-                    await self.api.devices.update()
+                    await self.controller.login()
+                    
+                    # Initialize data only after interfaces are ready
+                    if hasattr(self.controller, "sites"):
+                        await self.controller.sites.update()
+                    
+                    # Update all data in parallel
+                    update_tasks = [
+                        self.get_firewall_policies(),
+                        self.get_firewall_zones(),
+                        self.get_port_forwards(),
+                        self.get_traffic_rules(),
+                        self.get_traffic_routes(),
+                        self.get_wlans()
+                    ]
+                    
+                    results = await asyncio.gather(*update_tasks, return_exceptions=True)
+                    for i, result in enumerate(results):
+                        if isinstance(result, Exception):
+                            LOGGER.warning("Error updating %s: %s", update_tasks[i].__name__, result)
+                    
                     self._initialized = True
+                    LOGGER.debug(
+                        "API Initialization complete. Available interfaces: %s",
+                        [attr for attr in dir(self.controller) if not attr.startswith('_')]
+                    )
 
             except (BadGateway, ResponseError, RequestError, ServiceUnavailable) as err:
                 if self._session and not self._hass_session:
                     await self._session.close()
                 self._session = None
-                self.api = None
+                self.controller = None
                 raise CannotConnect(f"Failed to connect: {err}") from err
             except LoginRequired as err:
                 if self._session and not self._hass_session:
                     await self._session.close()
                 self._session = None
-                self.api = None
+                self.controller = None
                 raise InvalidAuth("Invalid credentials") from err
             except Exception as err:
                 if self._session and not self._hass_session:
                     await self._session.close()
                 self._session = None
-                self.api = None
+                self.controller = None
+                LOGGER.error("Initialization error: %s. API attributes: %s", 
+                           err, 
+                           dir(self.controller) if self.controller else "No API instance")
                 raise UnifiNetworkRulesError(f"Unexpected error: {err}") from err
 
     @property
@@ -126,24 +155,24 @@ class UDMAPI:
             LOGGER.error("Error during cleanup: %s", str(err))
         finally:
             self._session = None
-            self.api = None
+            self.controller = None
 
     async def start_websocket(self) -> None:
         """Start websocket connection."""
-        if not self.api:
+        if not self.controller:
             raise RuntimeError("API not initialized")
         
-        await self.api.start_websocket()
+        await self.controller.start_websocket()
 
     async def stop_websocket(self) -> None:
         """Stop websocket connection."""
-        if self.api:
-            await self.api.stop_websocket()
+        if self.controller:
+            await self.controller.stop_websocket()
 
     def set_websocket_callback(self, callback):
         """Set the websocket callback."""
-        if self.api:
-            self.api.ws_handler = callback
+        if self.controller:
+            self.controller.ws_handler = callback
 
     async def _try_login(self) -> bool:
         """Attempt to login with rate limiting."""
@@ -162,7 +191,7 @@ class UDMAPI:
             self._login_attempt_count = 0
             
         try:
-            await self.api.login()
+            await self.controller.login()
             self._login_attempt_count = 0
             return True
         except Exception as err:
@@ -177,9 +206,8 @@ class UDMAPI:
         """Get all firewall policies."""
         LOGGER.debug("Fetching firewall policies")
         try:
-            await self.api.firewall_policies.update()
-            # Return the raw model objects
-            return list(self.api.firewall_policies.values())
+            await self.controller.firewall_policies.update()
+            return list(self.controller.firewall_policies.values())
         except Exception as err:
             LOGGER.error("Failed to get firewall policies: %s", str(err))
             return []
@@ -188,7 +216,7 @@ class UDMAPI:
         """Add a new firewall policy."""
         LOGGER.debug("Adding firewall policy: %s", policy_data)
         try:
-            policy = await self.api.firewall_policies.async_add(policy_data)
+            policy = await self.controller.firewall_policies.add_item(policy_data)
             return policy
         except Exception as err:
             LOGGER.error("Failed to add firewall policy: %s", str(err))
@@ -198,7 +226,18 @@ class UDMAPI:
         """Update an existing firewall policy."""
         LOGGER.debug("Updating firewall policy %s: %s", policy_id, policy_data)
         try:
-            await self.api.firewall_policies.async_update(policy_id, policy_data)
+            # Get the current policy
+            current_policies = await self.get_firewall_policies()
+            policy = next((p for p in current_policies if get_rule_id(p) == policy_id), None)
+            if not policy:
+                LOGGER.error("Firewall policy %s not found", policy_id)
+                return False
+            
+            # Update the policy's enabled state using the proper request
+            policy_dict = policy.raw.copy()
+            policy_dict["enabled"] = policy_data.get("enabled", False)
+            request = FirewallPolicyUpdateRequest.create(policy_dict)
+            await self.controller.request(request)
             return True
         except Exception as err:
             LOGGER.error("Failed to update firewall policy: %s", str(err))
@@ -208,7 +247,7 @@ class UDMAPI:
         """Remove a firewall policy."""
         LOGGER.debug("Removing firewall policy: %s", policy_id)
         try:
-            await self.api.firewall_policies.remove_item(policy_id)
+            await self.controller.firewall_policies.remove_item(policy_id)
             return True
         except Exception as err:
             LOGGER.error("Failed to remove firewall policy: %s", str(err))
@@ -219,9 +258,8 @@ class UDMAPI:
         """Get all traffic rules."""
         LOGGER.debug("Fetching traffic rules")
         try:
-            await self.api.traffic_rules.update()
-            # Return the raw model objects
-            return list(self.api.traffic_rules.values())
+            await self.controller.traffic_rules.update()
+            return list(self.controller.traffic_rules.values())
         except Exception as err:
             LOGGER.error("Failed to get traffic rules: %s", str(err))
             return []
@@ -230,7 +268,7 @@ class UDMAPI:
         """Add a new traffic rule."""
         LOGGER.debug("Adding traffic rule: %s", rule_data)
         try:
-            rule = await self.api.traffic_rules.async_add(rule_data)
+            rule = await self.controller.traffic_rules.add_item(rule_data)
             return rule
         except Exception as err:
             LOGGER.error("Failed to add traffic rule: %s", str(err))
@@ -240,7 +278,16 @@ class UDMAPI:
         """Update an existing traffic rule."""
         LOGGER.debug("Updating traffic rule %s: %s", rule_id, rule_data)
         try:
-            await self.api.traffic_rules.async_update(rule_id, rule_data)
+            # Get the current rule
+            current_rules = await self.get_traffic_rules()
+            rule = next((r for r in current_rules if get_rule_id(r) == rule_id), None)
+            if not rule:
+                LOGGER.error("Traffic rule %s not found", rule_id)
+                return False
+            
+            # Update the rule's enabled state using the proper request
+            request = TrafficRuleEnableRequest.create(rule.raw, enable=rule_data.get("enabled", False))
+            await self.controller.request(request)
             return True
         except Exception as err:
             LOGGER.error("Failed to update traffic rule: %s", str(err))
@@ -250,7 +297,7 @@ class UDMAPI:
         """Remove a traffic rule."""
         LOGGER.debug("Removing traffic rule: %s", rule_id)
         try:
-            await self.api.traffic_rules.async_delete(rule_id)
+            await self.controller.traffic_rules.remove_item(rule_id)
             return True
         except Exception as err:
             LOGGER.error("Failed to remove traffic rule: %s", str(err))
@@ -261,9 +308,8 @@ class UDMAPI:
         """Get all port forwards."""
         LOGGER.debug("Fetching port forwards")
         try:
-            await self.api.port_forwarding.update()
-            # Return the raw model objects
-            return list(self.api.port_forwarding.values())
+            await self.controller.port_forwarding.update()
+            return list(self.controller.port_forwarding.values())
         except Exception as err:
             LOGGER.error("Failed to get port forwards: %s", str(err))
             return []
@@ -272,7 +318,7 @@ class UDMAPI:
         """Add a new port forward."""
         LOGGER.debug("Adding port forward: %s", forward_data)
         try:
-            forward = await self.api.port_forwarding.async_add(forward_data)
+            forward = await self.controller.port_forwarding.add_item(forward_data)
             return forward
         except Exception as err:
             LOGGER.error("Failed to add port forward: %s", str(err))
@@ -282,7 +328,16 @@ class UDMAPI:
         """Update an existing port forward."""
         LOGGER.debug("Updating port forward %s: %s", forward_id, forward_data)
         try:
-            await self.api.port_forwarding.async_update(forward_id, forward_data)
+            # Get the current forward
+            current_forwards = await self.get_port_forwards()
+            forward = next((f for f in current_forwards if get_rule_id(f) == forward_id), None)
+            if not forward:
+                LOGGER.error("Port forward %s not found", forward_id)
+                return False
+            
+            # Update the forward's enabled state using the proper request
+            request = PortForwardEnableRequest.create(forward, enable=forward_data.get("enabled", False))
+            await self.controller.request(request)
             return True
         except Exception as err:
             LOGGER.error("Failed to update port forward: %s", str(err))
@@ -292,7 +347,7 @@ class UDMAPI:
         """Remove a port forward."""
         LOGGER.debug("Removing port forward: %s", forward_id)
         try:
-            await self.api.port_forwarding.async_delete(forward_id)
+            await self.controller.port_forwarding.remove_item(forward_id)
             return True
         except Exception as err:
             LOGGER.error("Failed to remove port forward: %s", str(err))
@@ -303,9 +358,8 @@ class UDMAPI:
         """Get all traffic routes."""
         LOGGER.debug("Fetching traffic routes")
         try:
-            await self.api.traffic_routes.update()
-            # Return the raw model objects instead of converting to dict
-            return list(self.api.traffic_routes.values())
+            await self.controller.traffic_routes.update()
+            return list(self.controller.traffic_routes.values())
         except Exception as err:
             LOGGER.error("Failed to get traffic routes: %s", str(err))
             return []
@@ -314,7 +368,7 @@ class UDMAPI:
         """Add a new traffic route."""
         LOGGER.debug("Adding traffic route: %s", route_data)
         try:
-            route = await self.api.traffic_routes.async_add(route_data)
+            route = await self.controller.traffic_routes.add_item(route_data)
             return route
         except Exception as err:
             LOGGER.error("Failed to add traffic route: %s", str(err))
@@ -324,7 +378,16 @@ class UDMAPI:
         """Update an existing traffic route."""
         LOGGER.debug("Updating traffic route %s: %s", route_id, route_data)
         try:
-            await self.api.traffic_routes.async_update(route_id, route_data)
+            # Get the current route
+            current_routes = await self.get_traffic_routes()
+            route = next((r for r in current_routes if get_rule_id(r) == route_id), None)
+            if not route:
+                LOGGER.error("Traffic route %s not found", route_id)
+                return False
+            
+            # Update the route's enabled state using the proper request
+            request = TrafficRouteSaveRequest.create(route.raw, enable=route_data.get("enabled"))
+            await self.controller.request(request)
             return True
         except Exception as err:
             LOGGER.error("Failed to update traffic route: %s", str(err))
@@ -334,7 +397,7 @@ class UDMAPI:
         """Remove a traffic route."""
         LOGGER.debug("Removing traffic route: %s", route_id)
         try:
-            await self.api.traffic_routes.async_delete(route_id)
+            await self.controller.traffic_routes.remove_item(route_id)
             return True
         except Exception as err:
             LOGGER.error("Failed to remove traffic route: %s", str(err))
@@ -345,8 +408,8 @@ class UDMAPI:
         """Get all firewall zones."""
         LOGGER.debug("Fetching firewall zones")
         try:
-            await self.api.firewall_zones.update()
-            return list(self.api.firewall_zones.values())
+            await self.controller.firewall_zones.update()
+            return list(self.controller.firewall_zones.values())
         except Exception as err:
             LOGGER.error("Failed to get firewall zones: %s", str(err))
             return []
@@ -355,7 +418,7 @@ class UDMAPI:
         """Add a new firewall zone."""
         LOGGER.debug("Adding firewall zone: %s", zone_data)
         try:
-            zone = await self.api.firewall_zones.async_add(zone_data)
+            zone = await self.controller.firewall_zones.add_item(zone_data)
             return zone
         except Exception as err:
             LOGGER.error("Failed to add firewall zone: %s", str(err))
@@ -365,41 +428,10 @@ class UDMAPI:
         """Update an existing firewall zone."""
         LOGGER.debug("Updating firewall zone %s: %s", zone_id, zone_data)
         try:
-            await self.api.firewall_zones.async_update(zone_id, zone_data)
+            await self.controller.firewall_zones.update_item(zone_id, zone_data)
             return True
         except Exception as err:
             LOGGER.error("Failed to update firewall zone: %s", str(err))
-            return False
-
-    # DPI Restriction Methods
-    async def get_dpi_groups(self) -> List[Dict[str, Any]]:
-        """Get all DPI restriction groups."""
-        LOGGER.debug("Fetching DPI restriction groups")
-        try:
-            await self.api.dpi_groups.update()
-            return list(self.api.dpi_groups.values())
-        except Exception as err:
-            LOGGER.error("Failed to get DPI groups: %s", str(err))
-            return []
-
-    async def add_dpi_group(self, group_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Add a new DPI restriction group."""
-        LOGGER.debug("Adding DPI group: %s", group_data)
-        try:
-            group = await self.api.dpi_groups.async_add(group_data)
-            return group
-        except Exception as err:
-            LOGGER.error("Failed to add DPI group: %s", str(err))
-            return None
-
-    async def update_dpi_group(self, group_id: str, group_data: Dict[str, Any]) -> bool:
-        """Update an existing DPI restriction group."""
-        LOGGER.debug("Updating DPI group %s: %s", group_id, group_data)
-        try:
-            await self.api.dpi_groups.async_update(group_id, group_data)
-            return True
-        except Exception as err:
-            LOGGER.error("Failed to update DPI group: %s", str(err))
             return False
 
     # WLAN Management Methods
@@ -407,8 +439,8 @@ class UDMAPI:
         """Get all WLANs."""
         LOGGER.debug("Fetching WLANs")
         try:
-            await self.api.wlans.update()
-            return list(self.api.wlans.values())
+            await self.controller.wlans.update()
+            return list(self.controller.wlans.values())
         except Exception as err:
             LOGGER.error("Failed to get WLANs: %s", str(err))
             return []
@@ -417,7 +449,7 @@ class UDMAPI:
         """Update WLAN settings."""
         LOGGER.debug("Updating WLAN %s: %s", wlan_id, wlan_data)
         try:
-            await self.api.wlans.async_update(wlan_id, wlan_data)
+            await self.controller.wlans.update_item(wlan_id, wlan_data)
             return True
         except Exception as err:
             LOGGER.error("Failed to update WLAN: %s", str(err))
@@ -427,7 +459,7 @@ class UDMAPI:
         """Enable or disable a WLAN."""
         LOGGER.debug("Setting WLAN %s enabled state to: %s", wlan_id, enabled)
         try:
-            wlan = self.api.wlans[wlan_id]
+            wlan = self.controller.wlans[wlan_id]
             if not wlan:
                 raise KeyError(f"WLAN {wlan_id} not found")
             
@@ -445,13 +477,13 @@ class UDMAPI:
         try:
             stats = {}
             # Get system info
-            await self.api.system_info.update()
-            if self.api.system_info.data:
-                stats.update(self.api.system_info.data)
+            await self.controller.system_info.update()
+            if self.controller.system_info.data:
+                stats.update(self.controller.system_info.data)
             
             # Get dashboard stats
-            dashboard_stats = await self.api.stat_dashboard.async_get()
-            if dashboard_stats:
+            dashboard_stats = await self.controller.stat_dashboard.async_get()
+            if (dashboard_stats):
                 stats.update(dashboard_stats)
             
             return stats
@@ -464,11 +496,11 @@ class UDMAPI:
         LOGGER.debug("Fetching bandwidth usage for last %d seconds", timespan)
         try:
             # Get realtime stats from dashboard
-            stats = await self.api.stat_dashboard.async_get()
+            stats = await self.controller.stat_dashboard.async_get()
             
             # Add historical stats if available
             try:
-                history = await self.api.stat_dashboard.async_historical_data(timespan)
+                history = await self.controller.stat_dashboard.async_historical_data(timespan)
                 if history:
                     stats.update({
                         "historical": history
@@ -487,13 +519,13 @@ class UDMAPI:
         LOGGER.debug("Refreshing all data from UniFi controller")
         try:
             update_tasks = [
-                self.api.firewall_policies.update(),
-                self.api.traffic_rules.update(),
-                self.api.port_forwarding.update(),
-                self.api.traffic_routes.update(),
-                self.api.clients.update(),
-                self.api.devices.update(),
-                self.api.wlans.update()
+                self.controller.firewall_policies.update(),
+                self.controller.traffic_rules.update(),
+                self.controller.port_forwarding.update(),
+                self.controller.traffic_routes.update(),
+                self.controller.clients.update(),
+                self.controller.devices.update(),
+                self.controller.wlans.update()
             ]
             
             results = await asyncio.gather(*update_tasks, return_exceptions=True)
@@ -518,7 +550,7 @@ class UDMAPI:
                 
             success, error = await self._handle_api_request(
                 "Update firewall policy",
-                self.api.firewall_policies.async_update(policy_id, policy)
+                self.controller.firewall_policies.async_update(policy_id, policy)
             )
             
             if success:
@@ -543,10 +575,10 @@ class UDMAPI:
             
             # Check across different rule types
             rules_map = {
-                "firewall_policy": self.api.firewall_policies,
-                "traffic_rule": self.api.traffic_rules,
-                "port_forward": self.api.port_forwarding,
-                "traffic_route": self.api.traffic_routes
+                "firewall_policy": self.controller.firewall_policies,
+                "traffic_rule": self.controller.traffic_rules,
+                "port_forward": self.controller.port_forwarding,
+                "traffic_route": self.controller.traffic_routes
             }
             
             for rule_type, rules in rules_map.items():
@@ -586,13 +618,13 @@ class UDMAPI:
         try:
             success, error = await self._handle_api_request(
                 "Get clients",
-                self.api.clients.update()
+                self.controller.clients.update()
             )
             if not success:
                 LOGGER.error("Failed to get clients: %s", error)
                 return []
                 
-            clients = list(self.api.clients.values())
+            clients = list(self.controller.clients.values())
             if not include_offline:
                 clients = [c for c in clients if c.get('is_online', False)]
             return clients
@@ -606,7 +638,7 @@ class UDMAPI:
         try:
             success, error = await self._handle_api_request(
                 "Block client",
-                self.api.clients.async_block(client_mac)
+                self.controller.clients.async_block(client_mac)
             )
             if not success:
                 LOGGER.error("Failed to block client: %s", error)
@@ -621,7 +653,7 @@ class UDMAPI:
         try:
             success, error = await self._handle_api_request(
                 "Unblock client",
-                self.api.clients.async_unblock(client_mac)
+                self.controller.clients.async_unblock(client_mac)
             )
             if not success:
                 LOGGER.error("Failed to unblock client: %s", error)
@@ -636,7 +668,7 @@ class UDMAPI:
         try:
             success, error = await self._handle_api_request(
                 "Reconnect client",
-                self.api.clients.async_force_reconnect(client_mac)
+                self.controller.clients.async_force_reconnect(client_mac)
             )
             if not success:
                 LOGGER.error("Failed to reconnect client: %s", error)
@@ -651,7 +683,7 @@ class UDMAPI:
         try:
             success, error = await self._handle_api_request(
                 "Get device stats",
-                self.api.devices.update()
+                self.controller.devices.update()
             )
             if not success:
                 LOGGER.error("Failed to get device stats: %s", error)
@@ -666,8 +698,8 @@ class UDMAPI:
             }
             
             # Check both devices and clients since the MAC could be either
-            if mac in self.api.devices:
-                device = self.api.devices[mac]
+            if mac in self.controller.devices:
+                device = self.controller.devices[mac]
                 stats.update({
                     "rx_bytes": device.get("rx_bytes", 0),
                     "tx_bytes": device.get("tx_bytes", 0),
@@ -676,8 +708,8 @@ class UDMAPI:
                     "status": device.get("state", "unknown"),
                     "type": "device"
                 })
-            elif mac in self.api.clients:
-                client = self.api.clients[mac]
+            elif mac in self.controller.clients:
+                client = self.controller.clients[mac]
                 stats.update({
                     "rx_bytes": client.get("rx_bytes", 0),
                     "tx_bytes": client.get("tx_bytes", 0),
@@ -722,8 +754,8 @@ class UDMAPI:
                 "blocked": False
             }
             
-            if mac in self.api.clients:
-                client = self.api.clients[mac]
+            if mac in self.controller.clients:
+                client = self.controller.clients[mac]
                 stats.update({
                     "rx_bytes": client.get("rx_bytes", 0),
                     "tx_bytes": client.get("tx_bytes", 0),
@@ -742,7 +774,7 @@ class UDMAPI:
         """Force a client to reconnect."""
         LOGGER.debug("Forcing reconnect for client: %s", client_mac)
         try:
-            await self.api.clients.async_force_reconnect(client_mac)
+            await self.controller.clients.async_force_reconnect(client_mac)
             return True
         except Exception as err:
             LOGGER.error("Failed to reconnect client: %s", str(err))
@@ -753,11 +785,11 @@ class UDMAPI:
         LOGGER.debug("Fetching bandwidth usage for last %d seconds", timespan)
         try:
             # Get realtime stats from dashboard
-            stats = await self.api.stat_dashboard.async_get()
+            stats = await self.controller.stat_dashboard.async_get()
             
             # Add historical stats if available
             try:
-                history = await self.api.stat_dashboard.async_historical_data(timespan)
+                history = await self.controller.stat_dashboard.async_historical_data(timespan)
                 if history:
                     stats.update({
                         "historical": history
@@ -775,8 +807,8 @@ class UDMAPI:
         """Get events, optionally filtered by type."""
         LOGGER.debug("Fetching events (type=%s)", event_type)
         try:
-            await self.api.events.update()
-            events = list(self.api.events.values())
+            await self.controller.events.update()
+            events = list(self.controller.events.values())
             if event_type:
                 events = [e for e in events if e.get("type") == event_type]
             return events
