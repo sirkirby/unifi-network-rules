@@ -47,10 +47,7 @@ class UDMAPI:
         self.api = None
         self._initialized = False
         self._hass_session = False  # Track if we're using HA's session
-        self._ws = None
-        self._ws_task = None
         self._ws_callback = None
-        self._running = False
         self._last_login_attempt = 0
         self._login_attempt_count = 0
         self._max_login_attempts = 3
@@ -120,23 +117,6 @@ class UDMAPI:
         """Return True if API is initialized."""
         return self._initialized
 
-    async def authenticate_session(self) -> Tuple[bool, Optional[str]]:
-        """Authenticate session."""
-        try:
-            if not self.api:
-                await self.async_init()
-            await self.api.login()
-            self._initialized = True
-            return True, None
-        except LoginRequired as err:
-            return False, "Invalid credentials"
-        except ResponseError as err:
-            return False, f"Response error: {err}"
-        except RequestError as err:
-            return False, f"Request error: {err}"
-        except Exception as err:
-            return False, str(err)
-
     async def cleanup(self) -> None:
         """Cleanup resources."""
         try:
@@ -152,23 +132,18 @@ class UDMAPI:
         """Start websocket connection."""
         if not self.api:
             raise RuntimeError("API not initialized")
-
-        if not self._ws_task:
-            self._running = True
-            self._ws_task = asyncio.create_task(self._websocket_loop())
+        
+        await self.api.start_websocket()
 
     async def stop_websocket(self) -> None:
         """Stop websocket connection."""
-        self._running = False
-        if self._ws:
-            await self._ws.close()
-        if self._ws_task:
-            self._ws_task.cancel()
-            try:
-                await self._ws_task
-            except asyncio.CancelledError:
-                pass
-            self._ws_task = None
+        if self.api:
+            await self.api.stop_websocket()
+
+    def set_websocket_callback(self, callback):
+        """Set the websocket callback."""
+        if self.api:
+            self.api.ws_handler = callback
 
     async def _try_login(self) -> bool:
         """Attempt to login with rate limiting."""
@@ -197,72 +172,13 @@ class UDMAPI:
                         self._login_attempt_count, self._max_login_attempts, str(err))
             return False
 
-    async def _websocket_loop(self) -> None:
-        """Websocket connection loop."""
-        LOGGER.debug("Starting websocket loop")
-        url = f"wss://{self.host}:443/wss/s/default/events"
-        retry_delay = 5
-        max_retry_delay = 300  # 5 minutes
-        
-        while self._running:
-            try:
-                if not self._session or not self.api:
-                    await self.async_init()
-                
-                # Ensure we're authenticated before connecting
-                if not await self._try_login():
-                    await asyncio.sleep(retry_delay)
-                    retry_delay = min(retry_delay * 2, max_retry_delay)
-                    continue
-
-                cookies = self._session.cookie_jar.filter_cookies(f"https://{self.host}")
-                headers = {
-                    "Origin": f"https://{self.host}",
-                    "Cookie": "; ".join([f"{k}={v.value}" for k, v in cookies.items()])
-                }
-
-                async with self._session.ws_connect(
-                    url,
-                    ssl=False if not self.verify_ssl else None,
-                    heartbeat=30,
-                    headers=headers
-                ) as ws:
-                    self._ws = ws
-                    LOGGER.debug("Websocket connected")
-                    retry_delay = 5  # Reset retry delay on successful connection
-
-                    async for msg in ws:
-                        if msg.type == WSMsgType.TEXT:
-                            if self._ws_callback:
-                                await self._ws_callback(msg.json())
-                        elif msg.type in (WSMsgType.CLOSED, WSMsgType.ERROR):
-                            break
-
-            except Exception as err:
-                LOGGER.error("Websocket error: %s", str(err))
-                if self._ws:
-                    await self._ws.close()
-                self._ws = None
-                
-                if self._running:
-                    await asyncio.sleep(retry_delay)
-                    retry_delay = min(retry_delay * 2, max_retry_delay)
-                    continue
-                break
-
-        self._ws = None
-        LOGGER.debug("Websocket loop ended")
-
-    def set_websocket_callback(self, callback):
-        """Set the websocket callback."""
-        self._ws_callback = callback
-
     # Firewall Policy Methods
-    async def get_firewall_policies(self) -> List[Dict[str, Any]]:
+    async def get_firewall_policies(self) -> List[Any]:
         """Get all firewall policies."""
         LOGGER.debug("Fetching firewall policies")
         try:
             await self.api.firewall_policies.update()
+            # Return the raw model objects
             return list(self.api.firewall_policies.values())
         except Exception as err:
             LOGGER.error("Failed to get firewall policies: %s", str(err))
@@ -292,18 +208,19 @@ class UDMAPI:
         """Remove a firewall policy."""
         LOGGER.debug("Removing firewall policy: %s", policy_id)
         try:
-            await self.api.firewall_policies.async_delete(policy_id)
+            await self.api.firewall_policies.remove_item(policy_id)
             return True
         except Exception as err:
             LOGGER.error("Failed to remove firewall policy: %s", str(err))
             return False
 
     # Traffic Rules Methods
-    async def get_traffic_rules(self) -> List[Dict[str, Any]]:
+    async def get_traffic_rules(self) -> List[Any]:
         """Get all traffic rules."""
         LOGGER.debug("Fetching traffic rules")
         try:
             await self.api.traffic_rules.update()
+            # Return the raw model objects
             return list(self.api.traffic_rules.values())
         except Exception as err:
             LOGGER.error("Failed to get traffic rules: %s", str(err))
@@ -340,12 +257,13 @@ class UDMAPI:
             return False
 
     # Port Forward Methods
-    async def get_port_forwards(self) -> List[Dict[str, Any]]:
+    async def get_port_forwards(self) -> List[Any]:
         """Get all port forwards."""
         LOGGER.debug("Fetching port forwards")
         try:
-            await self.api.port_forward.update()
-            return list(self.api.port_forward.values())
+            await self.api.port_forwarding.update()
+            # Return the raw model objects
+            return list(self.api.port_forwarding.values())
         except Exception as err:
             LOGGER.error("Failed to get port forwards: %s", str(err))
             return []
@@ -354,7 +272,7 @@ class UDMAPI:
         """Add a new port forward."""
         LOGGER.debug("Adding port forward: %s", forward_data)
         try:
-            forward = await self.api.port_forward.async_add(forward_data)
+            forward = await self.api.port_forwarding.async_add(forward_data)
             return forward
         except Exception as err:
             LOGGER.error("Failed to add port forward: %s", str(err))
@@ -364,7 +282,7 @@ class UDMAPI:
         """Update an existing port forward."""
         LOGGER.debug("Updating port forward %s: %s", forward_id, forward_data)
         try:
-            await self.api.port_forward.async_update(forward_id, forward_data)
+            await self.api.port_forwarding.async_update(forward_id, forward_data)
             return True
         except Exception as err:
             LOGGER.error("Failed to update port forward: %s", str(err))
@@ -374,18 +292,19 @@ class UDMAPI:
         """Remove a port forward."""
         LOGGER.debug("Removing port forward: %s", forward_id)
         try:
-            await self.api.port_forward.async_delete(forward_id)
+            await self.api.port_forwarding.async_delete(forward_id)
             return True
         except Exception as err:
             LOGGER.error("Failed to remove port forward: %s", str(err))
             return False
 
     # Traffic Routes Methods
-    async def get_traffic_routes(self) -> List[Dict[str, Any]]:
+    async def get_traffic_routes(self) -> List[Any]:
         """Get all traffic routes."""
         LOGGER.debug("Fetching traffic routes")
         try:
             await self.api.traffic_routes.update()
+            # Return the raw model objects instead of converting to dict
             return list(self.api.traffic_routes.values())
         except Exception as err:
             LOGGER.error("Failed to get traffic routes: %s", str(err))
@@ -524,13 +443,67 @@ class UDMAPI:
         """Get system statistics and status."""
         LOGGER.debug("Fetching system statistics")
         try:
+            stats = {}
+            # Get system info
             await self.api.system_info.update()
-            return self.api.system_info.data
+            if self.api.system_info.data:
+                stats.update(self.api.system_info.data)
+            
+            # Get dashboard stats
+            dashboard_stats = await self.api.stat_dashboard.async_get()
+            if dashboard_stats:
+                stats.update(dashboard_stats)
+            
+            return stats
         except Exception as err:
             LOGGER.error("Failed to get system stats: %s", str(err))
             return {}
 
-    # Bulk Operations
+    async def get_bandwidth_usage(self, timespan: int = 3600) -> Dict[str, Any]:
+        """Get bandwidth usage statistics for the specified timespan in seconds."""
+        LOGGER.debug("Fetching bandwidth usage for last %d seconds", timespan)
+        try:
+            # Get realtime stats from dashboard
+            stats = await self.api.stat_dashboard.async_get()
+            
+            # Add historical stats if available
+            try:
+                history = await self.api.stat_dashboard.async_historical_data(timespan)
+                if history:
+                    stats.update({
+                        "historical": history
+                    })
+            except Exception as history_err:
+                LOGGER.warning("Failed to get historical bandwidth data: %s", str(history_err))
+            
+            return stats
+        except Exception as err:
+            LOGGER.error("Failed to get bandwidth usage: %s", str(err))
+            return {}
+
+    # Bulk Operations and Updates
+    async def refresh_all(self) -> None:
+        """Refresh all data from the UniFi controller."""
+        LOGGER.debug("Refreshing all data from UniFi controller")
+        try:
+            update_tasks = [
+                self.api.firewall_policies.update(),
+                self.api.traffic_rules.update(),
+                self.api.port_forwarding.update(),
+                self.api.traffic_routes.update(),
+                self.api.clients.update(),
+                self.api.devices.update(),
+                self.api.wlans.update()
+            ]
+            
+            results = await asyncio.gather(*update_tasks, return_exceptions=True)
+            for task_result in results:
+                if isinstance(task_result, Exception):
+                    LOGGER.warning("Error during refresh: %s", str(task_result))
+                    
+        except Exception as err:
+            LOGGER.error("Failed to refresh all data: %s", str(err))
+
     async def bulk_update_firewall_policies(self, policies: List[Dict[str, Any]]) -> Tuple[int, List[str]]:
         """Bulk update firewall policies. Returns (success_count, failed_ids)."""
         LOGGER.debug("Performing bulk update of %d firewall policies", len(policies))
@@ -543,26 +516,18 @@ class UDMAPI:
                 LOGGER.error("Policy missing _id field: %s", policy)
                 continue
                 
-            success = await self.update_firewall_policy(policy_id, policy)
+            success, error = await self._handle_api_request(
+                "Update firewall policy",
+                self.api.firewall_policies.async_update(policy_id, policy)
+            )
+            
             if success:
                 success_count += 1
             else:
+                LOGGER.error("Failed to update policy %s: %s", policy_id, error)
                 failed_ids.append(policy_id)
         
         return success_count, failed_ids
-
-    async def refresh_all(self) -> None:
-        """Refresh all data from the UniFi controller."""
-        LOGGER.debug("Refreshing all data from UniFi controller")
-        try:
-            await asyncio.gather(
-                self.api.firewall_policies.update(),
-                self.api.traffic_rules.update(),
-                self.api.port_forwarding.update(),
-                self.api.traffic_routes.update()
-            )
-        except Exception as err:
-            LOGGER.error("Failed to refresh all data: %s", str(err))
 
     async def get_rule_status(self, rule_id: str) -> Dict[str, Any]:
         """Get detailed status for a specific rule including dependencies."""
@@ -572,20 +537,26 @@ class UDMAPI:
                 "active": False,
                 "dependencies": [],
                 "conflicts": [],
-                "last_modified": None
+                "last_modified": None,
+                "type": None
             }
             
             # Check across different rule types
-            for rules in [
-                self.api.firewall_policies,
-                self.api.traffic_rules,
-                self.api.port_forward,
-                self.api.traffic_routes
-            ]:
+            rules_map = {
+                "firewall_policy": self.api.firewall_policies,
+                "traffic_rule": self.api.traffic_rules,
+                "port_forward": self.api.port_forwarding,
+                "traffic_route": self.api.traffic_routes
+            }
+            
+            for rule_type, rules in rules_map.items():
                 if rule_id in rules:
                     rule = rules[rule_id]
-                    status["active"] = rule.get("enabled", False)
-                    status["last_modified"] = rule.get("last_modified")
+                    status.update({
+                        "active": rule.get("enabled", False),
+                        "last_modified": rule.get("last_modified"),
+                        "type": rule_type
+                    })
                     # Add any dependent or conflicting rules
                     status["dependencies"].extend(self._find_dependencies(rule))
                     status["conflicts"].extend(self._find_conflicts(rule))
@@ -608,12 +579,19 @@ class UDMAPI:
         # Implementation specific to your rule structure
         return conflicts
 
-    # Client Management Methods
+    # Client and Device Management Methods
     async def get_clients(self, include_offline: bool = False) -> List[Dict[str, Any]]:
         """Get all client devices."""
         LOGGER.debug("Fetching clients (include_offline=%s)", include_offline)
         try:
-            await self.api.clients.update()
+            success, error = await self._handle_api_request(
+                "Get clients",
+                self.api.clients.update()
+            )
+            if not success:
+                LOGGER.error("Failed to get clients: %s", error)
+                return []
+                
             clients = list(self.api.clients.values())
             if not include_offline:
                 clients = [c for c in clients if c.get('is_online', False)]
@@ -626,8 +604,13 @@ class UDMAPI:
         """Block a client device."""
         LOGGER.debug("Blocking client: %s", client_mac)
         try:
-            await self.api.clients.async_block(client_mac)
-            return True
+            success, error = await self._handle_api_request(
+                "Block client",
+                self.api.clients.async_block(client_mac)
+            )
+            if not success:
+                LOGGER.error("Failed to block client: %s", error)
+            return success
         except Exception as err:
             LOGGER.error("Failed to block client: %s", str(err))
             return False
@@ -636,23 +619,93 @@ class UDMAPI:
         """Unblock a client device."""
         LOGGER.debug("Unblocking client: %s", client_mac)
         try:
-            await self.api.clients.async_unblock(client_mac)
-            return True
+            success, error = await self._handle_api_request(
+                "Unblock client",
+                self.api.clients.async_unblock(client_mac)
+            )
+            if not success:
+                LOGGER.error("Failed to unblock client: %s", error)
+            return success
         except Exception as err:
             LOGGER.error("Failed to unblock client: %s", str(err))
             return False
+
+    async def reconnect_client(self, client_mac: str) -> bool:
+        """Force a client to reconnect."""
+        LOGGER.debug("Forcing reconnect for client: %s", client_mac)
+        try:
+            success, error = await self._handle_api_request(
+                "Reconnect client",
+                self.api.clients.async_force_reconnect(client_mac)
+            )
+            if not success:
+                LOGGER.error("Failed to reconnect client: %s", error)
+            return success
+        except Exception as err:
+            LOGGER.error("Failed to reconnect client: %s", str(err))
+            return False
+
+    async def get_device_stats(self, mac: str) -> Dict[str, Any]:
+        """Get statistics for a specific device."""
+        LOGGER.debug("Fetching device stats for: %s", mac)
+        try:
+            success, error = await self._handle_api_request(
+                "Get device stats",
+                self.api.devices.update()
+            )
+            if not success:
+                LOGGER.error("Failed to get device stats: %s", error)
+                return {}
+
+            stats = {
+                "rx_bytes": 0,
+                "tx_bytes": 0,
+                "uptime": 0,
+                "last_seen": None,
+                "status": "unknown"
+            }
+            
+            # Check both devices and clients since the MAC could be either
+            if mac in self.api.devices:
+                device = self.api.devices[mac]
+                stats.update({
+                    "rx_bytes": device.get("rx_bytes", 0),
+                    "tx_bytes": device.get("tx_bytes", 0),
+                    "uptime": device.get("uptime", 0),
+                    "last_seen": device.get("last_seen"),
+                    "status": device.get("state", "unknown"),
+                    "type": "device"
+                })
+            elif mac in self.api.clients:
+                client = self.api.clients[mac]
+                stats.update({
+                    "rx_bytes": client.get("rx_bytes", 0),
+                    "tx_bytes": client.get("tx_bytes", 0),
+                    "uptime": client.get("uptime", 0),
+                    "last_seen": client.get("last_seen"),
+                    "status": "online" if client.get("is_online", False) else "offline",
+                    "type": "client",
+                    "blocked": client.get("blocked", False)
+                })
+            
+            return stats
+        except Exception as err:
+            LOGGER.error("Failed to get device stats: %s", str(err))
+            return {}
 
     # Network Security Methods
     async def get_threats(self) -> List[Dict[str, Any]]:
         """Get detected security threats."""
         LOGGER.debug("Fetching security threats")
         try:
-            await self.api.events.update()
-            threats = [
-                event for event in self.api.events.values()
-                if event.get('type') in ['IPS', 'IDS', 'Threat']
+            # Get security-related events
+            security_types = ["IPS", "IDS", "Threat", "SecurityEvent"]
+            events = await self.get_events()
+            return [
+                event for event in events
+                if event.get("type") in security_types
+                or event.get("subsystem") == "security"
             ]
-            return threats
         except Exception as err:
             LOGGER.error("Failed to get threats: %s", str(err))
             return []
@@ -699,13 +752,59 @@ class UDMAPI:
         """Get bandwidth usage statistics for the specified timespan in seconds."""
         LOGGER.debug("Fetching bandwidth usage for last %d seconds", timespan)
         try:
+            # Get realtime stats from dashboard
             stats = await self.api.stat_dashboard.async_get()
-            return {
-                "wan-tx_bytes": stats.get("wan-tx_bytes", 0),
-                "wan-rx_bytes": stats.get("wan-rx_bytes", 0),
-                "lan-tx_bytes": stats.get("lan-tx_bytes", 0),
-                "lan-rx_bytes": stats.get("lan-rx_bytes", 0)
-            }
+            
+            # Add historical stats if available
+            try:
+                history = await self.api.stat_dashboard.async_historical_data(timespan)
+                if history:
+                    stats.update({
+                        "historical": history
+                    })
+            except Exception as history_err:
+                LOGGER.warning("Failed to get historical bandwidth data: %s", str(history_err))
+            
+            return stats
         except Exception as err:
             LOGGER.error("Failed to get bandwidth usage: %s", str(err))
             return {}
+
+    # Events and Security Methods
+    async def get_events(self, event_type: str | None = None) -> List[Dict[str, Any]]:
+        """Get events, optionally filtered by type."""
+        LOGGER.debug("Fetching events (type=%s)", event_type)
+        try:
+            await self.api.events.update()
+            events = list(self.api.events.values())
+            if event_type:
+                events = [e for e in events if e.get("type") == event_type]
+            return events
+        except Exception as err:
+            LOGGER.error("Failed to get events: %s", str(err))
+            return []
+
+    # Error handling helper
+    async def _handle_api_request(self, request_type: str, action: str) -> Tuple[bool, Optional[str]]:
+        """Handle an API request with proper error handling."""
+        try:
+            await action
+            return True, None
+        except LoginRequired:
+            LOGGER.warning("%s failed: Session expired, attempting to reconnect", request_type)
+            try:
+                await self._try_login()
+                await action
+                return True, None
+            except Exception as login_err:
+                return False, f"Failed to reconnect: {login_err}"
+        except (BadGateway, ServiceUnavailable) as err:
+            return False, f"Service unavailable: {err}"
+        except RequestError as err:
+            return False, f"Request failed: {err}"
+        except ResponseError as err:
+            return False, f"Invalid response: {err}"
+        except AiounifiException as err:
+            return False, f"API error: {err}"
+        except Exception as err:
+            return False, f"Unexpected error: {err}"

@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, AsyncMock, patch, mock_open
 import json
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from custom_components.unifi_network_rules.switch import UDMPortForwardRuleSwitch
 from custom_components.unifi_network_rules.udm_api import UDMAPI
 
 from custom_components.unifi_network_rules.services import (
@@ -272,92 +271,6 @@ async def test_restore_rules_service_mixed_errors(hass: HomeAssistant, mock_api,
         assert mock_api.update_firewall_policy.call_count == 2
         assert mock_api.update_traffic_route.call_count == 2
         mock_coordinator.async_request_refresh.assert_called_once()
-
-@pytest.mark.asyncio
-async def test_port_forward_rule_switch_toggle_failure(hass: HomeAssistant):
-    """Test handling of toggle failure for port forward rule switch."""
-    coordinator = MagicMock()
-    coordinator.hass = hass
-    coordinator.data = {
-        "port_forward_rules": [{
-            "_id": "test123",
-            "enabled": False,
-            "name": "Test",
-            "fwd": "10.29.13.235"
-        }]
-    }
-    api = MagicMock()
-    api.toggle_port_forward_rule = AsyncMock(return_value=(False, "API Error"))
-    api.supports_websocket = MagicMock(return_value=False)
-
-    rule = {
-        "pfwd_interface": "wan",
-        "src": "any",
-        "enabled": False,
-        "fwd": "10.29.13.235",
-        "proto": "tcp",
-        "name": "Test",
-        "_id": "test123",
-        "dst_port": "80",
-        "fwd_port": "80"
-    }
-
-    switch = UDMPortForwardRuleSwitch(coordinator, api, rule)
-    switch.hass = hass
-    switch.entity_id = "switch.port_forward_test"
-    with pytest.raises(HomeAssistantError):
-        await switch.async_turn_on()
-
-@pytest.mark.asyncio
-async def test_port_forward_rule_switch_coordinator_update(hass: HomeAssistant):
-    """Test coordinator update handling for port forward rule switch."""
-    coordinator = MagicMock()
-    coordinator.hass = hass
-    coordinator.data = {
-        "port_forward_rules": [{
-            "_id": "test123",
-            "enabled": False,
-            "name": "Test",
-            "fwd": "10.29.13.235"
-        }]
-    }
-    api = MagicMock()
-    rule_id = "test123"
-    
-    rule = {
-        "pfwd_interface": "wan",
-        "src": "any",
-        "enabled": False,
-        "fwd": "10.29.13.235",
-        "proto": "tcp",
-        "name": "Test",
-        "_id": rule_id,
-        "dst_port": "80",
-        "fwd_port": "80"
-    }
-
-    switch = UDMPortForwardRuleSwitch(coordinator, api, rule)
-    switch.hass = hass
-    switch.entity_id = "switch.port_forward_test"
-    
-    # Test update with new data
-    coordinator.data = {
-        "port_forward_rules": [
-            {**rule, "enabled": True}
-        ]
-    }
-    switch._handle_coordinator_update()
-    assert switch.is_on is True
-
-    # Test update with missing rule
-    coordinator.data = {"port_forward_rules": []}
-    switch._handle_coordinator_update()
-    assert switch.available is False
-
-    # Test update with no data
-    coordinator.data = None
-    switch._handle_coordinator_update()
-    assert switch.available is False
 
 @pytest.mark.asyncio
 async def test_backup_restore_port_forward_rules(hass: HomeAssistant, mock_api, mock_coordinator, mock_data):

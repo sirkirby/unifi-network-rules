@@ -19,18 +19,17 @@ TRIGGER_RULE_CHANGED = "rule_changed"
 TRIGGER_RULE_DELETED = "rule_deleted"
 
 # Message types from aiounifi websocket
-# These are the raw message types that come from the UniFi controller websocket
-# firewall: Updates to firewall policies and rules
-# portForward: Changes to port forwarding rules
-# routing: Changes to network routes and routing policies
-WS_MSG_FIREWALL_UPDATE = "firewall"
+WS_MSG_FIREWALL = "firewall"
 WS_MSG_PORT_FORWARD = "portForward"
 WS_MSG_ROUTING = "routing"
+WS_MSG_DPI = "dpi"
 
-# Example message structures:
-# Firewall update: {"firewall": {"_id": "123", "enabled": true, ...}}
-# Port forward: {"portForward": {"_id": "456", "enabled": false, "name": "HTTP", ...}}
-# Routing: {"routing": {"_id": "789", "enabled": true, "name": "VPN Route", ...}}
+# Mapping of websocket message types to rule types
+WS_MSG_TYPE_MAP = {
+    WS_MSG_FIREWALL: RuleType.FIREWALL_POLICY.value,
+    WS_MSG_PORT_FORWARD: RuleType.PORT_FORWARD.value,
+    WS_MSG_ROUTING: RuleType.TRAFFIC_ROUTE.value,
+}
 
 # Configuration schema
 TRIGGER_SCHEMA = vol.Schema(
@@ -117,18 +116,14 @@ class UnifiRuleTriggerProtocol(TriggerProtocol):
             try:
                 msg_type = None
                 rule_data = None
-                
+
                 # Determine message type and extract rule data
-                if WS_MSG_FIREWALL_UPDATE in msg:
-                    msg_type = RuleType.FIREWALL_POLICY.value
-                    rule_data = msg[WS_MSG_FIREWALL_UPDATE]
-                elif WS_MSG_PORT_FORWARD in msg:
-                    msg_type = RuleType.PORT_FORWARD.value
-                    rule_data = msg[WS_MSG_PORT_FORWARD]
-                elif WS_MSG_ROUTING in msg:
-                    msg_type = RuleType.TRAFFIC_ROUTE.value
-                    rule_data = msg[WS_MSG_ROUTING]
-                
+                for ws_type, payload in msg.items():
+                    if ws_type in WS_MSG_TYPE_MAP:
+                        msg_type = WS_MSG_TYPE_MAP[ws_type]
+                        rule_data = payload
+                        break
+
                 if not msg_type or not rule_data or "_id" not in rule_data:
                     return
 
@@ -161,7 +156,7 @@ class UnifiRuleTriggerProtocol(TriggerProtocol):
 
                 elif trigger_type == TRIGGER_RULE_CHANGED:
                     if old_state is not None:
-                        # Compare states excluding enabled flag and metadata
+                        # Compare states excluding metadata
                         old_copy = {k: v for k, v in old_state.items() 
                                   if not k.startswith('_') and k != 'enabled'}
                         new_copy = {k: v for k, v in rule_data.items() 
@@ -180,13 +175,16 @@ class UnifiRuleTriggerProtocol(TriggerProtocol):
 
                 # Trigger action if conditions met
                 if should_trigger:
-                    self.async_run({
+                    data = {
                         "rule_id": rule_id,
                         "rule_type": msg_type,
                         "old_state": old_state,
                         "new_state": rule_data if trigger_type != TRIGGER_RULE_DELETED else None,
                         "trigger_type": trigger_type
-                    })
+                    }
+                    self.hass.async_run_job(
+                        self.action, {"trigger": {**self.trigger_data, "event": data}}
+                    )
 
             except Exception as err:
                 LOGGER.error("Error handling websocket message: %s", str(err))
@@ -202,26 +200,26 @@ class UnifiRuleTriggerProtocol(TriggerProtocol):
             if "websocket" in config_entry_data:
                 websocket = config_entry_data["websocket"]
                 # Store the previous callback if it exists
-                previous_callback = websocket.api.websocket.callback
+                previous_callback = websocket.message_handler
                 
                 @callback
                 def combined_callback(msg: Dict[str, Any]) -> None:
                     """Handle both our trigger and any previous callback."""
                     _handle_websocket_msg(msg)
                     if previous_callback:
-                        previous_callback(msg)
+                        self.hass.async_create_task(previous_callback(msg))
                 
-                websocket.api.websocket.callback = combined_callback
+                websocket.set_message_handler(combined_callback)
                 # Store remove function to restore previous callback
-                self.remove_handler = lambda: setattr(websocket.api.websocket, 'callback', previous_callback)
+                self.remove_handler = lambda: websocket.set_message_handler(previous_callback)
                 break
 
         return self.async_detach
 
     def _update_rule_cache(self, data: Dict[str, Any]) -> None:
         """Update rule cache from coordinator data."""
-        for rules in data.values():
-            if isinstance(rules, list):
+        for rule_type, rules in data.items():
+            if rule_type in WS_MSG_TYPE_MAP.values():
                 for rule in rules:
                     if isinstance(rule, dict) and "_id" in rule:
                         self._rule_cache[rule["_id"]] = rule
@@ -231,15 +229,3 @@ class UnifiRuleTriggerProtocol(TriggerProtocol):
         if self.remove_handler:
             self.remove_handler()
             self.remove_handler = None
-
-    @callback
-    def async_run(self, event_data: Dict[str, Any]) -> None:
-        """Run action when trigger conditions are met."""
-        self.hass.async_run_job(
-            self.action, {
-                "trigger": {
-                    **self.trigger_data,
-                    "event": event_data,
-                },
-            },
-        )

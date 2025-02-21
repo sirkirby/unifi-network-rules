@@ -1,7 +1,7 @@
 """UniFi Network Rules switch platform."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 from collections import defaultdict
 
 from homeassistant.components.switch import SwitchEntity
@@ -11,11 +11,52 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo
 
+from aiounifi.models.traffic_route import TrafficRoute
+from aiounifi.models.firewall_policy import FirewallPolicy
+from aiounifi.models.traffic_rule import TrafficRule
+from aiounifi.models.port_forward import PortForward
+
 from .const import DOMAIN, LOGGER
 from .coordinator import UnifiRuleUpdateCoordinator
 
+PARALLEL_UPDATES = 1
+RULE_TYPES: Final = {
+    "firewall_policies": "Firewall Policy",
+    "traffic_rules": "Traffic Rule",
+    "port_forwards": "Port Forward",
+    "traffic_routes": "Traffic Route"
+}
+
 # Track entities across the platform
 _ENTITY_CACHE = defaultdict(set)
+
+def _get_rule_id(rule: Any) -> str | None:
+    """Get the ID from a rule object."""
+    if isinstance(rule, TrafficRoute):
+        return rule.id
+    if isinstance(rule, (FirewallPolicy, TrafficRule, PortForward)):
+        return getattr(rule, "id", None)
+    if isinstance(rule, dict):
+        return rule.get("_id")
+    return None
+
+def _get_rule_name(rule: Any) -> str | None:
+    """Get the name/description from a rule object."""
+    if isinstance(rule, TrafficRoute):
+        return rule.description
+    if isinstance(rule, (FirewallPolicy, TrafficRule, PortForward)):
+        return getattr(rule, "name", None) or getattr(rule, "description", None)
+    if isinstance(rule, dict):
+        return rule.get("name") or rule.get("description")
+    return None
+
+def _get_rule_enabled(rule: Any) -> bool:
+    """Get the enabled state from a rule object."""
+    if isinstance(rule, (TrafficRoute, FirewallPolicy, TrafficRule, PortForward)):
+        return rule.enabled
+    if isinstance(rule, dict):
+        return rule.get("enabled", False)
+    return False
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -36,25 +77,37 @@ async def async_setup_entry(
         entities = []
         current_entities = _ENTITY_CACHE[entry_id]
 
-        def _add_rule(rule: dict, rule_type: str) -> None:
-            """Add a single rule if not already added."""
-            rule_id = rule.get("_id")
-            if not rule_id:
-                return
-            unique_id = f"{rule_type}_{rule_id}"
-            if unique_id not in current_entities:
-                entities.append(UnifiRuleSwitch(coordinator, rule, rule_type))
-                current_entities.add(unique_id)
-
         # Process each rule type
-        for policy in data.get("firewall_policies", []):
-            _add_rule(policy, "firewall_policies")
-        
-        for rule in data.get("traffic_rules", []):
-            _add_rule(rule, "traffic_rules")
-            
-        for forward in data.get("port_forwards", []):
-            _add_rule(forward, "port_forwards")
+        for rule_type, rules in data.items():
+            if rule_type not in RULE_TYPES:
+                continue
+                
+            for rule in rules:
+                try:
+                    # Log detailed information about the rule object
+                    LOGGER.debug(
+                        "Processing rule - Type: %s, Attrs: %s", 
+                        type(rule),
+                        dir(rule) if not isinstance(rule, dict) else list(rule.keys())
+                    )
+                    
+                    rule_id = _get_rule_id(rule)
+                    if not rule_id:
+                        LOGGER.warning(
+                            "Rule without ID found in %s: %s (type: %s)", 
+                            rule_type, rule, type(rule)
+                        )
+                        continue
+                        
+                    unique_id = f"{rule_type}_{rule_id}"
+                    if unique_id not in current_entities:
+                        entities.append(UnifiRuleSwitch(coordinator, rule, rule_type))
+                        current_entities.add(unique_id)
+                except Exception as err:
+                    LOGGER.error(
+                        "Error processing rule in %s: %s (rule: %s)", 
+                        rule_type, err, rule
+                    )
 
         if entities:
             async_add_entities(entities)
@@ -70,73 +123,109 @@ async def async_setup_entry(
     # Register cleanup
     config_entry.async_on_unload(lambda: _ENTITY_CACHE.pop(entry_id, None))
 
-
 class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntity):
     """Switch to enable/disable UniFi Network rules."""
 
     def __init__(
         self,
         coordinator: UnifiRuleUpdateCoordinator,
-        rule_data: dict[str, Any],
+        rule_data: Any,
         rule_type: str,
     ) -> None:
         """Initialize the rule switch."""
         super().__init__(coordinator)
         self._rule_data = rule_data
         self._rule_type = rule_type
-        self._rule_id = rule_data.get("_id", "")
-        self._attr_name = rule_data.get("name", f"Rule {self._rule_id}")
+        
+        # Log detailed information about the rule object
+        LOGGER.debug(
+            "Initializing switch for rule - Type: %s", 
+            type(rule_data)
+        )
+        
+        # Get rule ID using helper function
+        self._rule_id = _get_rule_id(rule_data)
+        if not self._rule_id:
+            raise ValueError("Rule must have an ID")
+        
+        # Get rule name using helper function
+        name = _get_rule_name(rule_data) or f"Rule {self._rule_id}"
+        self._attr_name = name
+            
         self._attr_unique_id = f"{rule_type}_{self._rule_id}"
-
+        
         # Set device info
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, coordinator.api.host)},
             name="UniFi Network Rules",
             manufacturer="Ubiquiti",
-            model="UniFi Dream Machine",
+            model="UniFi Dream Machine"
         )
 
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        return self.coordinator.last_update_success
+        return self.coordinator.last_update_success and self._get_current_rule() is not None
 
     @property
     def is_on(self) -> bool:
         """Return the enabled state of the rule."""
+        rule = self._get_current_rule()
+        if rule is None:
+            return False
+            
+        return _get_rule_enabled(rule)
+
+    def _get_current_rule(self) -> Any | None:
+        """Get current rule data from coordinator."""
         try:
-            # Find current rule data in coordinator
             rules = self.coordinator.data.get(self._rule_type, [])
             for rule in rules:
-                if rule.get("_id") == self._rule_id:
-                    return rule.get("enabled", False)
-            return False
+                if _get_rule_id(rule) == self._rule_id:
+                    return rule
+            return None
         except Exception as err:
-            LOGGER.error("Error getting rule state: %s", err)
-            return False
+            LOGGER.error("Error getting rule data: %s", err)
+            return None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable the rule."""
         try:
+            success = False
             if self._rule_type == "firewall_policies":
-                await self.coordinator.api.update_firewall_policy(self._rule_id, {"enabled": True})
+                success = await self.coordinator.api.update_firewall_policy(self._rule_id, {"enabled": True})
             elif self._rule_type == "traffic_rules":
-                await self.coordinator.api.update_traffic_rule(self._rule_id, {"enabled": True})
+                success = await self.coordinator.api.update_traffic_rule(self._rule_id, {"enabled": True})
             elif self._rule_type == "port_forwards":
-                await self.coordinator.api.update_port_forward(self._rule_id, {"enabled": True})
-            await self.coordinator.async_refresh()
+                success = await self.coordinator.api.update_port_forward(self._rule_id, {"enabled": True})
+            elif self._rule_type == "traffic_routes":
+                success = await self.coordinator.api.update_traffic_route(self._rule_id, {"enabled": True})
+                
+            if success:
+                await self.coordinator.async_refresh()
+            else:
+                LOGGER.error("Failed to enable %s %s", self._rule_type, self._rule_id)
+                
         except Exception as err:
             LOGGER.error("Error enabling rule: %s", err)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable the rule."""
         try:
+            success = False
             if self._rule_type == "firewall_policies":
-                await self.coordinator.api.update_firewall_policy(self._rule_id, {"enabled": False})
+                success = await self.coordinator.api.update_firewall_policy(self._rule_id, {"enabled": False})
             elif self._rule_type == "traffic_rules":
-                await self.coordinator.api.update_traffic_rule(self._rule_id, {"enabled": False})
+                success = await self.coordinator.api.update_traffic_rule(self._rule_id, {"enabled": False})
             elif self._rule_type == "port_forwards":
-                await self.coordinator.api.update_port_forward(self._rule_id, {"enabled": False})
-            await self.coordinator.async_refresh()
+                success = await self.coordinator.api.update_port_forward(self._rule_id, {"enabled": False})
+            elif self._rule_type == "traffic_routes":
+                success = await self.coordinator.api.update_traffic_route(self._rule_id, {"enabled": False})
+                
+            if success:
+                await self.coordinator.async_refresh()
+            else:
+                LOGGER.error("Failed to disable %s %s", self._rule_type, self._rule_id)
+                
         except Exception as err:
             LOGGER.error("Error disabling rule: %s", err)
