@@ -1,0 +1,50 @@
+name: Test Suite
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      pull-requests: write
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13.0'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements_test.txt
+
+    - name: Run tests
+      run: |
+        pytest
+      
+    - name: Report Status
+      if: always()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const conclusion = process.env.TEST_OUTCOME === 'success' ? 'success' : 'failure';
+          await github.rest.checks.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            name: 'Test Suite',
+            head_sha: context.sha,
+            status: 'completed',
+            conclusion: conclusion,
+            output: {
+              title: 'Test Results',
+              summary: process.env.TEST_OUTCOME === 'success' ? 'All tests passed!' : 'Some tests failed.'
+            }
+          });
