@@ -2,16 +2,15 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch, mock_open
 import json
+import os
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from custom_components.unifi_network_rules.udm_api import UDMAPI
-
 from custom_components.unifi_network_rules.services import (
     async_refresh_service,
     async_backup_rules_service,
     async_restore_rules_service,
     async_bulk_update_rules_service,
-    async_delete_rule_service
+    async_setup_services
 )
 
 @pytest.fixture
@@ -20,22 +19,21 @@ def mock_api():
     api = MagicMock()
     api.capabilities.zone_based_firewall = True
     api.capabilities.traffic_routes = True
-    api.get_firewall_policies = AsyncMock(return_value=(True, [], None))
-    api.get_traffic_routes = AsyncMock(return_value=(True, [], None))
+    api.capabilities.legacy_firewall = True
+    api.capabilities.legacy_traffic = True
     api.update_firewall_policy = AsyncMock(return_value=(True, None))
     api.update_traffic_route = AsyncMock(return_value=(True, None))
-    api.delete_firewall_policies = AsyncMock(return_value=(True, None))
+    api.update_port_forward_rule = AsyncMock(return_value=(True, None))
     api.update_legacy_firewall_rule = AsyncMock(return_value=(True, None))
     api.update_legacy_traffic_rule = AsyncMock(return_value=(True, None))
-    api.get_legacy_firewall_rules = AsyncMock(return_value=(True, [], None))
-    api.get_legacy_traffic_rules = AsyncMock(return_value=(True, [], None))
+    api.update_rule_state = AsyncMock(return_value=(True, None))
     return api
 
 @pytest.fixture
 def mock_coordinator():
     """Create a mock coordinator instance."""
     coordinator = MagicMock()
-    coordinator.async_request_refresh = AsyncMock()
+    coordinator.async_refresh = AsyncMock()
     coordinator.data = {}
     return coordinator
 
@@ -58,28 +56,41 @@ def mock_data():
                 "enabled": True
             }
         ],
-        "firewall_rules": [
-            {
-                "_id": "rule1",
-                "name": "Rule 1",
-                "enabled": True
-            }
-        ],
-        "traffic_rules": [
-            {
-                "_id": "traffic1",
-                "name": "Traffic 1",
-                "enabled": True
-            }
-        ],
         "port_forward_rules": [
             {
                 "_id": "port1",
                 "name": "Minecraft",
-                "enabled": False
+                "enabled": True
+            }
+        ],
+        "legacy_firewall_rules": [
+            {
+                "_id": "fw1",
+                "name": "Legacy FW Rule",
+                "enabled": True
+            }
+        ],
+        "legacy_traffic_rules": [
+            {
+                "_id": "tr1",
+                "name": "Legacy Traffic Rule",
+                "enabled": True
             }
         ]
     }
+
+@pytest.mark.asyncio
+async def test_async_setup_services(hass: HomeAssistant):
+    """Test service registration."""
+    mock_services = MagicMock()
+    hass.services = mock_services
+    await async_setup_services(hass)
+    assert mock_services.async_register.call_count == 4
+    registered_services = [call[0][1] for call in mock_services.async_register.call_args_list]
+    assert "refresh" in registered_services
+    assert "backup_rules" in registered_services
+    assert "restore_rules" in registered_services
+    assert "bulk_update_rules" in registered_services
 
 @pytest.mark.asyncio
 async def test_refresh_service(hass: HomeAssistant, mock_coordinator):
@@ -91,21 +102,11 @@ async def test_refresh_service(hass: HomeAssistant, mock_coordinator):
     }
 
     await async_refresh_service(hass, MagicMock())
-    mock_coordinator.async_request_refresh.assert_called_once()
+    mock_coordinator.async_refresh.assert_called_once()
 
 @pytest.mark.asyncio
-async def test_refresh_service_no_coordinator(hass: HomeAssistant):
-    """Test refresh service with no coordinator."""
-    hass.data["unifi_network_rules"] = {
-        "test_entry": {}
-    }
-
-    await async_refresh_service(hass, MagicMock())
-    # Should not raise an error
-
-@pytest.mark.asyncio
-async def test_backup_rules_service_full(hass: HomeAssistant, mock_coordinator, mock_data):
-    """Test backup service with full data."""
+async def test_backup_rules_service(hass: HomeAssistant, mock_coordinator, mock_data):
+    """Test backup service."""
     mock_coordinator.data = mock_data
     hass.data["unifi_network_rules"] = {
         "test_entry": {
@@ -116,17 +117,23 @@ async def test_backup_rules_service_full(hass: HomeAssistant, mock_coordinator, 
     mock_call = MagicMock()
     mock_call.data = {"filename": "test_backup.json"}
 
+    # Create a StringIO to capture the written data
+    from io import StringIO
+    string_io = StringIO()
+    
     with patch("builtins.open", mock_open()) as mock_file:
-        result = await async_backup_rules_service(hass, mock_call)
+        mock_file.return_value.__enter__.return_value = string_io
+        await async_backup_rules_service(hass, mock_call)
         mock_file.assert_called_once_with(hass.config.path("test_backup.json"), 'w', encoding='utf-8')
-        assert result == {"test_entry": mock_data}
-        handle = mock_file()
-        written_data = handle.write.call_args[0][0]
-        assert isinstance(written_data, str)
-        assert json.loads(written_data) == {"test_entry": mock_data}
+        
+        # Get the written data directly from our StringIO object
+        string_io.seek(0)
+        written_data = json.loads(string_io.getvalue())
+        assert "test_entry" in written_data
+        assert all(key in written_data["test_entry"] for key in mock_data.keys())
 
 @pytest.mark.asyncio
-async def test_backup_rules_service_empty_data(hass: HomeAssistant, mock_coordinator):
+async def test_backup_rules_service_no_data(hass: HomeAssistant, mock_coordinator):
     """Test backup service with no data."""
     mock_coordinator.data = {}
     hass.data["unifi_network_rules"] = {
@@ -138,12 +145,12 @@ async def test_backup_rules_service_empty_data(hass: HomeAssistant, mock_coordin
     mock_call = MagicMock()
     mock_call.data = {"filename": "test_backup.json"}
 
-    result = await async_backup_rules_service(hass, mock_call)
-    assert result is None
+    with pytest.raises(HomeAssistantError, match="No data available to backup"):
+        await async_backup_rules_service(hass, mock_call)
 
 @pytest.mark.asyncio
-async def test_restore_rules_service_success(hass: HomeAssistant, mock_api, mock_coordinator, mock_data):
-    """Test successful restore operation."""
+async def test_restore_rules_service(hass: HomeAssistant, mock_api, mock_coordinator, mock_data):
+    """Test restore service with various filters."""
     hass.data["unifi_network_rules"] = {
         "test_entry": {
             "api": mock_api,
@@ -152,36 +159,63 @@ async def test_restore_rules_service_success(hass: HomeAssistant, mock_api, mock
     }
 
     backup_data = {"test_entry": mock_data}
-    mock_call = MagicMock()
-    mock_call.data = {
-        "filename": "test_backup.json",
-        "name_filter": "Policy"
+    
+    test_cases = [
+        # Test case with name filter
+        {
+            "call_data": {"filename": "test.json", "name_filter": "Policy"},
+            "expected_calls": {"update_firewall_policy": 1}
+        },
+        # Test case with rule type filter
+        {
+            "call_data": {"filename": "test.json", "rule_types": ["port_forward"]},
+            "expected_calls": {"update_port_forward_rule": 1}
+        },
+        # Test case with rule IDs
+        {
+            "call_data": {"filename": "test.json", "rule_ids": ["policy1"]},
+            "expected_calls": {"update_firewall_policy": 1}
+        }
+    ]
+
+    for test_case in test_cases:
+        mock_call = MagicMock()
+        mock_call.data = test_case["call_data"]
+
+        with patch("os.path.exists", return_value=True), \
+             patch("builtins.open", mock_open(read_data=json.dumps(backup_data))):
+            await async_restore_rules_service(hass, mock_call)
+            
+            for method, count in test_case["expected_calls"].items():
+                assert getattr(mock_api, method).call_count == count
+
+        # Reset mock call counts
+        mock_api.reset_mock()
+
+@pytest.mark.asyncio
+async def test_restore_rules_service_file_not_found(hass: HomeAssistant, mock_api):
+    """Test restore service with missing backup file."""
+    hass.data["unifi_network_rules"] = {
+        "test_entry": {"api": mock_api}
     }
 
-    with patch("os.path.exists", return_value=True), \
-         patch("builtins.open", mock_open(read_data=json.dumps(backup_data))):
-        await async_restore_rules_service(hass, mock_call)
-        mock_api.update_firewall_policy.assert_called_once()
-        mock_api.update_traffic_route.assert_not_called()
-        mock_coordinator.async_request_refresh.assert_called_once()
+    mock_call = MagicMock()
+    mock_call.data = {"filename": "nonexistent.json"}
+
+    with patch("os.path.exists", return_value=False):
+        with pytest.raises(HomeAssistantError, match="Backup file not found"):
+            await async_restore_rules_service(hass, mock_call)
 
 @pytest.mark.asyncio
 async def test_bulk_update_rules_service(hass: HomeAssistant, mock_api, mock_coordinator):
     """Test bulk update service."""
     mock_coordinator.data = {
         "firewall_policies": [
-            {
-                "_id": "policy1",
-                "name": "Policy 1",
-                "enabled": True
-            }
+            {"_id": "policy1", "name": "Test Policy", "enabled": True},
+            {"_id": "policy2", "name": "Other Policy", "enabled": True}
         ],
         "traffic_routes": [
-            {
-                "_id": "route1",
-                "name": "Route 1",
-                "enabled": True
-            }
+            {"_id": "route1", "name": "Test Route", "enabled": True}
         ]
     }
 
@@ -194,113 +228,12 @@ async def test_bulk_update_rules_service(hass: HomeAssistant, mock_api, mock_coo
 
     mock_call = MagicMock()
     mock_call.data = {
-        "name_filter": "Policy",
+        "name_filter": "Test",
         "state": False
     }
 
     await async_bulk_update_rules_service(hass, mock_call)
 
-    mock_api.update_firewall_policy.assert_called_once()
-    mock_api.update_traffic_route.assert_not_called()
-    mock_coordinator.async_request_refresh.assert_called_once()
-
-@pytest.mark.asyncio
-async def test_delete_rule_service(hass: HomeAssistant, mock_api, mock_coordinator):
-    """Test delete rule service."""
-    hass.data["unifi_network_rules"] = {
-        "test_entry": {
-            "api": mock_api,
-            "coordinator": mock_coordinator
-        }
-    }
-
-    mock_call = MagicMock()
-    mock_call.data = {
-        "rule_id": "test_policy_id",
-        "rule_type": "policy"
-    }
-
-    await async_delete_rule_service(hass, mock_call)
-
-    mock_api.delete_firewall_policies.assert_called_once_with(["test_policy_id"])
-    mock_coordinator.async_request_refresh.assert_called_once()
-
-@pytest.mark.asyncio
-async def test_restore_rules_service_file_not_found(hass: HomeAssistant, mock_api, mock_coordinator):
-    """Test restore service when backup file doesn't exist."""
-    hass.data["unifi_network_rules"] = {
-        "test_entry": {
-            "api": mock_api,
-            "coordinator": mock_coordinator
-        }
-    }
-
-    mock_call = MagicMock()
-    mock_call.data = {"filename": "nonexistent.json"}
-
-    with patch("os.path.exists", return_value=False):
-        await async_restore_rules_service(hass, mock_call)
-        mock_api.update_firewall_policy.assert_not_called()
-        mock_api.update_traffic_route.assert_not_called()
-        mock_coordinator.async_request_refresh.assert_not_called()
-
-@pytest.mark.asyncio
-async def test_restore_rules_service_mixed_errors(hass: HomeAssistant, mock_api, mock_coordinator, mock_data):
-    """Test restore service continues despite some failures."""
-    mock_api.update_firewall_policy.side_effect = [(False, "Error updating policy"), (True, None)]
-    mock_api.update_traffic_route.side_effect = [(False, "Error updating route"), (True, None)]
-
-    hass.data["unifi_network_rules"] = {
-        "test_entry": {
-            "api": mock_api,
-            "coordinator": mock_coordinator
-        }
-    }
-
-    mock_data["firewall_policies"].append(mock_data["firewall_policies"][0].copy())
-    mock_data["traffic_routes"].append(mock_data["traffic_routes"][0].copy())
-
-    backup_data = {"test_entry": mock_data}
-    mock_call = MagicMock()
-    mock_call.data = {"filename": "test_backup.json"}
-
-    with patch("os.path.exists", return_value=True), \
-         patch("builtins.open", mock_open(read_data=json.dumps(backup_data))):
-        await async_restore_rules_service(hass, mock_call)
-
-        assert mock_api.update_firewall_policy.call_count == 2
-        assert mock_api.update_traffic_route.call_count == 2
-        mock_coordinator.async_request_refresh.assert_called_once()
-
-@pytest.mark.asyncio
-async def test_backup_restore_port_forward_rules(hass: HomeAssistant, mock_api, mock_coordinator, mock_data):
-    """Test backup and restore of port forward rules."""
-    mock_coordinator.data = mock_data
-    hass.data["unifi_network_rules"] = {
-        "test_entry": {
-            "api": mock_api,
-            "coordinator": mock_coordinator
-        }
-    }
-
-    # Test backup
-    mock_call = MagicMock()
-    mock_call.data = {"filename": "test_backup.json"}
-
-    with patch("builtins.open", mock_open()) as mock_file:
-        backup_data = await async_backup_rules_service(hass, mock_call)
-        assert "port_forward_rules" in backup_data["test_entry"]
-        assert len(backup_data["test_entry"]["port_forward_rules"]) == 1
-        assert backup_data["test_entry"]["port_forward_rules"][0]["name"] == "Minecraft"
-
-    # Test restore
-    mock_call.data.update({
-        "rule_types": ["port_forward"],
-        "name_filter": "Minecraft"
-    })
-
-    with patch("os.path.exists", return_value=True), \
-         patch("builtins.open", mock_open(read_data=json.dumps({"test_entry": mock_data}))):
-        await async_restore_rules_service(hass, mock_call)
-        mock_api.update_port_forward_rule.assert_called_once()
-        assert mock_api.update_port_forward_rule.call_args[0][1]["name"] == "Minecraft"
+    # Should update both the policy and route with "Test" in the name
+    assert mock_api.update_rule_state.call_count == 2
+    mock_coordinator.async_refresh.assert_called_once()

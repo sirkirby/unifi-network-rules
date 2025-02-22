@@ -70,30 +70,6 @@ bulk_update_rules:
       selector:
         boolean:
 
-delete_rule:
-  name: Delete rule
-  description: Delete a specific rule
-  fields:
-    rule_id:
-      name: Rule ID
-      description: ID of the rule to delete
-      required: true
-      example: "123456789"
-      selector:
-        text:
-    rule_type:
-      name: Rule type
-      description: Type of the rule to delete
-      required: true
-      selector:
-        select:
-          options:
-            - "policy"
-            - "route"
-            - "port_forward"
-            - "legacy_firewall"
-            - "legacy_traffic"
-
 apply_template:
   name: Apply template
   description: Apply a rule template
