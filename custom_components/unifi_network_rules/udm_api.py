@@ -7,7 +7,6 @@ import ssl
 from aiohttp import CookieJar, WSMsgType
 import aiohttp
 
-from aiounifi import Controller
 from aiounifi.models.api import ApiRequest, ApiRequestV2
 from aiounifi.models.configuration import Configuration
 from aiounifi.models.traffic_route import TrafficRoute, TrafficRouteSaveRequest
@@ -50,26 +49,27 @@ class UDMAPI:
         self.password = password
         self.verify_ssl = verify_ssl
         self._session = None
-        self.controller = None  # Store Controller instance directly
+        self.controller = None
         self._initialized = False
-        self._hass_session = False  # Track if we're using HA's session
+        self._hass_session = False
         self._ws_callback = None
         self._last_login_attempt = 0
         self._login_attempt_count = 0
         self._max_login_attempts = 3
-        self._login_cooldown = 60  # seconds between login attempt resets
+        self._login_cooldown = 60
+        self._config = None  # Store config for delayed controller creation
 
     async def async_init(self, hass: HomeAssistant | None = None) -> None:
         """Async initialization of the API."""
-        if not self._session:
-            try:
-                ssl_context: ssl.SSLContext | bool = False
-                if self.verify_ssl:
-                    if isinstance(self.verify_ssl, str):
-                        ssl_context = ssl.create_default_context(cafile=self.verify_ssl)
-                    else:
-                        ssl_context = True
+        try:
+            ssl_context: ssl.SSLContext | bool = False
+            if self.verify_ssl:
+                if isinstance(self.verify_ssl, str):
+                    ssl_context = ssl.create_default_context(cafile=self.verify_ssl)
+                else:
+                    ssl_context = True
 
+            if not self._session:
                 if hass:
                     if ssl_context:
                         self._session = aiohttp_client.async_get_clientsession(hass)
@@ -81,54 +81,58 @@ class UDMAPI:
                 else:
                     self._session = aiohttp.ClientSession()
 
-                config = Configuration(
-                    session=self._session,
-                    host=self.host,
-                    username=self.username,
-                    password=self.password,
-                    port=443,
-                    site="default",
-                    ssl_context=ssl_context,
-                )
-                self.controller = Controller(config)
+            self._config = Configuration(
+                session=self._session,
+                host=self.host,
+                username=self.username,
+                password=self.password,
+                port=443,
+                site="default",
+                ssl_context=ssl_context,
+            )
 
-                async with asyncio.timeout(10):
-                    await self.controller.login()
-                    
-                    # Initialize data only after interfaces are ready
-                    if hasattr(self.controller, "sites"):
-                        await self.controller.sites.update()
-                    
-                    # Update all data in parallel
-                    self.refresh_all()
+            # Use existing controller if available to preserve state
+            if not self.controller:
+                # Import here to allow patching in tests
+                from aiounifi import Controller as UnifiController
+                self.controller = UnifiController(self._config)
 
-                    self._initialized = True
-                    LOGGER.debug(
-                        "API Initialization complete. Available interfaces: %s",
-                        [attr for attr in dir(self.controller) if not attr.startswith('_')]
-                    )
+            # Initialize
+            await self.controller.login()
+            
+            if hasattr(self.controller, "sites"):
+                await self.controller.sites.update()
+            
+            # Set initialized before refresh
+            self._initialized = True
+            
+            # Initial refresh of all data
+            await self.refresh_all()
 
-            except (BadGateway, ResponseError, RequestError, ServiceUnavailable) as err:
-                if self._session and not self._hass_session:
-                    await self._session.close()
-                self._session = None
-                self.controller = None
-                raise CannotConnect(f"Failed to connect: {err}") from err
-            except LoginRequired as err:
-                if self._session and not self._hass_session:
-                    await self._session.close()
-                self._session = None
-                self.controller = None
-                raise InvalidAuth("Invalid credentials") from err
-            except Exception as err:
-                if self._session and not self._hass_session:
-                    await self._session.close()
-                self._session = None
-                self.controller = None
-                LOGGER.error("Initialization error: %s. API attributes: %s", 
-                           err, 
-                           dir(self.controller) if self.controller else "No API instance")
-                raise UnifiNetworkRulesError(f"Unexpected error: {err}") from err
+        except LoginRequired as err:
+            if self._session and not self._hass_session:
+                await self._session.close()
+            self._session = None
+            self.controller = None
+            self._initialized = False
+            raise InvalidAuth("Invalid credentials") from err
+        except (BadGateway, ResponseError, RequestError, ServiceUnavailable) as err:
+            if self._session and not self._hass_session:
+                await self._session.close()
+            self._session = None
+            self.controller = None
+            self._initialized = False
+            raise CannotConnect(f"Failed to connect: {err}") from err
+        except Exception as err:
+            if self._session and not self._hass_session:
+                await self._session.close()
+            self._session = None
+            self.controller = None
+            self._initialized = False
+            LOGGER.error("Initialization error: %s. API attributes: %s", 
+                       err, 
+                       dir(self.controller) if self.controller else "No API instance")
+            raise UnifiNetworkRulesError(f"Unexpected error: {err}") from err
 
     @property
     def initialized(self) -> bool:
@@ -145,6 +149,8 @@ class UDMAPI:
         finally:
             self._session = None
             self.controller = None
+            self._initialized = False
+            self._config = None
 
     async def start_websocket(self) -> None:
         """Start websocket connection."""
@@ -192,14 +198,16 @@ class UDMAPI:
 
     # Firewall Policy Methods
     async def get_firewall_policies(self, include_predefined: bool = False) -> List[Any]:
-        """Get firewall policies. If include_predefined is False, filter out predefined policies."""
-        LOGGER.debug("Fetching firewall policies with include_predefined=%s", include_predefined)
+        """Get firewall policies."""
+        if not self.controller or not self._initialized:
+            return []
+            
         try:
             await self.controller.firewall_policies.update()
             policies = list(self.controller.firewall_policies.values())
-            if include_predefined:
-                return policies
-            return [policy for policy in policies if not policy.predefined]
+            if not include_predefined:
+                return [policy for policy in policies if not (policy.get("predefined", False) if isinstance(policy, dict) else getattr(policy, "predefined", False))]
+            return policies
         except Exception as err:
             LOGGER.error("Failed to get firewall policies: %s", str(err))
             return []
@@ -229,7 +237,7 @@ class UDMAPI:
             # Update the policy's enabled state using the proper request
             policy_dict = policy.raw.copy()
             policy_dict["enabled"] = policy_data.get("enabled", False)
-            request = FirewallPolicyUpdateRequest.create(policy_data)
+            request = FirewallPolicyUpdateRequest.create(policy_dict)
             await self.controller.request(request)
             return True
         except Exception as err:
@@ -250,7 +258,9 @@ class UDMAPI:
     # Traffic Rules Methods
     async def get_traffic_rules(self) -> List[Any]:
         """Get all traffic rules."""
-        LOGGER.debug("Fetching traffic rules")
+        if not self.controller:
+            return []
+            
         try:
             await self.controller.traffic_rules.update()
             return list(self.controller.traffic_rules.values())
@@ -311,6 +321,9 @@ class UDMAPI:
     # Port Forward Methods
     async def get_port_forwards(self) -> List[Any]:
         """Get all port forwards."""
+        if not self.controller:
+            return []
+            
         LOGGER.debug("Fetching port forwards")
         try:
             await self.controller.port_forwarding.update()
@@ -424,6 +437,9 @@ class UDMAPI:
     # WLAN Management Methods
     async def get_wlans(self) -> List[Dict[str, Any]]:
         """Get all WLANs."""
+        if not self.controller:
+            return []
+            
         LOGGER.debug("Fetching WLANs")
         try:
             await self.controller.wlans.update()
@@ -467,6 +483,9 @@ class UDMAPI:
     async def refresh_all(self) -> None:
         """Refresh all data from the UniFi controller."""
         LOGGER.debug("Refreshing all data from UniFi controller")
+        if not self.controller or not self._initialized:
+            return
+            
         try:
             update_tasks = [
                 self.controller.firewall_policies.update(),
@@ -510,7 +529,16 @@ class UDMAPI:
         return success_count, failed_ids
 
     async def get_rule_status(self, rule_id: str) -> Dict[str, Any]:
-        """Get detailed status for a specific rule including dependencies."""
+        """Get detailed status for a specific rule."""
+        if not self.controller:
+            return {
+                "active": False,
+                "dependencies": [],
+                "conflicts": [],
+                "last_modified": None,
+                "type": None
+            }
+            
         LOGGER.debug("Getting detailed status for rule: %s", rule_id)
         try:
             status = {
@@ -521,7 +549,6 @@ class UDMAPI:
                 "type": None
             }
             
-            # Check across different rule types
             rules_map = {
                 "firewall_policy": self.controller.firewall_policies,
                 "traffic_rule": self.controller.traffic_rules,
@@ -532,20 +559,20 @@ class UDMAPI:
             for rule_type, rules in rules_map.items():
                 if rule_id in rules:
                     rule = rules[rule_id]
-                    status.update({
-                        "active": rule.get("enabled", False),
-                        "last_modified": rule.get("last_modified"),
-                        "type": rule_type
-                    })
-                    # Add any dependent or conflicting rules
-                    status["dependencies"].extend(self._find_dependencies(rule))
-                    status["conflicts"].extend(self._find_conflicts(rule))
+                    if isinstance(rule, dict):
+                        rule_data = rule
+                    else:
+                        rule_data = dict(rule)
+                    
+                    status["active"] = rule_data.get("enabled", False)
+                    status["last_modified"] = rule_data.get("last_modified")
+                    status["type"] = rule_type
                     break
             
             return status
         except Exception as err:
             LOGGER.error("Failed to get rule status: %s", str(err))
-            return {}
+            return status
 
     # Error handling helper
     async def _handle_api_request(self, request_type: str, action: str) -> Tuple[bool, Optional[str]]:

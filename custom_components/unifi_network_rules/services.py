@@ -53,11 +53,28 @@ async def async_backup_rules_service(hass: HomeAssistant, call: ServiceCall) -> 
     for entry_id, entry_data in hass.data[DOMAIN].items():
         coordinator = entry_data.get("coordinator")
         if coordinator and coordinator.data:
-            backup_data[entry_id] = {
-                rule_type: rules
-                for rule_type, rules in coordinator.data.items()
-                if rules  # Only include non-empty data
-            }
+            entry_backup = {}
+            for rule_type, rules in coordinator.data.items():
+                if not rules:  # Skip empty data
+                    continue
+                    
+                # Convert API objects to serializable dicts
+                serialized_rules = []
+                for rule in rules:
+                    if hasattr(rule, 'raw'):
+                        serialized_rules.append(rule.raw)
+                    elif isinstance(rule, dict):
+                        serialized_rules.append(rule)
+                    else:
+                        # Fallback if neither raw nor dict
+                        LOGGER.warning("Unexpected rule type for %s: %s", rule_type, type(rule))
+                        continue
+                
+                if serialized_rules:
+                    entry_backup[rule_type] = serialized_rules
+            
+            if entry_backup:  # Only include non-empty backups
+                backup_data[entry_id] = entry_backup
 
     if not backup_data:
         raise HomeAssistantError("No data available to backup")
@@ -168,11 +185,27 @@ async def async_bulk_update_rules_service(hass: HomeAssistant, call: ServiceCall
 async def async_setup_services(hass: HomeAssistant) -> None:
     """Set up services."""
     
+    async def _refresh_service(service_call: ServiceCall) -> None:
+        """Handle refresh service call."""
+        await async_refresh_service(hass, service_call)
+
+    async def _backup_rules_service(service_call: ServiceCall) -> None:
+        """Handle backup rules service call."""
+        await async_backup_rules_service(hass, service_call)
+
+    async def _restore_rules_service(service_call: ServiceCall) -> None:
+        """Handle restore rules service call."""
+        await async_restore_rules_service(hass, service_call)
+
+    async def _bulk_update_rules_service(service_call: ServiceCall) -> None:
+        """Handle bulk update rules service call."""
+        await async_bulk_update_rules_service(hass, service_call)
+    
     # Refresh service
     hass.services.async_register(
         DOMAIN,
         SERVICE_REFRESH,
-        async_refresh_service,
+        _refresh_service,
         schema=vol.Schema({})
     )
     
@@ -180,7 +213,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN,
         SERVICE_BACKUP,
-        async_backup_rules_service,
+        _backup_rules_service,
         schema=vol.Schema({
             vol.Required(CONF_FILENAME): cv.string
         })
@@ -190,7 +223,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN,
         SERVICE_RESTORE,
-        async_restore_rules_service,
+        _restore_rules_service,
         schema=vol.Schema({
             vol.Required(CONF_FILENAME): cv.string,
             vol.Optional(CONF_RULE_IDS): vol.All(cv.ensure_list, [cv.string]),
@@ -204,7 +237,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN,
         SERVICE_BULK_UPDATE,
-        async_bulk_update_rules_service,
+        _bulk_update_rules_service,
         schema=vol.Schema({
             vol.Required(CONF_NAME_FILTER): cv.string,
             vol.Required(CONF_STATE): cv.boolean

@@ -105,29 +105,15 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         """Update firewall policies."""
         try:
             policies = await self.api.get_firewall_policies()
-            # Log policy details for debugging
-            for policy in policies:
-                LOGGER.debug(
-                    "Firewall policy details - ID: %s, Attrs: %s",
-                    getattr(policy, "id", "unknown"),
-                    dir(policy)
-                )
             data["firewall_policies"] = list(policies)
         except Exception as err:
             LOGGER.error("Error fetching firewall policies: %s", err)
             data["firewall_policies"] = []
-
+            
     async def _update_traffic_rules(self, data: Dict[str, List[Any]]) -> None:
         """Update traffic rules."""
         try:
             rules = await self.api.get_traffic_rules()
-            # Log rule details for debugging
-            for rule in rules:
-                LOGGER.debug(
-                    "Traffic rule details - ID: %s, Attrs: %s",
-                    getattr(rule, "id", "unknown"),
-                    dir(rule)
-                )
             data["traffic_rules"] = list(rules)
         except Exception as err:
             LOGGER.error("Error fetching traffic rules: %s", err)
@@ -137,13 +123,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         """Update port forwards."""
         try:
             forwards = await self.api.get_port_forwards()
-            # Log forward details for debugging
-            for forward in forwards:
-                LOGGER.debug(
-                    "Port forward details - ID: %s, Attrs: %s",
-                    getattr(forward, "id", "unknown"),
-                    dir(forward)
-                )
             data["port_forwards"] = list(forwards)
         except Exception as err:
             LOGGER.error("Error fetching port forwards: %s", err)
@@ -153,13 +132,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         """Update traffic routes."""
         try:
             routes = await self.api.get_traffic_routes()
-            if routes:
-                LOGGER.debug("Retrieved traffic routes: %d items", len(routes))
-                for route in routes:
-                    _log_rule_info(route)
-                data["traffic_routes"] = list(routes)
-            else:
-                data["traffic_routes"] = []
+            data["traffic_routes"] = list(routes)
         except Exception as err:
             LOGGER.error("Error fetching traffic routes: %s", err)
             data["traffic_routes"] = []
@@ -168,7 +141,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         """Update firewall zones."""
         try:
             zones = await self.api.get_firewall_zones()
-            data["firewall_zones"] = list(zones) if zones else []
+            data["firewall_zones"] = list(zones)
         except Exception as err:
             LOGGER.error("Error fetching firewall zones: %s", err)
             data["firewall_zones"] = []
@@ -177,7 +150,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         """Update WLANs."""
         try:
             wlans = await self.api.get_wlans()
-            data["wlans"] = list(wlans) if wlans else []
+            data["wlans"] = list(wlans)
         except Exception as err:
             LOGGER.error("Error fetching WLANs: %s", err)
             data["wlans"] = []

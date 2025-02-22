@@ -28,6 +28,10 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up UniFi Network Rules component."""
     hass.data.setdefault(DOMAIN, {})
+    
+    # Set up services
+    await services.async_setup_services(hass)
+    
     return True
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
