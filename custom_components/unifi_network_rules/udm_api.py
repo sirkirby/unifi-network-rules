@@ -202,12 +202,15 @@ class UDMAPI:
             return False
 
     # Firewall Policy Methods
-    async def get_firewall_policies(self) -> List[Any]:
-        """Get all firewall policies."""
-        LOGGER.debug("Fetching firewall policies")
+    async def get_firewall_policies(self, include_predefined: bool = False) -> List[Any]:
+        """Get firewall policies. If include_predefined is False, filter out predefined policies."""
+        LOGGER.debug("Fetching firewall policies with include_predefined=%s", include_predefined)
         try:
             await self.controller.firewall_policies.update()
-            return list(self.controller.firewall_policies.values())
+            policies = list(self.controller.firewall_policies.values())
+            if include_predefined:
+                return policies
+            return [policy for policy in policies if not policy.predefined]
         except Exception as err:
             LOGGER.error("Failed to get firewall policies: %s", str(err))
             return []
