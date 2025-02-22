@@ -8,6 +8,7 @@ from aiohttp import CookieJar, WSMsgType
 import aiohttp
 
 from aiounifi import Controller
+from aiounifi.models.api import ApiRequest, ApiRequestV2
 from aiounifi.models.configuration import Configuration
 from aiounifi.models.traffic_route import TrafficRoute, TrafficRouteSaveRequest
 from aiounifi.models.firewall_policy import FirewallPolicy, FirewallPolicyUpdateRequest
@@ -99,20 +100,8 @@ class UDMAPI:
                         await self.controller.sites.update()
                     
                     # Update all data in parallel
-                    update_tasks = [
-                        self.get_firewall_policies(),
-                        self.get_firewall_zones(),
-                        self.get_port_forwards(),
-                        self.get_traffic_rules(),
-                        self.get_traffic_routes(),
-                        self.get_wlans()
-                    ]
-                    
-                    results = await asyncio.gather(*update_tasks, return_exceptions=True)
-                    for i, result in enumerate(results):
-                        if isinstance(result, Exception):
-                            LOGGER.warning("Error updating %s: %s", update_tasks[i].__name__, result)
-                    
+                    self.refresh_all()
+
                     self._initialized = True
                     LOGGER.debug(
                         "API Initialization complete. Available interfaces: %s",
@@ -219,7 +208,8 @@ class UDMAPI:
         """Add a new firewall policy."""
         LOGGER.debug("Adding firewall policy: %s", policy_data)
         try:
-            policy = await self.controller.firewall_policies.add_item(policy_data)
+            request = ApiRequestV2 ("POST", "firewall-policies", policy_data)
+            policy = await self.controller.request(request)
             return policy
         except Exception as err:
             LOGGER.error("Failed to add firewall policy: %s", str(err))
@@ -239,7 +229,7 @@ class UDMAPI:
             # Update the policy's enabled state using the proper request
             policy_dict = policy.raw.copy()
             policy_dict["enabled"] = policy_data.get("enabled", False)
-            request = FirewallPolicyUpdateRequest.create(policy_dict)
+            request = FirewallPolicyUpdateRequest.create(policy_data)
             await self.controller.request(request)
             return True
         except Exception as err:
@@ -250,6 +240,7 @@ class UDMAPI:
         """Remove a firewall policy."""
         LOGGER.debug("Removing firewall policy: %s", policy_id)
         try:
+            request = ApiRequestV2.create("POST", "firewall-policies/batch-delete", f"['{policy_id}']")
             await self.controller.firewall_policies.remove_item(policy_id)
             return True
         except Exception as err:
@@ -271,12 +262,23 @@ class UDMAPI:
         """Add a new traffic rule."""
         LOGGER.debug("Adding traffic rule: %s", rule_data)
         try:
-            rule = await self.controller.traffic_rules.add_item(rule_data)
+            request = ApiRequestV2 ("POST", "trafficrules", rule_data)
+            rule = await self.controller.request(request)
             return rule
         except Exception as err:
             LOGGER.error("Failed to add traffic rule: %s", str(err))
             return None
 
+    async def toggle_traffic_rule(self, rule_id: str, enabled: bool) -> bool:
+        """Enable or disable a traffic rule."""
+        LOGGER.debug("Setting traffic rule %s enabled state to: %s", rule_id, enabled)
+        try:
+            await self.controller.traffic_rules.toggle(rule_id, enabled)
+            return True
+        except Exception as err:
+            LOGGER.error("Failed to toggle traffic rule: %s", str(err))
+            return False
+    
     async def update_traffic_rule(self, rule_id: str, rule_data: Dict[str, Any]) -> bool:
         """Update an existing traffic rule."""
         LOGGER.debug("Updating traffic rule %s: %s", rule_id, rule_data)
@@ -321,7 +323,8 @@ class UDMAPI:
         """Add a new port forward."""
         LOGGER.debug("Adding port forward: %s", forward_data)
         try:
-            forward = await self.controller.port_forwarding.add_item(forward_data)
+            request = ApiRequest ("POST", "portforward", forward_data)
+            forward = await self.controller.request(request)
             return forward
         except Exception as err:
             LOGGER.error("Failed to add port forward: %s", str(err))
@@ -371,7 +374,8 @@ class UDMAPI:
         """Add a new traffic route."""
         LOGGER.debug("Adding traffic route: %s", route_data)
         try:
-            route = await self.controller.traffic_routes.add_item(route_data)
+            request = ApiRequestV2 ("POST", "trafficroutes", route_data)
+            route = await self.controller.request(request)
             return route
         except Exception as err:
             LOGGER.error("Failed to add traffic route: %s", str(err))
@@ -417,26 +421,6 @@ class UDMAPI:
             LOGGER.error("Failed to get firewall zones: %s", str(err))
             return []
 
-    async def add_firewall_zone(self, zone_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Add a new firewall zone."""
-        LOGGER.debug("Adding firewall zone: %s", zone_data)
-        try:
-            zone = await self.controller.firewall_zones.add_item(zone_data)
-            return zone
-        except Exception as err:
-            LOGGER.error("Failed to add firewall zone: %s", str(err))
-            return None
-
-    async def update_firewall_zone(self, zone_id: str, zone_data: Dict[str, Any]) -> bool:
-        """Update an existing firewall zone."""
-        LOGGER.debug("Updating firewall zone %s: %s", zone_id, zone_data)
-        try:
-            await self.controller.firewall_zones.update_item(zone_id, zone_data)
-            return True
-        except Exception as err:
-            LOGGER.error("Failed to update firewall zone: %s", str(err))
-            return False
-
     # WLAN Management Methods
     async def get_wlans(self) -> List[Dict[str, Any]]:
         """Get all WLANs."""
@@ -447,16 +431,6 @@ class UDMAPI:
         except Exception as err:
             LOGGER.error("Failed to get WLANs: %s", str(err))
             return []
-
-    async def update_wlan(self, wlan_id: str, wlan_data: Dict[str, Any]) -> bool:
-        """Update WLAN settings."""
-        LOGGER.debug("Updating WLAN %s: %s", wlan_id, wlan_data)
-        try:
-            await self.controller.wlans.update_item(wlan_id, wlan_data)
-            return True
-        except Exception as err:
-            LOGGER.error("Failed to update WLAN: %s", str(err))
-            return False
 
     async def toggle_wlan(self, wlan_id: str, enabled: bool) -> bool:
         """Enable or disable a WLAN."""
@@ -480,40 +454,13 @@ class UDMAPI:
         try:
             stats = {}
             # Get system info
-            await self.controller.system_info.update()
-            if self.controller.system_info.data:
-                stats.update(self.controller.system_info.data)
-            
-            # Get dashboard stats
-            dashboard_stats = await self.controller.stat_dashboard.async_get()
-            if (dashboard_stats):
-                stats.update(dashboard_stats)
+            system_information = await self.controller.system_information.update()
+            if system_information:
+                stats.update(system_information)
             
             return stats
         except Exception as err:
             LOGGER.error("Failed to get system stats: %s", str(err))
-            return {}
-
-    async def get_bandwidth_usage(self, timespan: int = 3600) -> Dict[str, Any]:
-        """Get bandwidth usage statistics for the specified timespan in seconds."""
-        LOGGER.debug("Fetching bandwidth usage for last %d seconds", timespan)
-        try:
-            # Get realtime stats from dashboard
-            stats = await self.controller.stat_dashboard.async_get()
-            
-            # Add historical stats if available
-            try:
-                history = await self.controller.stat_dashboard.async_historical_data(timespan)
-                if history:
-                    stats.update({
-                        "historical": history
-                    })
-            except Exception as history_err:
-                LOGGER.warning("Failed to get historical bandwidth data: %s", str(history_err))
-            
-            return stats
-        except Exception as err:
-            LOGGER.error("Failed to get bandwidth usage: %s", str(err))
             return {}
 
     # Bulk Operations and Updates
@@ -526,8 +473,6 @@ class UDMAPI:
                 self.controller.traffic_rules.update(),
                 self.controller.port_forwarding.update(),
                 self.controller.traffic_routes.update(),
-                self.controller.clients.update(),
-                self.controller.devices.update(),
                 self.controller.wlans.update()
             ]
             
@@ -553,7 +498,7 @@ class UDMAPI:
                 
             success, error = await self._handle_api_request(
                 "Update firewall policy",
-                self.controller.firewall_policies.async_update(policy_id, policy)
+                FirewallPolicyUpdateRequest.create(policy)
             )
             
             if success:
@@ -601,223 +546,6 @@ class UDMAPI:
         except Exception as err:
             LOGGER.error("Failed to get rule status: %s", str(err))
             return {}
-
-    def _find_dependencies(self, rule: Dict[str, Any]) -> List[str]:
-        """Find rules that this rule depends on."""
-        dependencies = []
-        # Implementation specific to your rule structure
-        return dependencies
-
-    def _find_conflicts(self, rule: Dict[str, Any]) -> List[str]:
-        """Find rules that might conflict with this rule."""
-        conflicts = []
-        # Implementation specific to your rule structure
-        return conflicts
-
-    # Client and Device Management Methods
-    async def get_clients(self, include_offline: bool = False) -> List[Dict[str, Any]]:
-        """Get all client devices."""
-        LOGGER.debug("Fetching clients (include_offline=%s)", include_offline)
-        try:
-            success, error = await self._handle_api_request(
-                "Get clients",
-                self.controller.clients.update()
-            )
-            if not success:
-                LOGGER.error("Failed to get clients: %s", error)
-                return []
-                
-            clients = list(self.controller.clients.values())
-            if not include_offline:
-                clients = [c for c in clients if c.get('is_online', False)]
-            return clients
-        except Exception as err:
-            LOGGER.error("Failed to get clients: %s", str(err))
-            return []
-
-    async def block_client(self, client_mac: str) -> bool:
-        """Block a client device."""
-        LOGGER.debug("Blocking client: %s", client_mac)
-        try:
-            success, error = await self._handle_api_request(
-                "Block client",
-                self.controller.clients.async_block(client_mac)
-            )
-            if not success:
-                LOGGER.error("Failed to block client: %s", error)
-            return success
-        except Exception as err:
-            LOGGER.error("Failed to block client: %s", str(err))
-            return False
-
-    async def unblock_client(self, client_mac: str) -> bool:
-        """Unblock a client device."""
-        LOGGER.debug("Unblocking client: %s", client_mac)
-        try:
-            success, error = await self._handle_api_request(
-                "Unblock client",
-                self.controller.clients.async_unblock(client_mac)
-            )
-            if not success:
-                LOGGER.error("Failed to unblock client: %s", error)
-            return success
-        except Exception as err:
-            LOGGER.error("Failed to unblock client: %s", str(err))
-            return False
-
-    async def reconnect_client(self, client_mac: str) -> bool:
-        """Force a client to reconnect."""
-        LOGGER.debug("Forcing reconnect for client: %s", client_mac)
-        try:
-            success, error = await self._handle_api_request(
-                "Reconnect client",
-                self.controller.clients.async_force_reconnect(client_mac)
-            )
-            if not success:
-                LOGGER.error("Failed to reconnect client: %s", error)
-            return success
-        except Exception as err:
-            LOGGER.error("Failed to reconnect client: %s", str(err))
-            return False
-
-    async def get_device_stats(self, mac: str) -> Dict[str, Any]:
-        """Get statistics for a specific device."""
-        LOGGER.debug("Fetching device stats for: %s", mac)
-        try:
-            success, error = await self._handle_api_request(
-                "Get device stats",
-                self.controller.devices.update()
-            )
-            if not success:
-                LOGGER.error("Failed to get device stats: %s", error)
-                return {}
-
-            stats = {
-                "rx_bytes": 0,
-                "tx_bytes": 0,
-                "uptime": 0,
-                "last_seen": None,
-                "status": "unknown"
-            }
-            
-            # Check both devices and clients since the MAC could be either
-            if mac in self.controller.devices:
-                device = self.controller.devices[mac]
-                stats.update({
-                    "rx_bytes": device.get("rx_bytes", 0),
-                    "tx_bytes": device.get("tx_bytes", 0),
-                    "uptime": device.get("uptime", 0),
-                    "last_seen": device.get("last_seen"),
-                    "status": device.get("state", "unknown"),
-                    "type": "device"
-                })
-            elif mac in self.controller.clients:
-                client = self.controller.clients[mac]
-                stats.update({
-                    "rx_bytes": client.get("rx_bytes", 0),
-                    "tx_bytes": client.get("tx_bytes", 0),
-                    "uptime": client.get("uptime", 0),
-                    "last_seen": client.get("last_seen"),
-                    "status": "online" if client.get("is_online", False) else "offline",
-                    "type": "client",
-                    "blocked": client.get("blocked", False)
-                })
-            
-            return stats
-        except Exception as err:
-            LOGGER.error("Failed to get device stats: %s", str(err))
-            return {}
-
-    # Network Security Methods
-    async def get_threats(self) -> List[Dict[str, Any]]:
-        """Get detected security threats."""
-        LOGGER.debug("Fetching security threats")
-        try:
-            # Get security-related events
-            security_types = ["IPS", "IDS", "Threat", "SecurityEvent"]
-            events = await self.get_events()
-            return [
-                event for event in events
-                if event.get("type") in security_types
-                or event.get("subsystem") == "security"
-            ]
-        except Exception as err:
-            LOGGER.error("Failed to get threats: %s", str(err))
-            return []
-
-    async def get_device_stats(self, mac: str) -> Dict[str, Any]:
-        """Get statistics for a specific device."""
-        LOGGER.debug("Fetching device stats for: %s", mac)
-        try:
-            stats = {
-                "rx_bytes": 0,
-                "tx_bytes": 0,
-                "uptime": 0,
-                "last_seen": None,
-                "blocked": False
-            }
-            
-            if mac in self.controller.clients:
-                client = self.controller.clients[mac]
-                stats.update({
-                    "rx_bytes": client.get("rx_bytes", 0),
-                    "tx_bytes": client.get("tx_bytes", 0),
-                    "uptime": client.get("uptime", 0),
-                    "last_seen": client.get("last_seen"),
-                    "blocked": client.get("blocked", False)
-                })
-            
-            return stats
-        except Exception as err:
-            LOGGER.error("Failed to get device stats: %s", str(err))
-            return {}
-
-    # Network Management Methods
-    async def reconnect_client(self, client_mac: str) -> bool:
-        """Force a client to reconnect."""
-        LOGGER.debug("Forcing reconnect for client: %s", client_mac)
-        try:
-            await self.controller.clients.async_force_reconnect(client_mac)
-            return True
-        except Exception as err:
-            LOGGER.error("Failed to reconnect client: %s", str(err))
-            return False
-
-    async def get_bandwidth_usage(self, timespan: int = 3600) -> Dict[str, Any]:
-        """Get bandwidth usage statistics for the specified timespan in seconds."""
-        LOGGER.debug("Fetching bandwidth usage for last %d seconds", timespan)
-        try:
-            # Get realtime stats from dashboard
-            stats = await self.controller.stat_dashboard.async_get()
-            
-            # Add historical stats if available
-            try:
-                history = await self.controller.stat_dashboard.async_historical_data(timespan)
-                if history:
-                    stats.update({
-                        "historical": history
-                    })
-            except Exception as history_err:
-                LOGGER.warning("Failed to get historical bandwidth data: %s", str(history_err))
-            
-            return stats
-        except Exception as err:
-            LOGGER.error("Failed to get bandwidth usage: %s", str(err))
-            return {}
-
-    # Events and Security Methods
-    async def get_events(self, event_type: str | None = None) -> List[Dict[str, Any]]:
-        """Get events, optionally filtered by type."""
-        LOGGER.debug("Fetching events (type=%s)", event_type)
-        try:
-            await self.controller.events.update()
-            events = list(self.controller.events.values())
-            if event_type:
-                events = [e for e in events if e.get("type") == event_type]
-            return events
-        except Exception as err:
-            LOGGER.error("Failed to get events: %s", str(err))
-            return []
 
     # Error handling helper
     async def _handle_api_request(self, request_type: str, action: str) -> Tuple[bool, Optional[str]]:
