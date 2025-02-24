@@ -18,7 +18,7 @@ from aiounifi.models.port_forward import PortForward
 
 from .const import DOMAIN, LOGGER
 from .coordinator import UnifiRuleUpdateCoordinator
-from .utils import get_rule_id, get_rule_name, get_rule_enabled
+from .helpers.rule import get_rule_id, get_rule_name, get_rule_enabled
 
 PARALLEL_UPDATES = 1
 RULE_TYPES: Final = {

@@ -29,7 +29,7 @@ from homeassistant.const import CONF_VERIFY_SSL
 from homeassistant.exceptions import HomeAssistantError
 
 from .const import LOGGER
-from .utils import get_rule_id
+from .helpers.rule import get_rule_id
 
 class UnifiNetworkRulesError(HomeAssistantError):
     """Base error for UniFi Network Rules."""

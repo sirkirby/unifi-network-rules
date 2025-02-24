@@ -1,4 +1,4 @@
-"""Utility functions for UniFi Network Rules."""
+"""Helper functions for UniFi Network rule handling."""
 from typing import Any
 
 from aiounifi.models.traffic_route import TrafficRoute
