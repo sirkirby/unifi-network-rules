@@ -9,7 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 
 from aiounifi.models.traffic_route import TrafficRoute
 from aiounifi.models.firewall_policy import FirewallPolicy
@@ -109,6 +109,8 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         super().__init__(coordinator)
         self._rule_data = rule_data
         self._rule_type = rule_type
+        # Set entity category as a configuration entity
+        self.entity_category = EntityCategory.CONFIG
         
         # Log detailed information about the rule object
         LOGGER.debug(
@@ -134,6 +136,16 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
             manufacturer="Ubiquiti",
             model="UniFi Dream Machine"
         )
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        # Update our rule data with the latest available from the coordinator
+        new_rule = self._get_current_rule()
+        if new_rule is not None:
+            self._rule_data = new_rule
+        # Schedule update to Home Assistant
+        self.async_write_ha_state()
 
     @property
     def available(self) -> bool:
@@ -165,8 +177,15 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         """Convert a rule object to a dictionary."""
         if isinstance(obj, dict):
             return obj.copy()
+            
+        # Get the rule ID properly considering object type
+        # From helpers.rule we know the id is accessed directly without underscore
+        rule_id = None
+        if hasattr(obj, "id"):
+            rule_id = getattr(obj, "id")
+            
         base_data = {
-            "_id": getattr(obj, "id", None),
+            "_id": rule_id,
             "enabled": getattr(obj, "enabled", False)
         }
         
