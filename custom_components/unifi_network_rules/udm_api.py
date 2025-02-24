@@ -28,7 +28,7 @@ from homeassistant.helpers import aiohttp_client
 from homeassistant.const import CONF_VERIFY_SSL
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import LOGGER
+from .const import LOGGER, DEFAULT_SITE
 from .helpers.rule import get_rule_id
 
 class UnifiNetworkRulesError(HomeAssistantError):
@@ -42,11 +42,12 @@ class InvalidAuth(UnifiNetworkRulesError):
 
 class UDMAPI:
     """Class to interact with UniFi Dream Machine API."""
-    def __init__(self, host: str, username: str, password: str, verify_ssl: bool = False):
+    def __init__(self, host: str, username: str, password: str, site: str = DEFAULT_SITE, verify_ssl: bool = False):
         """Initialize the UDMAPI."""
         self.host = host
         self.username = username
         self.password = password
+        self.site = site
         self.verify_ssl = verify_ssl
         self._session = None
         self.controller = None
@@ -87,7 +88,7 @@ class UDMAPI:
                 username=self.username,
                 password=self.password,
                 port=443,
-                site="default",
+                site=self.site,
                 ssl_context=ssl_context,
             )
 
@@ -186,8 +187,27 @@ class UDMAPI:
             self._login_attempt_count = 0
             
         try:
+            LOGGER.debug("Attempting to re-authenticate with UniFi controller")
+            
+            # Ensure the controller is properly initialized
+            if not self.controller:
+                LOGGER.warning("Controller not initialized, initializing before login attempt")
+                await self.async_init()
+                return True
+                
+            # Try to perform login
             await self.controller.login()
+            
+            # If successful, reset counters and refresh data
             self._login_attempt_count = 0
+            LOGGER.debug("Re-authentication successful, refreshing data")
+            
+            # Refresh necessary data after login
+            try:
+                await self.refresh_all()
+            except Exception as refresh_err:
+                LOGGER.warning("Error refreshing data after login: %s", str(refresh_err))
+                
             return True
         except Exception as err:
             self._last_login_attempt = current_time
@@ -238,7 +258,17 @@ class UDMAPI:
             policy_dict = policy.raw.copy()
             policy_dict["enabled"] = policy_data.get("enabled", False)
             request = FirewallPolicyUpdateRequest.create(policy_dict)
-            await self.controller.request(request)
+            
+            # Use our error handling method instead of direct call
+            success, error = await self._handle_api_request(
+                "Update firewall policy",
+                self.controller.request(request)
+            )
+            
+            if not success:
+                LOGGER.error("Failed to update firewall policy: %s", error)
+                return False
+                
             return True
         except Exception as err:
             LOGGER.error("Failed to update firewall policy: %s", str(err))
@@ -249,6 +279,18 @@ class UDMAPI:
         LOGGER.debug("Removing firewall policy: %s", policy_id)
         try:
             request = ApiRequestV2.create("POST", "firewall-policies/batch-delete", f"['{policy_id}']")
+            
+            # Use our error handling method instead of direct call
+            success, error = await self._handle_api_request(
+                "Remove firewall policy",
+                self.controller.request(request)
+            )
+            
+            if not success:
+                LOGGER.error("Failed to remove firewall policy: %s", error)
+                return False
+                
+            # Remove from local cache after successful API call
             await self.controller.firewall_policies.remove_item(policy_id)
             return True
         except Exception as err:
@@ -283,7 +325,16 @@ class UDMAPI:
         """Enable or disable a traffic rule."""
         LOGGER.debug("Setting traffic rule %s enabled state to: %s", rule_id, enabled)
         try:
-            await self.controller.traffic_rules.toggle(rule_id, enabled)
+            # Use our error handling method instead of direct call
+            success, error = await self._handle_api_request(
+                "Toggle traffic rule",
+                self.controller.traffic_rules.toggle(rule_id, enabled)
+            )
+            
+            if not success:
+                LOGGER.error("Failed to toggle traffic rule: %s", error)
+                return False
+                
             return True
         except Exception as err:
             LOGGER.error("Failed to toggle traffic rule: %s", str(err))
@@ -302,7 +353,17 @@ class UDMAPI:
             
             # Update the rule's enabled state using the proper request
             request = TrafficRuleEnableRequest.create(rule.raw, enable=rule_data.get("enabled", False))
-            await self.controller.request(request)
+            
+            # Use our error handling method instead of direct call
+            success, error = await self._handle_api_request(
+                "Update traffic rule",
+                self.controller.request(request)
+            )
+            
+            if not success:
+                LOGGER.error("Failed to update traffic rule: %s", error)
+                return False
+                
             return True
         except Exception as err:
             LOGGER.error("Failed to update traffic rule: %s", str(err))
@@ -312,7 +373,16 @@ class UDMAPI:
         """Remove a traffic rule."""
         LOGGER.debug("Removing traffic rule: %s", rule_id)
         try:
-            await self.controller.traffic_rules.remove_item(rule_id)
+            # Use our error handling method instead of direct call
+            success, error = await self._handle_api_request(
+                "Remove traffic rule",
+                self.controller.traffic_rules.remove_item(rule_id)
+            )
+            
+            if not success:
+                LOGGER.error("Failed to remove traffic rule: %s", error)
+                return False
+                
             return True
         except Exception as err:
             LOGGER.error("Failed to remove traffic rule: %s", str(err))
@@ -356,7 +426,17 @@ class UDMAPI:
             
             # Update the forward's enabled state using the proper request
             request = PortForwardEnableRequest.create(forward, enable=forward_data.get("enabled", False))
-            await self.controller.request(request)
+            
+            # Use our error handling method instead of direct call
+            success, error = await self._handle_api_request(
+                "Update port forward",
+                self.controller.request(request)
+            )
+            
+            if not success:
+                LOGGER.error("Failed to update port forward: %s", error)
+                return False
+                
             return True
         except Exception as err:
             LOGGER.error("Failed to update port forward: %s", str(err))
@@ -366,7 +446,16 @@ class UDMAPI:
         """Remove a port forward."""
         LOGGER.debug("Removing port forward: %s", forward_id)
         try:
-            await self.controller.port_forwarding.remove_item(forward_id)
+            # Use our error handling method instead of direct call
+            success, error = await self._handle_api_request(
+                "Remove port forward",
+                self.controller.port_forwarding.remove_item(forward_id)
+            )
+            
+            if not success:
+                LOGGER.error("Failed to remove port forward: %s", error)
+                return False
+                
             return True
         except Exception as err:
             LOGGER.error("Failed to remove port forward: %s", str(err))
@@ -407,7 +496,17 @@ class UDMAPI:
             
             # Update the route's enabled state using the proper request
             request = TrafficRouteSaveRequest.create(route.raw, enable=route_data.get("enabled"))
-            await self.controller.request(request)
+            
+            # Use our error handling method instead of direct call
+            success, error = await self._handle_api_request(
+                "Update traffic route",
+                self.controller.request(request)
+            )
+            
+            if not success:
+                LOGGER.error("Failed to update traffic route: %s", error)
+                return False
+                
             return True
         except Exception as err:
             LOGGER.error("Failed to update traffic route: %s", str(err))
@@ -417,7 +516,16 @@ class UDMAPI:
         """Remove a traffic route."""
         LOGGER.debug("Removing traffic route: %s", route_id)
         try:
-            await self.controller.traffic_routes.remove_item(route_id)
+            # Use our error handling method instead of direct call
+            success, error = await self._handle_api_request(
+                "Remove traffic route",
+                self.controller.traffic_routes.remove_item(route_id)
+            )
+            
+            if not success:
+                LOGGER.error("Failed to remove traffic route: %s", error)
+                return False
+                
             return True
         except Exception as err:
             LOGGER.error("Failed to remove traffic route: %s", str(err))
@@ -517,7 +625,7 @@ class UDMAPI:
                 
             success, error = await self._handle_api_request(
                 "Update firewall policy",
-                FirewallPolicyUpdateRequest.create(policy)
+                self.controller.request(FirewallPolicyUpdateRequest.create(policy))
             )
             
             if success:
@@ -588,13 +696,68 @@ class UDMAPI:
                 return True, None
             except Exception as login_err:
                 return False, f"Failed to reconnect: {login_err}"
+        except RequestError as err:
+            # Check for 403 Forbidden error which might indicate expired session
+            error_message = str(err)
+            if "403 Forbidden" in error_message:
+                LOGGER.warning("%s failed with 403 Forbidden, attempting to re-authenticate", request_type)
+                try:
+                    await self._try_login()
+                    await action
+                    return True, None
+                except Exception as login_err:
+                    return False, f"Failed to re-authenticate after 403: {login_err}"
+            return False, f"Request failed: {err}"
         except (BadGateway, ServiceUnavailable) as err:
             return False, f"Service unavailable: {err}"
-        except RequestError as err:
-            return False, f"Request failed: {err}"
         except ResponseError as err:
+            # Check for 403 Forbidden error in response errors as well
+            error_message = str(err) 
+            if "403 Forbidden" in error_message:
+                LOGGER.warning("%s failed with 403 Forbidden in response, attempting to re-authenticate", request_type)
+                try:
+                    await self._try_login()
+                    await action
+                    return True, None
+                except Exception as login_err:
+                    return False, f"Failed to re-authenticate after 403: {login_err}"
             return False, f"Invalid response: {err}"
+        except Unauthorized as err:
+            LOGGER.warning("%s failed with Unauthorized error, attempting to re-authenticate", request_type)
+            try:
+                await self._try_login()
+                await action
+                return True, None
+            except Exception as login_err:
+                return False, f"Failed to re-authenticate after Unauthorized: {login_err}"
         except AiounifiException as err:
+            # Check for 403 Forbidden in AiounifiException as well
+            error_message = str(err)
+            if "403 Forbidden" in error_message:
+                LOGGER.warning("%s failed with 403 Forbidden in AiounifiException, attempting to re-authenticate", request_type)
+                try:
+                    await self._try_login()
+                    await action
+                    return True, None
+                except Exception as login_err:
+                    return False, f"Failed to re-authenticate after 403 in AiounifiException: {login_err}"
             return False, f"API error: {err}"
         except Exception as err:
             return False, f"Unexpected error: {err}"
+
+    async def refresh_session(self) -> bool:
+        """Refresh the session to prevent expiration.
+        
+        This method should be called periodically to keep the session alive.
+        """
+        if not self._initialized or not self.controller:
+            LOGGER.warning("Cannot refresh session - API not initialized")
+            return False
+            
+        try:
+            LOGGER.debug("Proactively refreshing UniFi session")
+            await self.controller.login()
+            return True
+        except Exception as err:
+            LOGGER.warning("Session refresh failed: %s", str(err))
+            return False

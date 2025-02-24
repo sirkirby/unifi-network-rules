@@ -46,7 +46,11 @@ THEN
 
 **Password**: The password for the UDM account.
 
-**Updated Interval**: The automatic refresh interval in minutes.
+**Site**: The UniFi site name to connect to (defaults to "default" if not specified).
+
+**Update Interval**: The automatic refresh interval in minutes.
+
+**Verify SSL**: Enable SSL certificate verification (defaults to disabled for self-signed certificates).
 
 ## Usage
 

@@ -8,7 +8,9 @@
           "host": "Host",
           "username": "Username",
           "password": "Password",
-          "update_interval": "Update interval (seconds)"
+          "site": "Site name (defaults to 'default')",
+          "update_interval": "Update interval (minutes)",
+          "verify_ssl": "Verify SSL certificate (disable for self-signed certificates)"
         }
       }
     },

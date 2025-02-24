@@ -14,6 +14,8 @@ from .const import (
     DOMAIN,
     CONF_UPDATE_INTERVAL,
     DEFAULT_UPDATE_INTERVAL,
+    CONF_SITE,
+    DEFAULT_SITE,
     LOGGER
 )
 from .udm_api import UDMAPI, CannotConnect, InvalidAuth
@@ -42,6 +44,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             host=entry.data[CONF_HOST],
             username=entry.data[CONF_USERNAME],
             password=entry.data[CONF_PASSWORD],
+            site=entry.data.get(CONF_SITE, DEFAULT_SITE),
             verify_ssl=entry.data.get(CONF_VERIFY_SSL, False),
         )
         

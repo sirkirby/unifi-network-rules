@@ -7,7 +7,7 @@ import voluptuous as vol
 import asyncio
 
 from homeassistant import config_entries
-from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
+from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.core import HomeAssistant
@@ -16,6 +16,8 @@ from .const import (
     DOMAIN,
     CONF_UPDATE_INTERVAL,
     DEFAULT_UPDATE_INTERVAL,
+    CONF_SITE,
+    DEFAULT_SITE,
     LOGGER
 )
 from .udm_api import CannotConnect, InvalidAuth
@@ -34,9 +36,18 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
         vol.Optional(
+            CONF_SITE, 
+            default=DEFAULT_SITE
+        ): str,
+        vol.Optional(
             CONF_UPDATE_INTERVAL, 
             default=DEFAULT_UPDATE_INTERVAL
         ): int,
+        vol.Optional(
+            CONF_VERIFY_SSL,
+            default=False,
+            description="Enable SSL certificate verification"
+        ): bool,
     }
 )
 
@@ -47,7 +58,9 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> None:
     api = UDMAPI(
         data[CONF_HOST],
         data[CONF_USERNAME],
-        data[CONF_PASSWORD]
+        data[CONF_PASSWORD],
+        site=data.get(CONF_SITE, DEFAULT_SITE),
+        verify_ssl=data.get(CONF_VERIFY_SSL, False)
     )
 
     try:

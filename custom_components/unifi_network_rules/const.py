@@ -15,6 +15,10 @@ CONF_UPDATE_INTERVAL = "update_interval"
 DEFAULT_UPDATE_INTERVAL = 1  # Changed from 5 to 1 minute for more responsive updates
 SESSION_TIMEOUT = 30
 
+# Site configuration
+CONF_SITE = "site"
+DEFAULT_SITE = "default"
+
 # Events
 EVENT_RULE_UPDATED = f"{DOMAIN}_rule_updated"
 EVENT_RULE_DELETED = f"{DOMAIN}_rule_deleted"
@@ -29,16 +33,17 @@ CONF_TEMPLATE_VARIABLES = "variables"
 CONF_RULE_TYPE = "rule_type"
 
 # API Endpoints
-SITE_FEATURE_MIGRATION_ENDPOINT = "/proxy/network/v2/api/site/default/site-feature-migration"
-FIREWALL_POLICIES_ENDPOINT = "/proxy/network/v2/api/site/default/firewall-policies"
-FIREWALL_POLICIES_DELETE_ENDPOINT = "/proxy/network/v2/api/site/default/firewall-policies/batch-delete"
-TRAFFIC_ROUTES_ENDPOINT = "/proxy/network/v2/api/site/default/trafficroutes"
-LEGACY_FIREWALL_RULES_ENDPOINT = "/proxy/network/api/s/default/rest/firewallrule"
-LEGACY_TRAFFIC_RULES_ENDPOINT = "/proxy/network/v2/api/site/default/trafficrules"
-FIREWALL_ZONE_MATRIX_ENDPOINT = "/proxy/network/v2/api/site/default/firewall/zone-matrix"
-FIREWALL_POLICY_TOGGLE_ENDPOINT = "/proxy/network/v2/api/site/default/firewall-policies/batch"
+SITE_FEATURE_MIGRATION_ENDPOINT = "/proxy/network/v2/api/site/{site}/site-feature-migration"
+FIREWALL_POLICIES_ENDPOINT = "/proxy/network/v2/api/site/{site}/firewall-policies"
+FIREWALL_POLICIES_DELETE_ENDPOINT = "/proxy/network/v2/api/site/{site}/firewall-policies/batch-delete"
+TRAFFIC_ROUTES_ENDPOINT = "/proxy/network/v2/api/site/{site}/trafficroutes"
+LEGACY_FIREWALL_RULES_ENDPOINT = "/proxy/network/api/s/{site}/rest/firewallrule"
+LEGACY_TRAFFIC_RULES_ENDPOINT = "/proxy/network/v2/api/site/{site}/trafficrules"
+FIREWALL_ZONE_MATRIX_ENDPOINT = "/proxy/network/v2/api/site/{site}/firewall/zone-matrix"
+FIREWALL_POLICY_TOGGLE_ENDPOINT = "/proxy/network/v2/api/site/{site}/firewall-policies/batch"
+PORT_FORWARD_ENDPOINT = "/proxy/network/api/s/{site}/rest/portforward"
+
 AUTH_LOGIN_ENDPOINT = "/api/auth/login"
-PORT_FORWARD_ENDPOINT = "/proxy/network/api/s/default/rest/portforward"
 
 ZONE_BASED_FIREWALL_FEATURE = "ZONE_BASED_FIREWALL"
 

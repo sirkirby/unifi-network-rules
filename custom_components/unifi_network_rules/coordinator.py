@@ -68,6 +68,20 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
     async def _async_update_data(self) -> Dict[str, List[Any]]:
         """Fetch data from API endpoint."""
         try:
+            # Proactively refresh the session to prevent 403 errors
+            # Only refresh every 5 minutes to avoid excessive API calls
+            refresh_interval = 300  # seconds
+            current_time = asyncio.get_event_loop().time()
+            last_refresh = getattr(self, "_last_session_refresh", 0)
+            
+            if current_time - last_refresh > refresh_interval:
+                LOGGER.debug("Proactively refreshing session")
+                try:
+                    await self.api.refresh_session()
+                    self._last_session_refresh = current_time
+                except Exception as refresh_err:
+                    LOGGER.warning("Failed to refresh session: %s", str(refresh_err))
+            
             # Initialize with empty lists for each rule type
             rules_data: Dict[str, List[Any]] = {
                 "firewall_policies": [],
