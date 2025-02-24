@@ -1,0 +1,20 @@
+---
+description: Purpose of this custom home assistant integration along with general coding practics and scope guidance
+globs: 
+alwaysApply: true
+---
+
+## Code notes
+
+- Always keep the code DRY for testability and separation of concerns
+- Prefer modern idiomatic Python 3.13 and open source conventions, Leverage type hints, use CONST over hard coded strings
+- Prioritize native Home Assistant libraries, like aiounifi, and other core capabilities to respect available resources and to avoid building duplicate fuctionality. Leverage the latest Home Assistant documentation.
+
+## Integration notes
+
+The focus of this integration is to extend the functionality of the Unifi Network application within the home assistant ecosystem. Build upon the home assistant unifi core integration and the aiounifi library. Bundling and enabling advanced automation, customizable backup and restore, and to be generally useful for homelab and home automation environments. Some examples: enhancing guest network access. Managing child device access. Promoting good security practices
+
+## Supported features
+
+- All UDM network and routing features are in scope for the [udm_api.py](mdc:custom_components/unifi_network_rules/udm_api.py) and this integration
+- When aiounifi is reference, look for the latest code on github https://github.com/Kane610/aiounifi to ensure compatibility
