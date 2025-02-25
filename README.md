@@ -289,7 +289,7 @@ To run the tests, you need to install the dependencies in the `requirements_test
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements_test.txt
+pip install -r requirements.txt
 ```
 
 Then run the tests:
