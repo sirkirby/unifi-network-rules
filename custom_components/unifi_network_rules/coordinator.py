@@ -91,10 +91,16 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             if current_time - last_refresh > refresh_interval:
                 LOGGER.debug("Proactively refreshing session")
                 try:
-                    await self.api.refresh_session()
-                    self._last_session_refresh = current_time
+                    # We'll track successful refreshes but not fail the update if refresh fails
+                    refresh_success = await self.api.refresh_session()
+                    if refresh_success:
+                        self._last_session_refresh = current_time
+                        LOGGER.debug("Session refresh successful")
+                    else:
+                        LOGGER.warning("Session refresh skipped or failed, continuing with update")
                 except Exception as refresh_err:
                     LOGGER.warning("Failed to refresh session: %s", str(refresh_err))
+                    # Continue with update despite refresh failure
             
             # Ensure we always use force_refresh to avoid stale data issues
             LOGGER.debug("Starting data refresh cycle with force_refresh=True")
@@ -113,6 +119,20 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             # Store the previous data to detect deletions
             previous_data = self.data.copy() if self.data else {}
             
+            # Check if we're rate limited before proceeding
+            if hasattr(self.api, "_rate_limited") and self.api._rate_limited:
+                current_time = asyncio.get_event_loop().time()
+                if current_time < getattr(self.api, "_rate_limit_until", 0):
+                    # If rate limited, return last good data and don't attempt API calls
+                    LOGGER.warning(
+                        "Rate limit in effect. Skipping update and returning last good data. "
+                        "This prevents excessive API calls during rate limiting."
+                    )
+                    if self._last_successful_data:
+                        return self._last_successful_data
+                    else:
+                        return rules_data
+            
             # Clear any caches before fetching to ensure we get fresh data
             await self.api.clear_cache()
             
@@ -123,26 +143,15 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             force_cleanup_interval = 3600  # seconds
             last_cleanup = getattr(self, "_last_entity_cleanup", 0)
             if current_time - last_cleanup > force_cleanup_interval:
-                LOGGER.info("Performing periodic forced entity cleanup")
-                self._last_entity_cleanup = current_time
-                
-                # Dispatch a special force-cleanup signal
-                try:
-                    async_dispatcher_send(
-                        self.hass,
-                        f"{DOMAIN}_force_entity_cleanup",
-                        None
-                    )
-                except Exception as cleanup_err:
-                    LOGGER.error("Error dispatching forced cleanup: %s", cleanup_err)
+                setattr(self, "_force_cleanup", True)
+                setattr(self, "_last_entity_cleanup", current_time)
+                LOGGER.debug("Scheduling forced entity cleanup after this update cycle")
             
-            # Gather all rule types SEQUENTIALLY instead of in parallel
-            # This avoids overwhelming the API with parallel requests
+            # Add delay between API calls to avoid rate limiting
+            # Increase the delay for more aggressive throttling
+            api_call_delay = 1.0  # seconds (increased from default)
             
-            # Define delay between API calls to prevent rate limiting
-            api_call_delay = 1.0  # seconds between API calls - reduced slightly
-            
-            # Firewall policies first - most important
+            # First get firewall policies
             await self._update_firewall_policies(rules_data)
             await asyncio.sleep(api_call_delay)
             
@@ -286,227 +295,265 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 
             LOGGER.debug("Checking for deletions in %s: Previous count: %d, Current count: %d", 
                          rule_type, len(previous_data[rule_type]), len(new_data[rule_type]))
-                
-            # If we have fewer items now than before, something was probably deleted
-            if len(previous_data[rule_type]) > len(new_data[rule_type]):
-                # But only warn if the difference is significant - avoid entity churn on minor changes
-                if len(previous_data[rule_type]) - len(new_data[rule_type]) > len(previous_data[rule_type]) * 0.5:
-                    # If we lost more than 50% of entities, this might be a temporary API issue rather than actual deletions
-                    LOGGER.warning(
-                        "More than 50%% of %s rules disappeared (%d -> %d). This may be a temporary API issue - skipping entity removal",
-                        rule_type,
-                        len(previous_data[rule_type]),
-                        len(new_data[rule_type])
-                    )
-                    # Skip this rule type to avoid entity churn during API issues
-                    continue
-                else:
-                    LOGGER.warning("Count decreased for %s: %d -> %d (-%d items)", 
-                                rule_type, 
-                                len(previous_data[rule_type]), 
-                                len(new_data[rule_type]), 
-                                len(previous_data[rule_type]) - len(new_data[rule_type]))
             
-            # Get the raw rule IDs without prefixes to compare data accurately
-            # This extracts only the ID portion from each rule for comparison
-            def extract_raw_id(rule_id):
-                """Extract the raw ID part without the prefix."""
-                if rule_id and "_" in rule_id:
-                    parts = rule_id.split("_")
-                    # Return the last part which should be the actual ID
-                    return parts[-1]
-                return rule_id
-                
-            # Create maps of rules by ID for efficient comparison
-            prev_rules = {get_rule_id(rule): rule for rule in previous_data[rule_type] if get_rule_id(rule)}
-            new_rules = {get_rule_id(rule): rule for rule in new_data[rule_type] if get_rule_id(rule)}
+            # Process each rule type to detect and handle deletions
+            deleted_ids = self._detect_deleted_rules(
+                rule_type,
+                previous_data[rule_type],
+                new_data[rule_type]
+            )
             
-            # Create sets for more efficient comparison
-            prev_ids = set(prev_rules.keys())
-            new_ids = set(new_rules.keys())
+            if deleted_ids:
+                self._process_deleted_rules(rule_type, deleted_ids, len(previous_data[rule_type]))
+
+    def _detect_deleted_rules(
+        self, rule_type: str, previous_rules: List[Any], new_rules: List[Any]
+    ) -> set:
+        """Detect rules that have been deleted between updates.
+        
+        Args:
+            rule_type: The type of rule being processed
+            previous_rules: The list of rules from the previous update
+            new_rules: The list of rules from the current update
             
-            # Add debug logs to show what IDs we're comparing
-            LOGGER.debug("Checking for deleted %s rules - Previous IDs: %s", rule_type, sorted(list(prev_ids)))
-            LOGGER.debug("Checking for deleted %s rules - Current IDs: %s", rule_type, sorted(list(new_ids)))
+        Returns:
+            Set of rule IDs that were detected as deleted
+        """
+        # If we have fewer items now than before, something was probably deleted
+        if len(previous_rules) > len(new_rules):
+            # But only warn if the difference is significant - avoid entity churn on minor changes
+            if len(previous_rules) - len(new_rules) > len(previous_rules) * 0.5:
+                # If we lost more than 50% of entities, this might be a temporary API issue
+                LOGGER.warning(
+                    "More than 50%% of %s rules disappeared (%d -> %d). This may be a temporary API issue - skipping entity removal",
+                    rule_type,
+                    len(previous_rules),
+                    len(new_rules)
+                )
+                # Skip this rule type to avoid entity churn during API issues
+                return set()
+            else:
+                LOGGER.warning("Count decreased for %s: %d -> %d (-%d items)", 
+                            rule_type, 
+                            len(previous_rules), 
+                            len(new_rules), 
+                            len(previous_rules) - len(new_rules))
+        
+        # Extract raw ID helper function
+        def extract_raw_id(rule_id):
+            """Extract the raw ID part without the prefix."""
+            if rule_id and "_" in rule_id:
+                parts = rule_id.split("_")
+                # Return the last part which should be the actual ID
+                return parts[-1]
+            return rule_id
             
-            # Find IDs that existed before but not now (deleted rules)
-            deleted_ids = prev_ids - new_ids
-            
-            # Also try comparing raw IDs without prefixes
-            prev_raw_ids = {extract_raw_id(get_rule_id(rule)) for rule in previous_data[rule_type] if get_rule_id(rule)}
-            new_raw_ids = {extract_raw_id(get_rule_id(rule)) for rule in new_data[rule_type] if get_rule_id(rule)}
+        # Create maps of rules by ID for efficient comparison
+        prev_rules = {get_rule_id(rule): rule for rule in previous_rules if get_rule_id(rule)}
+        new_rules = {get_rule_id(rule): rule for rule in new_rules if get_rule_id(rule)}
+        
+        # Create sets for more efficient comparison
+        prev_ids = set(prev_rules.keys())
+        new_ids = set(new_rules.keys())
+        
+        # Add debug logs to show what IDs we're comparing
+        LOGGER.debug("Checking for deleted %s rules - Previous IDs: %s", rule_type, sorted(list(prev_ids)))
+        LOGGER.debug("Checking for deleted %s rules - Current IDs: %s", rule_type, sorted(list(new_ids)))
+        
+        # Find IDs that existed before but not now (deleted rules)
+        deleted_ids = prev_ids - new_ids
+        
+        # Also try comparing raw IDs without prefixes if we didn't find any deletions
+        if not deleted_ids and len(previous_rules) != len(new_rules):
+            prev_raw_ids = {extract_raw_id(get_rule_id(rule)) for rule in previous_rules if get_rule_id(rule)}
+            new_raw_ids = {extract_raw_id(get_rule_id(rule)) for rule in new_rules if get_rule_id(rule)}
             raw_deleted_ids = prev_raw_ids - new_raw_ids
             
-            if raw_deleted_ids and not deleted_ids:
+            if raw_deleted_ids:
                 LOGGER.info("Found %d deleted rules using raw ID comparison: %s", 
                             len(raw_deleted_ids), raw_deleted_ids)
                 
                 # Convert raw IDs back to entity IDs for removal
                 for raw_id in raw_deleted_ids:
-                    for rule in previous_data[rule_type]:
+                    for rule in previous_rules:
                         rule_id = get_rule_id(rule)
                         if rule_id and extract_raw_id(rule_id) == raw_id:
                             deleted_ids.add(rule_id)
                             LOGGER.info("Adding rule for removal - raw_id: %s -> entity_id: %s", 
                                         raw_id, rule_id)
-            
-            # Double-check if counts don't match but no deletions found
-            # This could indicate an issue with ID matching or API caching
-            if len(previous_data[rule_type]) != len(new_data[rule_type]) and not deleted_ids:
-                LOGGER.warning(
-                    "Rule count mismatch detected! Previous: %d, Current: %d, but no deleted IDs found. "
-                    "This might indicate a caching issue or ID format mismatch.",
-                    len(previous_data[rule_type]), 
-                    len(new_data[rule_type])
-                )
-                # If we have fewer rules now but no deletions detected, force entity removal based on raw data
-                if len(previous_data[rule_type]) > len(new_data[rule_type]):
-                    LOGGER.warning("Rule count decreased but no deletions detected - comparing rule contents")
-                    
-                    # Create a deep comparison of rule contents
-                    for prev_rule in previous_data[rule_type]:
-                        prev_id = get_rule_id(prev_rule)
-                        if not prev_id:
-                            continue
+        
+        # Double-check if counts don't match but no deletions found
+        # This could indicate an issue with ID matching or API caching
+        if len(previous_rules) != len(new_rules) and not deleted_ids:
+            LOGGER.warning(
+                "Rule count mismatch detected! Previous: %d, Current: %d, but no deleted IDs found. "
+                "This might indicate a caching issue or ID format mismatch.",
+                len(previous_rules), 
+                len(new_rules)
+            )
+            # If we have fewer rules now but no deletions detected, force entity removal based on raw data
+            if len(previous_rules) > len(new_rules):
+                LOGGER.warning("Rule count decreased but no deletions detected - comparing rule contents")
+                
+                # Create a deep comparison of rule contents
+                for prev_rule in previous_rules:
+                    prev_id = get_rule_id(prev_rule)
+                    if not prev_id:
+                        continue
+                        
+                    # Check if this rule still exists in any form
+                    found = False
+                    for new_rule in new_rules:
+                        # Try to match on any attribute that might be stable
+                        if hasattr(prev_rule, 'id') and hasattr(new_rule, 'id') and prev_rule.id == new_rule.id:
+                            found = True
+                            break
+                        elif hasattr(prev_rule, 'name') and hasattr(new_rule, 'name') and prev_rule.name == new_rule.name:
+                            found = True
+                            break
                             
-                        # Check if this rule still exists in any form
-                        found = False
-                        for new_rule in new_data[rule_type]:
-                            # Try to match on any attribute that might be stable
-                            if hasattr(prev_rule, 'id') and hasattr(new_rule, 'id') and prev_rule.id == new_rule.id:
-                                found = True
-                                break
-                            elif hasattr(prev_rule, 'name') and hasattr(new_rule, 'name') and prev_rule.name == new_rule.name:
-                                found = True
-                                break
-                                
-                        if not found:
-                            # This rule doesn't seem to exist in the new data
-                            LOGGER.info("Rule %s appears to be missing in new data", prev_id)
-                            deleted_ids.add(prev_id)
+                    if not found:
+                        # This rule doesn't seem to exist in the new data
+                        LOGGER.info("Rule %s appears to be missing in new data", prev_id)
+                        deleted_ids.add(prev_id)
+                        
+        return deleted_ids
             
-            if deleted_ids:
-                # If we're removing too many entities at once, this might be an API glitch, require confirmation
-                if len(deleted_ids) > 5 and len(deleted_ids) > len(prev_ids) * 0.25:  # More than 25% of all entities
-                    LOGGER.warning(
-                        "Large number of %s deletions detected (%d of %d, %.1f%%). "
-                        "This could be an API connection issue rather than actual deletions.",
-                        rule_type,
-                        len(deleted_ids),
-                        len(prev_ids),
-                        (len(deleted_ids) / len(prev_ids)) * 100
-                    )
-                    # For major deletions, only process a few at a time to be cautious
-                    # This prevents mass entity removal during API glitches
-                    if len(deleted_ids) > 10:
-                        LOGGER.warning(
-                            "Processing only first 5 deletions to prevent mass removal during potential API issues"
-                        )
-                        deleted_ids_subset = list(deleted_ids)[:5]
-                        LOGGER.info("Processing subset of deletions: %s", deleted_ids_subset)
-                        deleted_ids = set(deleted_ids_subset)
-                
-                LOGGER.info("Found %d deleted %s rules: %s", len(deleted_ids), rule_type, deleted_ids)
+    def _process_deleted_rules(self, rule_type: str, deleted_ids: set, total_previous_count: int) -> None:
+        """Process detected rule deletions and dispatch removal events.
+        
+        Args:
+            rule_type: The type of rule being processed
+            deleted_ids: Set of rule IDs that were detected as deleted
+            total_previous_count: Total number of rules in the previous update
+        """
+        # If we're removing too many entities at once, this might be an API glitch
+        if len(deleted_ids) > 5 and len(deleted_ids) > total_previous_count * 0.25:  # More than 25% of all entities
+            LOGGER.warning(
+                "Large number of %s deletions detected (%d of %d, %.1f%%). "
+                "This could be an API connection issue rather than actual deletions.",
+                rule_type,
+                len(deleted_ids),
+                total_previous_count,
+                (len(deleted_ids) / total_previous_count) * 100
+            )
+            # For major deletions, only process a few at a time to be cautious
+            # This prevents mass entity removal during API glitches
+            if len(deleted_ids) > 10:
+                LOGGER.warning(
+                    "Processing only first 5 deletions to prevent mass removal during potential API issues"
+                )
+                deleted_ids_subset = list(deleted_ids)[:5]
+                LOGGER.info("Processing subset of deletions: %s", deleted_ids_subset)
+                deleted_ids = set(deleted_ids_subset)
+        
+        LOGGER.info("Found %d deleted %s rules: %s", len(deleted_ids), rule_type, deleted_ids)
+    
+        # Dispatch deletion events for each deleted rule
+        for rule_id in deleted_ids:
+            LOGGER.debug("Rule deletion detected - type: %s, id: %s", rule_type, rule_id)
             
-            # Dispatch deletion events for each deleted rule
-            for rule_id in deleted_ids:
-                LOGGER.debug("Rule deletion detected - type: %s, id: %s", rule_type, rule_id)
-                
-                # The registry in switch.py uses the format: rule_type_rule_id (e.g., firewall_policies_unr_policy_123)
-                # Use this exact format for the signal to ensure match with the registry
-                entity_id = rule_id
-                LOGGER.info("Dispatching entity removal for: %s", entity_id)
-                
-                # Debug log the signal we're sending
-                LOGGER.debug("Sending signal: %s with payload: %s", f"{DOMAIN}_entity_removed", entity_id)
-                
-                # Use try-except to catch any dispatching errors
-                try:
-                    # Explicitly use async_dispatcher_send directly
-                    async_dispatcher_send(
-                        self.hass,
-                        f"{DOMAIN}_entity_removed",
-                        entity_id
-                    )
-                    LOGGER.debug("Entity removal signal dispatched successfully")
-                except Exception as err:
-                    LOGGER.error("Error dispatching entity removal: %s", err)
+            # The registry in switch.py uses the format: rule_type_rule_id (e.g., firewall_policies_unr_policy_123)
+            # Use this exact format for the signal to ensure match with the registry
+            entity_id = rule_id
+            LOGGER.info("Dispatching entity removal for: %s", entity_id)
+            
+            # Debug log the signal we're sending
+            LOGGER.debug("Sending signal: %s with payload: %s", f"{DOMAIN}_entity_removed", entity_id)
+            
+            # Use try-except to catch any dispatching errors
+            try:
+                # Explicitly use async_dispatcher_send directly
+                async_dispatcher_send(
+                    self.hass,
+                    f"{DOMAIN}_entity_removed",
+                    entity_id
+                )
+                LOGGER.debug("Entity removal signal dispatched successfully")
+            except Exception as err:
+                LOGGER.error("Error dispatching entity removal: %s", err)
 
     async def _update_firewall_policies(self, data: Dict[str, List[Any]]) -> None:
         """Update firewall policies."""
-        try:
-            LOGGER.debug("Fetching firewall policies from API with force_refresh=True")
-            # Force a fresh fetch from the API to bypass any caching
-            policies = await self.api.get_firewall_policies(force_refresh=True)
-            
-            # Log detailed policy information for debugging
-            policy_ids = [get_rule_id(policy) for policy in policies]
-            LOGGER.debug("Received %d firewall policies from API: %s", len(policies), policy_ids)
-            
-            # Additional check: log any policies that might be marked as deleted but still returned
-            for policy in policies:
-                if hasattr(policy, "deleted") and getattr(policy, "deleted", False):
-                    LOGGER.warning("API returned a deleted policy: %s", get_rule_id(policy))
-                    
-            data["firewall_policies"] = list(policies)
-        except Exception as err:
-            LOGGER.error("Error fetching firewall policies: %s", err)
-            data["firewall_policies"] = []
+        await self._update_rule_type(
+            data, 
+            "firewall_policies", 
+            self.api.get_firewall_policies, 
+            force_refresh=True,
+            log_details=True
+        )
             
     async def _update_traffic_rules(self, data: Dict[str, List[Any]]) -> None:
         """Update traffic rules."""
-        try:
-            rules = await self.api.get_traffic_rules()
-            data["traffic_rules"] = list(rules)
-        except Exception as err:
-            LOGGER.error("Error fetching traffic rules: %s", err)
-            data["traffic_rules"] = []
+        await self._update_rule_type(data, "traffic_rules", self.api.get_traffic_rules)
 
     async def _update_port_forwards(self, data: Dict[str, List[Any]]) -> None:
         """Update port forwards."""
-        try:
-            forwards = await self.api.get_port_forwards()
-            data["port_forwards"] = list(forwards)
-        except Exception as err:
-            LOGGER.error("Error fetching port forwards: %s", err)
-            data["port_forwards"] = []
+        await self._update_rule_type(data, "port_forwards", self.api.get_port_forwards)
 
     async def _update_traffic_routes(self, data: Dict[str, List[Any]]) -> None:
         """Update traffic routes."""
-        try:
-            routes = await self.api.get_traffic_routes()
-            data["traffic_routes"] = list(routes)
-        except Exception as err:
-            LOGGER.error("Error fetching traffic routes: %s", err)
-            data["traffic_routes"] = []
+        await self._update_rule_type(data, "traffic_routes", self.api.get_traffic_routes)
 
     async def _update_firewall_zones(self, data: Dict[str, List[Any]]) -> None:
         """Update firewall zones."""
-        try:
-            zones = await self.api.get_firewall_zones()
-            data["firewall_zones"] = list(zones)
-        except Exception as err:
-            LOGGER.error("Error fetching firewall zones: %s", err)
-            data["firewall_zones"] = []
+        await self._update_rule_type(data, "firewall_zones", self.api.get_firewall_zones)
 
     async def _update_wlans(self, data: Dict[str, List[Any]]) -> None:
         """Update WLANs."""
-        try:
-            wlans = await self.api.get_wlans()
-            data["wlans"] = list(wlans)
-        except Exception as err:
-            LOGGER.error("Error fetching WLANs: %s", err)
-            data["wlans"] = []
+        await self._update_rule_type(data, "wlans", self.api.get_wlans)
 
     async def _update_legacy_firewall_rules(self, data: Dict[str, List[Any]]) -> None:
         """Update legacy firewall rules."""
+        await self._update_rule_type(
+            data, 
+            "legacy_firewall_rules", 
+            self.api.get_legacy_firewall_rules,
+            log_details=True
+        )
+
+    async def _update_rule_type(
+        self, 
+        data: Dict[str, List[Any]], 
+        rule_type: str, 
+        fetch_method: Callable, 
+        force_refresh: bool = False,
+        log_details: bool = False
+    ) -> None:
+        """Generic method to update a rule type.
+        
+        Args:
+            data: Data dictionary to update
+            rule_type: Type of rule being updated
+            fetch_method: API method to call to fetch the rules
+            force_refresh: Whether to force a refresh in the API call
+            log_details: Whether to log detailed rule information
+        """
         try:
-            rules = await self.api.get_legacy_firewall_rules()
-            data["legacy_firewall_rules"] = list(rules)
-            LOGGER.debug("Fetched %d legacy firewall rules", len(rules))
+            if force_refresh:
+                LOGGER.debug(f"Fetching {rule_type} from API with force_refresh=True")
+                rules = await fetch_method(force_refresh=True)
+            else:
+                rules = await fetch_method()
+            
+            rules_list = list(rules)
+            
+            if log_details:
+                # Log detailed rule information for debugging
+                rule_ids = [get_rule_id(rule) for rule in rules_list]
+                LOGGER.debug(f"Received {len(rules_list)} {rule_type} from API: {rule_ids}")
+                
+                # Additional check: log any rules that might be marked as deleted but still returned
+                for rule in rules_list:
+                    if hasattr(rule, "deleted") and getattr(rule, "deleted", False):
+                        LOGGER.warning(f"API returned a deleted {rule_type}: {get_rule_id(rule)}")
+            else:
+                LOGGER.debug(f"Fetched {len(rules_list)} {rule_type}")
+                
+            data[rule_type] = rules_list
         except Exception as err:
-            LOGGER.error("Error fetching legacy firewall rules: %s", err)
-            data["legacy_firewall_rules"] = []
+            LOGGER.error(f"Error fetching {rule_type}: {err}")
+            data[rule_type] = []
 
     @callback
     def _handle_websocket_message(self, message: dict[str, Any]) -> None:

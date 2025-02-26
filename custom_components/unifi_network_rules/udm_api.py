@@ -719,39 +719,101 @@ class UDMAPI:
             LOGGER.debug("Setting callback on custom WebSocket")
             self._custom_websocket.set_callback(callback)
 
+    # Authentication lock to prevent parallel login attempts
+    _login_lock = None
+    _last_successful_login = 0
+    _min_login_interval = 15  # seconds
+
     async def _try_login(self) -> bool:
         """Try to log in to the UniFi controller."""
-        try:
-            # Try logging in through the controller
-            await self.controller.login()
-            self._consecutive_failures = 0  # Reset on success
-            return True
-        except ClientResponseError as err:
-            # Handle rate limiting
-            if err.status == 429:
-                # Implement exponential backoff for rate limiting
-                self._consecutive_failures += 1
-                backoff_time = min(2 ** self._consecutive_failures, self._max_backoff)
-                self._rate_limited = True
-                current_time = asyncio.get_event_loop().time()
-                self._rate_limit_until = current_time + backoff_time
-                
-                LOGGER.error(
-                    "Rate limit hit (429). Backing off for %d seconds. "
-                    "Consider reducing your API calls or checking for issues with your UniFi device.",
-                    backoff_time
+        # Initialize login lock if not already done
+        if self._login_lock is None:
+            self.__class__._login_lock = asyncio.Lock()
+
+        # Check if we're rate limited before attempting
+        if self._rate_limited:
+            current_time = asyncio.get_event_loop().time()
+            if current_time < self._rate_limit_until:
+                wait_time = int(self._rate_limit_until - current_time)
+                LOGGER.warning(
+                    "Rate limit in effect. Login attempt blocked for %d more seconds.",
+                    wait_time
                 )
                 return False
-            elif err.status == 401:
-                LOGGER.error("Failed to authenticate to UniFi controller: Invalid credentials")
-                return False
-            else:
-                LOGGER.error("Failed to authenticate to UniFi controller: %s", err)
-                return False
-        except Exception as err:
-            LOGGER.error("Unexpected error authenticating to UniFi controller: %s", err)
-            return False
             
+        # Prevent login attempts too close together
+        current_time = asyncio.get_event_loop().time()
+        time_since_last_login = current_time - self._last_successful_login
+        
+        if time_since_last_login < self._min_login_interval:
+            wait_time = self._min_login_interval - time_since_last_login
+            LOGGER.debug(
+                "Throttling login: Last successful login was %0.2f seconds ago. "
+                "Waiting %0.2f more seconds before attempting again.",
+                time_since_last_login, wait_time
+            )
+            await asyncio.sleep(wait_time)
+            
+        # Use lock to prevent parallel login attempts
+        async with self._login_lock:
+            try:
+                # Try logging in through the controller
+                LOGGER.debug("Attempting controller login with lock acquired")
+                await self.controller.login()
+                
+                # Add a small delay to allow the session to propagate
+                # This helps ensure the new authentication is used in subsequent requests
+                await asyncio.sleep(0.5)
+                
+                # Perform a lightweight verification request to confirm authentication
+                # This ensures the session is fully established
+                LOGGER.debug("Verifying authentication propagation with test request")
+                try:
+                    # Pick a lightweight endpoint that should always succeed if authentication is good
+                    # Get system stats is typically a small and fast request
+                    await self.get_system_stats()
+                    LOGGER.debug("Authentication verification successful")
+                except Exception as verify_err:
+                    LOGGER.warning("Authentication verification failed: %s - trying once more", verify_err)
+                    # Give the system a bit more time and try again
+                    await asyncio.sleep(1.0)
+                    try:
+                        await self.get_system_stats()
+                        LOGGER.debug("Second authentication verification successful")
+                    except Exception as second_verify_err:
+                        LOGGER.error("Second authentication verification failed: %s", second_verify_err)
+                        # We'll still consider login successful but log the issue
+                
+                self._consecutive_failures = 0  # Reset on success
+                self._last_successful_login = asyncio.get_event_loop().time()
+                LOGGER.debug("Login successful, lock released")
+                return True
+            except ClientResponseError as err:
+                # Handle rate limiting
+                if err.status == 429:
+                    # Implement exponential backoff for rate limiting
+                    self._consecutive_failures += 1
+                    backoff_time = min(2 ** self._consecutive_failures, self._max_backoff)
+                    self._rate_limited = True
+                    current_time = asyncio.get_event_loop().time()
+                    self._rate_limit_until = current_time + backoff_time
+                    
+                    LOGGER.error(
+                        "Rate limit hit (429). Backing off for %d seconds. "
+                        "Consider reducing your API calls or checking for issues with your UniFi device.",
+                        backoff_time
+                    )
+                    return False
+                elif err.status == 401:
+                    LOGGER.error("Failed to authenticate to UniFi controller: Invalid credentials")
+                    return False
+                else:
+                    LOGGER.error("Failed to authenticate to UniFi controller: %s", err)
+                    return False
+            except Exception as err:
+                LOGGER.error("Unexpected error authenticating to UniFi controller: %s", err)
+                return False
+
     async def reset_rate_limit(self) -> bool:
         """Reset the rate limit status to allow immediate retries."""
         self._rate_limited = False
@@ -1582,30 +1644,56 @@ class UDMAPI:
             action_coroutine: A callable that returns a fresh coroutine when called
                              (not an awaitable coroutine object itself)
         """
+        # Prepare request timestamp to detect throttling needs
+        request_time = asyncio.get_event_loop().time()
+        
+        # Rate limiting check before making request
+        if self._rate_limited:
+            current_time = request_time
+            if current_time < self._rate_limit_until:
+                wait_time = int(self._rate_limit_until - current_time)
+                LOGGER.warning(
+                    "Rate limit in effect. %s request blocked for %d more seconds.",
+                    request_type, wait_time
+                )
+                return False, f"Rate limited for {wait_time} more seconds"
+                
         try:
             await action_coroutine()
+            
+            # Update last successful login time based on successful API calls
+            # This helps keep track of when the session is proven to be healthy
+            # Only do this if the last update was at least 60 seconds ago to avoid excessive updates
+            current_time = asyncio.get_event_loop().time()
+            if current_time - self._last_successful_login > 60:
+                LOGGER.debug("Updating last successful login time based on successful API call")
+                self._last_successful_login = current_time
+                
             return True, None
         except LoginRequired:
             LOGGER.warning("%s failed: Session expired, attempting to reconnect", request_type)
-            try:
-                await self._try_login()
-                # Create a fresh coroutine for the retry
-                await action_coroutine()
-                return True, None
-            except Exception as login_err:
-                return False, f"Failed to reconnect: {login_err}"
+            return await self._handle_authentication_retry(request_type, action_coroutine, "Session expired")
         except RequestError as err:
             # Check for 403 Forbidden error which might indicate expired session
             error_message = str(err)
             if "403 Forbidden" in error_message:
                 LOGGER.warning("%s failed with 403 Forbidden, attempting to re-authenticate", request_type)
-                try:
-                    await self._try_login()
-                    # Create a fresh coroutine for the retry
-                    await action_coroutine()
-                    return True, None
-                except Exception as login_err:
-                    return False, f"Failed to re-authenticate after 403: {login_err}"
+                return await self._handle_authentication_retry(request_type, action_coroutine, "403 Forbidden")
+            # Check for rate limiting errors
+            elif "429" in error_message:
+                # Update rate limit tracking
+                self._consecutive_failures += 1
+                backoff_time = min(2 ** self._consecutive_failures, self._max_backoff)
+                self._rate_limited = True
+                current_time = asyncio.get_event_loop().time()
+                self._rate_limit_until = current_time + backoff_time
+                
+                LOGGER.error(
+                    "Rate limit hit (429) during %s. Backing off for %d seconds.",
+                    request_type, backoff_time
+                )
+                return False, f"Rate limited for {backoff_time} seconds"
+            
             return False, f"Request failed: {err}"
         except (BadGateway, ServiceUnavailable) as err:
             return False, f"Service unavailable: {err}"
@@ -1614,38 +1702,69 @@ class UDMAPI:
             error_message = str(err) 
             if "403 Forbidden" in error_message:
                 LOGGER.warning("%s failed with 403 Forbidden in response, attempting to re-authenticate", request_type)
-                try:
-                    await self._try_login()
-                    # Create a fresh coroutine for the retry
-                    await action_coroutine()
-                    return True, None
-                except Exception as login_err:
-                    return False, f"Failed to re-authenticate after 403: {login_err}"
+                return await self._handle_authentication_retry(request_type, action_coroutine, "403 Forbidden in response")
             return False, f"Invalid response: {err}"
         except Unauthorized as err:
             LOGGER.warning("%s failed with Unauthorized error, attempting to re-authenticate", request_type)
-            try:
-                await self._try_login()
-                # Create a fresh coroutine for the retry
-                await action_coroutine()
-                return True, None
-            except Exception as login_err:
-                return False, f"Failed to re-authenticate after Unauthorized: {login_err}"
+            return await self._handle_authentication_retry(request_type, action_coroutine, "Unauthorized error")
         except AiounifiException as err:
             # Check for 403 Forbidden in AiounifiException as well
             error_message = str(err)
             if "403 Forbidden" in error_message:
                 LOGGER.warning("%s failed with 403 Forbidden in AiounifiException, attempting to re-authenticate", request_type)
-                try:
-                    await self._try_login()
-                    # Create a fresh coroutine for the retry
-                    await action_coroutine()
-                    return True, None
-                except Exception as login_err:
-                    return False, f"Failed to re-authenticate after 403 in AiounifiException: {login_err}"
+                return await self._handle_authentication_retry(request_type, action_coroutine, "403 Forbidden in AiounifiException")
             return False, f"API error: {err}"
         except Exception as err:
             return False, f"Unexpected error: {err}"
+
+    async def _handle_authentication_retry(self, request_type: str, action_coroutine, error_context: str) -> Tuple[bool, Optional[str]]:
+        """Common handler for authentication retry logic.
+        
+        Args:
+            request_type: A description of the request type for logging
+            action_coroutine: A callable that returns a fresh coroutine when called
+            error_context: Context about the error that triggered the retry
+        """
+        # Only attempt login if not too recent
+        current_time = asyncio.get_event_loop().time()
+        time_since_last_login = current_time - self._last_successful_login
+        
+        if time_since_last_login < self._min_login_interval:
+            LOGGER.warning(
+                "Login throttled: Last login was %0.2f seconds ago. "
+                "Returning failure rather than attempting another login so soon.",
+                time_since_last_login
+            )
+            return False, "Login throttled: Too many recent login attempts"
+        
+        try:
+            login_success = await self._try_login()
+            # Check if login was rate limited
+            if self._rate_limited:
+                return False, f"Request failed due to rate limiting during login after {error_context}"
+                
+            # Exit early if login failed
+            if not login_success:
+                return False, f"Login attempt failed after {error_context}"
+                
+            # Add a small delay after successful login to allow session to propagate
+            await asyncio.sleep(0.5)
+                
+            # Create a fresh coroutine for the retry
+            try:
+                await action_coroutine()
+                return True, None
+            except Exception as retry_err:
+                LOGGER.error("Re-attempt failed after %s authentication: %s", error_context, retry_err)
+                # If the retry failed immediately after login, wait a bit longer and try one more time
+                await asyncio.sleep(1.0)
+                try:
+                    await action_coroutine()
+                    return True, None
+                except Exception as second_retry_err:
+                    return False, f"Second retry failed after {error_context} authentication: {second_retry_err}"
+        except Exception as login_err:
+            return False, f"Failed to re-authenticate after {error_context}: {login_err}"
 
     async def refresh_session(self) -> bool:
         """Refresh the session to prevent expiration.
@@ -1671,37 +1790,56 @@ class UDMAPI:
         if not self._initialized or not self.controller:
             LOGGER.warning("Cannot refresh session - API not initialized")
             return False
+        
+        # Initialize login lock if not already done
+        if self._login_lock is None:
+            self.__class__._login_lock = asyncio.Lock()
             
-        try:
-            LOGGER.debug("Proactively refreshing UniFi session")
-            await self.controller.login()
-            self._consecutive_failures = 0  # Reset on success
-            return True
-        except ClientResponseError as err:
-            # Handle rate limiting
-            if err.status == 429:
-                # Implement exponential backoff for rate limiting
-                self._consecutive_failures += 1
-                backoff_time = min(2 ** self._consecutive_failures, self._max_backoff)
-                self._rate_limited = True
-                current_time = asyncio.get_event_loop().time()
-                self._rate_limit_until = current_time + backoff_time
-                
-                LOGGER.error(
-                    "Rate limit hit (429) during session refresh. Backing off for %d seconds. "
-                    "Consider reducing your API calls or checking for issues with your UniFi device.",
-                    backoff_time
-                )
+        # Prevent refresh attempts too close together
+        current_time = asyncio.get_event_loop().time()
+        time_since_last_login = current_time - self._last_successful_login
+        
+        if time_since_last_login < self._min_login_interval:
+            LOGGER.debug(
+                "Skipping refresh: Last successful login was %0.2f seconds ago, "
+                "which is less than minimum interval of %d seconds.",
+                time_since_last_login, self._min_login_interval
+            )
+            return True  # Return success as we're considering this "good enough"
+            
+        # Use lock to prevent parallel login attempts during refresh
+        async with self._login_lock:
+            try:
+                LOGGER.debug("Proactively refreshing UniFi session (with lock)")
+                await self.controller.login()
+                self._consecutive_failures = 0  # Reset on success
+                self._last_successful_login = asyncio.get_event_loop().time()
+                return True
+            except ClientResponseError as err:
+                # Handle rate limiting
+                if err.status == 429:
+                    # Implement exponential backoff for rate limiting
+                    self._consecutive_failures += 1
+                    backoff_time = min(2 ** self._consecutive_failures, self._max_backoff)
+                    self._rate_limited = True
+                    current_time = asyncio.get_event_loop().time()
+                    self._rate_limit_until = current_time + backoff_time
+                    
+                    LOGGER.error(
+                        "Rate limit hit (429) during session refresh. Backing off for %d seconds. "
+                        "Consider reducing your API calls or checking for issues with your UniFi device.",
+                        backoff_time
+                    )
+                    return False
+                elif err.status == 401:
+                    LOGGER.error("Authentication failed (401) during session refresh. Credentials may be invalid.")
+                    return False
+                else:
+                    LOGGER.warning("Session refresh failed with HTTP error %d: %s", err.status, err)
+                    return False
+            except Exception as err:
+                LOGGER.warning("Session refresh failed: %s", str(err))
                 return False
-            elif err.status == 401:
-                LOGGER.error("Authentication failed (401) during session refresh. Credentials may be invalid.")
-                return False
-            else:
-                LOGGER.warning("Session refresh failed with HTTP error %d: %s", err.status, err)
-                return False
-        except Exception as err:
-            LOGGER.warning("Session refresh failed: %s", str(err))
-            return False
 
     async def _check_udm_device(self, authenticated: bool = False) -> bool:
         """Check if device is a UDM using the SDN status endpoint."""
@@ -1823,54 +1961,15 @@ class UDMAPI:
             self._apply_unifi_os_setting(True)
             return True
 
-    def _apply_unifi_os_setting(self, is_unifi_os: bool) -> None:
-        """Apply the UniFi OS setting to controller and config objects."""
-        # Apply to controller
-        if hasattr(self, "controller") and self.controller:
-            try:
-                if hasattr(self.controller, "is_unifi_os"):
-                    self.controller.is_unifi_os = is_unifi_os
-                else:
-                    # Try to add the attribute if it doesn't exist
-                    setattr(self.controller, "is_unifi_os", is_unifi_os)
-                    LOGGER.debug("Added is_unifi_os attribute to controller")
-            except Exception as err:
-                LOGGER.debug("Could not set is_unifi_os on controller: %s", err)
-        
-        # Apply to config
-        if hasattr(self, "_config") and self._config:
-            try:
-                if isinstance(self._config, dict):
-                    # For dictionary config
-                    self._config["is_unifi_os"] = is_unifi_os
-                    LOGGER.debug("Set is_unifi_os=%s on config dictionary", is_unifi_os)
-                elif isinstance(self._config, Configuration):
-                    # For Configuration object
-                    if hasattr(self._config, "is_unifi_os"):
-                            self._config.is_unifi_os = is_unifi_os
-                    else:
-                        # Try to add the attribute if it doesn't exist
-                        setattr(self._config, "is_unifi_os", is_unifi_os)
-                        LOGGER.debug("Set is_unifi_os=%s on Configuration object", is_unifi_os)
-                else:
-                    # For other object types
-                    if hasattr(self._config, "is_unifi_os"):
-                        self._config.is_unifi_os = is_unifi_os
-                    else:
-                        # Try to add the attribute if it doesn't exist
-                        setattr(self._config, "is_unifi_os", is_unifi_os)
-                        LOGGER.debug("Set is_unifi_os=%s on config object", is_unifi_os)
-            except Exception as err:
-                LOGGER.debug("Could not set is_unifi_os on config: %s", err)
-        
-        # Apply to connectivity if available
-        if hasattr(self, "controller") and self.controller and hasattr(self.controller, "connectivity"):
-            try:
-                if hasattr(self.controller.connectivity, "is_unifi_os"):
-                    self.controller.connectivity.is_unifi_os = is_unifi_os
-                    LOGGER.debug("Set is_unifi_os=%s on controller.connectivity", is_unifi_os)
-            except Exception as err:
-                LOGGER.debug("Could not set is_unifi_os on connectivity: %s", err)
+    def _apply_unifi_os_setting(self, value: bool) -> None:
+        """Apply the is_unifi_os setting to the controller."""
+        try:
+            if self.controller:
+                # Try to set attribute directly
+                self.controller.is_unifi_os = value
+                LOGGER.debug("Successfully set controller.is_unifi_os = %s", value)
+        except Exception as err:
+            LOGGER.error("Error setting is_unifi_os: %s", err)
 
     async def _manual_websocket_connect(self) -> None:
         """Attempt a manual WebSocket connection when the library's method fails."""
@@ -2002,16 +2101,6 @@ class UDMAPI:
         
         except Exception as err:
             LOGGER.warning("Error clearing controller cache: %s", err)
-
-    def _apply_unifi_os_setting(self, value: bool) -> None:
-        """Apply the is_unifi_os setting to the controller."""
-        try:
-            if self.controller:
-                # Try to set attribute directly
-                self.controller.is_unifi_os = value
-                LOGGER.debug("Successfully set controller.is_unifi_os = %s", value)
-        except Exception as err:
-            LOGGER.error("Error setting is_unifi_os: %s", err)
 
 class _Capabilities:
     """Store API capabilities."""

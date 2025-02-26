@@ -439,49 +439,19 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn on (enable) the rule."""
-        LOGGER.debug("Turning on rule %s (%s)", self._rule_id, self._rule_type)
-        
-        # Set optimistic state first for immediate UI feedback with timestamp
-        self._optimistic_state = True
-        self._optimistic_timestamp = time.time()
-        self.async_write_ha_state()
-        
-        # Use toggle methods for all rule types
-        success = False
-        try:
-            if self._rule_type == "firewall_policies":
-                success = await self.coordinator.api.toggle_firewall_policy(self._rule_id, True)
-            elif self._rule_type == "traffic_rules":
-                success = await self.coordinator.api.toggle_traffic_rule(self._rule_id, True)
-            elif self._rule_type == "port_forwards":
-                success = await self.coordinator.api.toggle_port_forward(self._rule_id, True)
-            elif self._rule_type == "traffic_routes":
-                success = await self.coordinator.api.toggle_traffic_route(self._rule_id, True)
-            elif self._rule_type == "legacy_firewall_rules":
-                success = await self.coordinator.api.toggle_legacy_firewall_rule(self._rule_id, True)
-        except Exception as err:
-            LOGGER.error("Error enabling rule: %s", err)
-            success = False
-            
-        if success:
-            # Schedule update after success, but keep optimistic state for a bit
-            LOGGER.debug("Rule %s enabled successfully, scheduling refresh", self._rule_id)
-            await self.coordinator.async_request_refresh()
-        else:
-            # Revert optimistic state if failed
-            LOGGER.error("Failed to enable rule %s", self._rule_id)
-            self._optimistic_state = False
-            self._optimistic_timestamp = time.time()  # Update timestamp for failed state
-            self.async_write_ha_state()
-            # Still try to refresh to get actual state
-            await self.coordinator.async_request_refresh()
+        await self._async_toggle_rule(True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off (disable) the rule."""
-        LOGGER.debug("Turning off rule %s (%s)", self._rule_id, self._rule_type)
+        await self._async_toggle_rule(False)
+
+    async def _async_toggle_rule(self, enable: bool) -> None:
+        """Handle toggling the rule state."""
+        action_type = "Turning on" if enable else "Turning off"
+        LOGGER.debug("%s rule %s (%s)", action_type, self._rule_id, self._rule_type)
         
         # Set optimistic state first for immediate UI feedback with timestamp
-        self._optimistic_state = False
+        self._optimistic_state = enable
         self._optimistic_timestamp = time.time()
         self.async_write_ha_state()
         
@@ -489,27 +459,28 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         success = False
         try:
             if self._rule_type == "firewall_policies":
-                success = await self.coordinator.api.toggle_firewall_policy(self._rule_id, False)
+                success = await self.coordinator.api.toggle_firewall_policy(self._rule_id, enable)
             elif self._rule_type == "traffic_rules":
-                success = await self.coordinator.api.toggle_traffic_rule(self._rule_id, False)
+                success = await self.coordinator.api.toggle_traffic_rule(self._rule_id, enable)
             elif self._rule_type == "port_forwards":
-                success = await self.coordinator.api.toggle_port_forward(self._rule_id, False)
+                success = await self.coordinator.api.toggle_port_forward(self._rule_id, enable)
             elif self._rule_type == "traffic_routes":
-                success = await self.coordinator.api.toggle_traffic_route(self._rule_id, False)
+                success = await self.coordinator.api.toggle_traffic_route(self._rule_id, enable)
             elif self._rule_type == "legacy_firewall_rules":
-                success = await self.coordinator.api.toggle_legacy_firewall_rule(self._rule_id, False)
+                success = await self.coordinator.api.toggle_legacy_firewall_rule(self._rule_id, enable)
         except Exception as err:
-            LOGGER.error("Error disabling rule: %s", err)
+            LOGGER.error("Error %s rule: %s", "enabling" if enable else "disabling", err)
             success = False
             
         if success:
             # Schedule update after success, but keep optimistic state for a bit
-            LOGGER.debug("Rule %s disabled successfully, scheduling refresh", self._rule_id)
+            LOGGER.debug("Rule %s %s successfully, scheduling refresh", 
+                         self._rule_id, "enabled" if enable else "disabled")
             await self.coordinator.async_request_refresh()
         else:
             # Revert optimistic state if failed
-            LOGGER.error("Failed to disable rule %s", self._rule_id)
-            self._optimistic_state = True
+            LOGGER.error("Failed to %s rule %s", "enable" if enable else "disable", self._rule_id)
+            self._optimistic_state = not enable
             self._optimistic_timestamp = time.time()  # Update timestamp for failed state 
             self.async_write_ha_state()
             # Still try to refresh to get actual state
