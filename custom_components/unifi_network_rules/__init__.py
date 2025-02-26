@@ -2,6 +2,7 @@
 from __future__ import annotations
 from typing import Any
 from datetime import timedelta
+import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -18,10 +19,23 @@ from .const import (
     DEFAULT_SITE,
     LOGGER
 )
-from .udm_api import UDMAPI, CannotConnect, InvalidAuth
-from .websocket import UnifiRuleWebsocket
-from .coordinator import UnifiRuleUpdateCoordinator
-from . import services
+
+# Try to import required modules
+try:
+    from .udm_api import UDMAPI, CannotConnect, InvalidAuth
+    from .websocket import UnifiRuleWebsocket
+    from .coordinator import UnifiRuleUpdateCoordinator
+    from . import services
+except ImportError as err:
+    LOGGER.error(
+        "Failed to import required modules. This may happen if an older version of "
+        "aiounifi is already loaded. Error: %s", err
+    )
+    LOGGER.warning(
+        "If this is the first restart after installation, try restarting Home Assistant "
+        "again to resolve dependency conflicts. This integration requires aiounifi >= 82.0.0"
+    )
+    raise
 
 PLATFORMS: list[Platform] = [Platform.SWITCH]
 
@@ -31,8 +45,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up UniFi Network Rules component."""
     hass.data.setdefault(DOMAIN, {})
     
+    # Initialize the services dictionary to store coordinator registration functions
+    hass.data[DOMAIN]["services"] = {}
+    
     # Set up services
-    await services.async_setup_services(hass)
+    service_setup_result = await services.async_setup_services(hass)
+    await services.async_register_services(hass)
     
     return True
 
@@ -71,14 +89,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # Initialize interfaces
             await api.controller.initialize()
 
-        # Create and start websocket
+        # Create websocket
         websocket = UnifiRuleWebsocket(hass, api, entry.entry_id)
+        
+        # Get update interval from config entry data or options
+        update_interval = entry.options.get(
+            CONF_UPDATE_INTERVAL, 
+            entry.data.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
+        )
         
         # Create coordinator and initialize it
         coordinator = UnifiRuleUpdateCoordinator(
             hass,
             api,
             websocket,
+            update_interval=update_interval,
         )
 
         # Start websocket after coordinator is ready
@@ -96,8 +121,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-        # Register cleanup using callback directly
-        entry.async_on_unload(coordinator.shutdown)
+        # DO NOT overwrite the entry data dictionary with just the coordinator
+        # hass.data[DOMAIN][entry.entry_id] = coordinator
+        
+        # Register coordinator with services
+        if "services" in hass.data[DOMAIN] and "register_coordinator" in hass.data[DOMAIN]["services"]:
+            LOGGER.debug("Registering coordinator with services")
+            register_coordinator = hass.data[DOMAIN]["services"]["register_coordinator"]
+            register_coordinator(entry.entry_id, coordinator)
+        else:
+            LOGGER.warning("Could not register coordinator with services - register_coordinator method missing")
+        
+        # Register async_unload_entry for cleanup
+        async def async_unload_entry_wrapper(entry):
+            # Unregister coordinator from services
+            if "services" in hass.data[DOMAIN] and "unregister_coordinator" in hass.data[DOMAIN]["services"]:
+                unregister_coordinator = hass.data[DOMAIN]["services"]["unregister_coordinator"]
+                unregister_coordinator(entry.entry_id)
+            
+            return await async_unload_entry(hass, entry)
+        
+        entry.async_on_unload(lambda: async_unload_entry_wrapper(entry))
         
         return True
 
@@ -116,6 +160,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         api: UDMAPI = entry_data["api"]
         websocket: UnifiRuleWebsocket = entry_data["websocket"]
         coordinator: UnifiRuleUpdateCoordinator = entry_data["coordinator"]
+        
+        # Clean up additional listeners if they exist
+        if "unsub_listeners" in entry_data:
+            for unsub in entry_data["unsub_listeners"]:
+                unsub()
         
         # Clean up everything
         await coordinator.shutdown()

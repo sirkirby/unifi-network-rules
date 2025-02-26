@@ -1,10 +1,47 @@
 """Constants for UniFi Network Rules integration."""
+from __future__ import annotations
+
 import logging
+from typing import Final
 
-DOMAIN = "unifi_network_rules"
+# Integration
+DOMAIN: Final = "unifi_network_rules"
+MANUFACTURER: Final = "Ubiquiti Inc."
+LOGGER = logging.getLogger(__package__)
 
-# Initialize logger at module level
-LOGGER = logging.getLogger(DOMAIN)
+# When troubleshooting websocket/API issues, you can enable WebSocket debugging
+# in your configuration.yaml using:
+# logger:
+#   logs:
+#     custom_components.unifi_network_rules: debug
+#     aiounifi: debug
+# Or set this flag to True temporarily for detailed WebSocket connection logs:
+DEBUG_WEBSOCKET: Final = True  # Set to True only when troubleshooting WebSocket connections
+
+# Integration services
+SERVICE_SYNC_DEVICE: Final = "sync_device"
+SERVICE_REFRESH_ALL: Final = "refresh_all"
+
+# Signal dispatchers
+SIGNAL_WEBSOCKET_EVENT = "unifi_network_rules_websocket"
+SIGNAL_ADD_FIREWALL_RULE = "unifi_network_rules_add_firewall_rule"
+
+# Default UniFi site
+DEFAULT_SITE: Final = "default"
+
+# Data update interval
+DEFAULT_UPDATE_INTERVAL: Final = 300  # 5 minutes - longer interval is fine since websocket provides real-time updates
+
+# Maximum number of failed attempts
+MAX_FAILED_ATTEMPTS: Final = 5
+
+# Config entry keys
+CONF_SITE_ID: Final = "site_id"
+CONF_UPDATE_INTERVAL: Final = "update_interval"
+
+# API endpoints - using v2 API endpoints where available
+FIREWALL_RULE_ENDPOINT: Final = "/proxy/network/api/s/{site}/rest/firewallrule"
+LEGACY_FIREWALL_RULES_ENDPOINT: Final = "/proxy/network/api/s/{site}/rest/firewallrule"
 
 CONF_MAX_RETRIES = "max_retries"
 CONF_RETRY_DELAY = "retry_delay"
@@ -12,7 +49,7 @@ DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_DELAY = 1
 
 CONF_UPDATE_INTERVAL = "update_interval"
-DEFAULT_UPDATE_INTERVAL = 1  # Changed from 5 to 1 minute for more responsive updates
+DEFAULT_UPDATE_INTERVAL = 300  # 5 minutes - longer interval is fine since websocket provides real-time updates
 SESSION_TIMEOUT = 30
 
 # Site configuration
@@ -22,6 +59,9 @@ DEFAULT_SITE = "default"
 # Events
 EVENT_RULE_UPDATED = f"{DOMAIN}_rule_updated"
 EVENT_RULE_DELETED = f"{DOMAIN}_rule_deleted"
+
+# WebSocket signals
+SIGNAL_WEBSOCKET_EVENT = f"{DOMAIN}_websocket_event"
 
 # Services
 SERVICE_APPLY_TEMPLATE = "apply_template"
@@ -37,11 +77,21 @@ SITE_FEATURE_MIGRATION_ENDPOINT = "/proxy/network/v2/api/site/{site}/site-featur
 FIREWALL_POLICIES_ENDPOINT = "/proxy/network/v2/api/site/{site}/firewall-policies"
 FIREWALL_POLICIES_DELETE_ENDPOINT = "/proxy/network/v2/api/site/{site}/firewall-policies/batch-delete"
 TRAFFIC_ROUTES_ENDPOINT = "/proxy/network/v2/api/site/{site}/trafficroutes"
-LEGACY_FIREWALL_RULES_ENDPOINT = "/proxy/network/api/s/{site}/rest/firewallrule"
 LEGACY_TRAFFIC_RULES_ENDPOINT = "/proxy/network/v2/api/site/{site}/trafficrules"
 FIREWALL_ZONE_MATRIX_ENDPOINT = "/proxy/network/v2/api/site/{site}/firewall/zone-matrix"
 FIREWALL_POLICY_TOGGLE_ENDPOINT = "/proxy/network/v2/api/site/{site}/firewall-policies/batch"
 PORT_FORWARD_ENDPOINT = "/proxy/network/api/s/{site}/rest/portforward"
+
+# V2 API EndPoint Constants for ApiRequestV2
+API_ENDPOINT_FIREWALL_POLICIES = "/firewall-policies"
+API_ENDPOINT_FIREWALL_POLICIES_BATCH_DELETE = "/firewall-policies/batch-delete"
+API_ENDPOINT_TRAFFIC_RULES = "/trafficrules"
+API_ENDPOINT_TRAFFIC_RULE_DETAIL = "/trafficrules/{rule_id}"
+API_ENDPOINT_TRAFFIC_ROUTES = "/trafficroutes"
+API_ENDPOINT_TRAFFIC_ROUTE_DETAIL = "/trafficroutes/{route_id}"
+
+# Detection endpoints
+SDN_STATUS_ENDPOINT = "/proxy/network/api/s/{site}/stat/sdn"
 
 AUTH_LOGIN_ENDPOINT = "/api/auth/login"
 

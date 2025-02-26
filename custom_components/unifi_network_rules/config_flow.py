@@ -30,6 +30,9 @@ from aiounifi.errors import (
     Unauthorized,
 )
 
+# Display the update interval in minutes for better UX
+DEFAULT_UPDATE_INTERVAL_MINUTES = DEFAULT_UPDATE_INTERVAL // 60
+
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_HOST): str,
@@ -41,7 +44,8 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         ): str,
         vol.Optional(
             CONF_UPDATE_INTERVAL, 
-            default=DEFAULT_UPDATE_INTERVAL
+            default=DEFAULT_UPDATE_INTERVAL_MINUTES,
+            description="Update interval in minutes"
         ): int,
         vol.Optional(
             CONF_VERIFY_SSL,
@@ -88,26 +92,27 @@ class UnifiNetworkRulesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             try:
+                # Convert update interval from minutes to seconds
+                if CONF_UPDATE_INTERVAL in user_input:
+                    user_input[CONF_UPDATE_INTERVAL] = user_input[CONF_UPDATE_INTERVAL] * 60
+                
                 await validate_input(self.hass, user_input)
-
+                
                 await self.async_set_unique_id(f"unifi_rules_{user_input[CONF_HOST]}")
                 self._abort_if_unique_id_configured()
 
                 return self.async_create_entry(
                     title=f"UniFi Network Rules ({user_input[CONF_HOST]})",
-                    data=user_input
+                    data=user_input,
                 )
-
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
                 errors["base"] = "invalid_auth"
-            except Exception as err:  # pylint: disable=broad-except
-                LOGGER.exception("Unexpected exception during setup: %s", str(err))
+            except Exception:
+                LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
 
         return self.async_show_form(
-            step_id="user",
-            data_schema=STEP_USER_DATA_SCHEMA,
-            errors=errors,
+            step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
         )

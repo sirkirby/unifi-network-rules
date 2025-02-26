@@ -117,3 +117,19 @@ save_template:
       example: '{"name": "Guest Network {network_id}", "enabled": true}'
       selector:
         object:
+
+force_cleanup:
+  name: Force Cleanup
+  description: Force cleanup of stale entities that might be left in the entity registry
+
+force_remove_stale:
+  name: Force Remove Stale
+  description: Forcibly remove unavailable entities from the Home Assistant entity registry
+  fields:
+    remove_all:
+      name: Remove All
+      description: If true, removes all entities from this integration, not just unavailable ones
+      required: false
+      default: false
+      selector:
+        boolean:

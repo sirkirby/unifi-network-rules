@@ -7,18 +7,20 @@ from typing import Any, Dict, Callable, List
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 
 from aiounifi.models.traffic_route import TrafficRoute
 from aiounifi.models.firewall_policy import FirewallPolicy
 from aiounifi.models.traffic_rule import TrafficRule
 from aiounifi.models.port_forward import PortForward
 
-from .const import DOMAIN, LOGGER
+from .const import DOMAIN, LOGGER, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DEBUG_WEBSOCKET
 from .udm_api import UDMAPI
 from .websocket import SIGNAL_WEBSOCKET_MESSAGE, UnifiRuleWebsocket
+from .helpers.rule import get_rule_id
 
-SCAN_INTERVAL = timedelta(seconds=30)
+# This is a fallback if no update_interval is specified
+SCAN_INTERVAL = timedelta(seconds=60)
 
 def _log_rule_info(rule: Any) -> None:
     """Log detailed information about a rule object."""
@@ -40,16 +42,20 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         hass: HomeAssistant,
         api: UDMAPI,
         websocket: UnifiRuleWebsocket,
+        update_interval: int = DEFAULT_UPDATE_INTERVAL,
     ) -> None:
         """Initialize the coordinator."""
         self.api = api
         self.websocket = websocket
 
+        # Convert update_interval from seconds to timedelta
+        update_interval_td = timedelta(seconds=update_interval)
+
         super().__init__(
             hass,
             LOGGER,
             name=DOMAIN,
-            update_interval=SCAN_INTERVAL,
+            update_interval=update_interval_td,
         )
 
         # Set up websocket message handler
@@ -82,6 +88,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 except Exception as refresh_err:
                     LOGGER.warning("Failed to refresh session: %s", str(refresh_err))
             
+            # Ensure we always use force_refresh to avoid stale data issues
+            LOGGER.debug("Starting data refresh cycle with force_refresh=True")
+            
             # Initialize with empty lists for each rule type
             rules_data: Dict[str, List[Any]] = {
                 "firewall_policies": [],
@@ -89,25 +98,78 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 "port_forwards": [],
                 "traffic_routes": [],
                 "firewall_zones": [],
-                "wlans": []
+                "wlans": [],
+                "legacy_firewall_rules": []
             }
             
-            # Gather all rule types in parallel
-            tasks = [
-                self._update_firewall_policies(rules_data),
-                self._update_traffic_rules(rules_data),
-                self._update_port_forwards(rules_data),
-                self._update_traffic_routes(rules_data),
-                self._update_firewall_zones(rules_data),
-                self._update_wlans(rules_data)
-            ]
+            # Store the previous data to detect deletions
+            previous_data = self.data.copy() if self.data else {}
             
-            await asyncio.gather(*tasks)
+            # Clear any caches before fetching to ensure we get fresh data
+            await self.api.clear_cache()
+            
+            # Log the start of the update process
+            LOGGER.debug("Beginning rule data collection with fresh cache")
+            
+            # Periodically force a cleanup of stale entities (once per hour)
+            force_cleanup_interval = 3600  # seconds
+            last_cleanup = getattr(self, "_last_entity_cleanup", 0)
+            if current_time - last_cleanup > force_cleanup_interval:
+                LOGGER.info("Performing periodic forced entity cleanup")
+                self._last_entity_cleanup = current_time
+                
+                # Dispatch a special force-cleanup signal
+                try:
+                    async_dispatcher_send(
+                        self.hass,
+                        f"{DOMAIN}_force_entity_cleanup",
+                        None
+                    )
+                except Exception as cleanup_err:
+                    LOGGER.error("Error dispatching forced cleanup: %s", cleanup_err)
+            
+            # Gather all rule types SEQUENTIALLY instead of in parallel
+            # This avoids overwhelming the API with parallel requests
+            
+            # Define delay between API calls to prevent rate limiting
+            api_call_delay = 1.0  # seconds between API calls - reduced slightly
+            
+            # Firewall policies first - most important
+            await self._update_firewall_policies(rules_data)
+            await asyncio.sleep(api_call_delay)
+            
+            # Then port forwards
+            await self._update_port_forwards(rules_data)
+            await asyncio.sleep(api_call_delay)
+            
+            # Then traffic routes
+            await self._update_traffic_routes(rules_data)
+            await asyncio.sleep(api_call_delay)
+            
+            # Then firewall zones
+            await self._update_firewall_zones(rules_data)
+            await asyncio.sleep(api_call_delay)
+            
+            # Then WLANs
+            await self._update_wlans(rules_data)
+            await asyncio.sleep(api_call_delay)
+            
+            # Then traffic rules
+            await self._update_traffic_rules(rules_data)
+            await asyncio.sleep(api_call_delay)
+            
+            # Finally legacy firewall rules
+            await self._update_legacy_firewall_rules(rules_data)
             
             # Log detailed info for traffic routes
             LOGGER.debug("Traffic routes received: %d items", len(rules_data["traffic_routes"]))
             for route in rules_data["traffic_routes"]:
                 _log_rule_info(route)
+                
+            # Check for deleted rules and dispatch events for each
+            if previous_data:
+                LOGGER.debug("Checking for deleted rules in latest update")
+                self._check_for_deleted_rules(previous_data, rules_data)
                 
             return rules_data
             
@@ -115,10 +177,156 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             LOGGER.error("Error updating coordinator data: %s", err)
             raise UpdateFailed(f"Error updating data: {err}")
 
+    def _check_for_deleted_rules(self, previous_data: Dict[str, List[Any]], new_data: Dict[str, List[Any]]) -> None:
+        """Check for rules that existed in previous data but not in new data."""
+        # Only process rule types that would create entities
+        entity_rule_types = [
+            "firewall_policies",
+            "traffic_rules", 
+            "port_forwards", 
+            "traffic_routes",
+            "legacy_firewall_rules"
+        ]
+        
+        LOGGER.debug("Starting deletion check between previous and new data sets")
+        
+        for rule_type in entity_rule_types:
+            if rule_type not in previous_data or rule_type not in new_data:
+                LOGGER.debug("Skipping %s - not found in both datasets", rule_type)
+                continue
+                
+            LOGGER.debug("Checking for deletions in %s: Previous count: %d, Current count: %d", 
+                         rule_type, len(previous_data[rule_type]), len(new_data[rule_type]))
+                
+            # If we have fewer items now than before, something was probably deleted
+            if len(previous_data[rule_type]) > len(new_data[rule_type]):
+                LOGGER.warning("Count decreased for %s: %d -> %d (-%d items)", 
+                               rule_type, 
+                               len(previous_data[rule_type]), 
+                               len(new_data[rule_type]), 
+                               len(previous_data[rule_type]) - len(new_data[rule_type]))
+            
+            # Get the raw rule IDs without prefixes to compare data accurately
+            # This extracts only the ID portion from each rule for comparison
+            def extract_raw_id(rule_id):
+                """Extract the raw ID part without the prefix."""
+                if rule_id and "_" in rule_id:
+                    parts = rule_id.split("_")
+                    # Return the last part which should be the actual ID
+                    return parts[-1]
+                return rule_id
+                
+            # Create maps of rules by ID for efficient comparison
+            prev_rules = {get_rule_id(rule): rule for rule in previous_data[rule_type] if get_rule_id(rule)}
+            new_rules = {get_rule_id(rule): rule for rule in new_data[rule_type] if get_rule_id(rule)}
+            
+            # Create sets for more efficient comparison
+            prev_ids = set(prev_rules.keys())
+            new_ids = set(new_rules.keys())
+            
+            # Add debug logs to show what IDs we're comparing
+            LOGGER.debug("Checking for deleted %s rules - Previous IDs: %s", rule_type, sorted(list(prev_ids)))
+            LOGGER.debug("Checking for deleted %s rules - Current IDs: %s", rule_type, sorted(list(new_ids)))
+            
+            # Find IDs that existed before but not now (deleted rules)
+            deleted_ids = prev_ids - new_ids
+            
+            # Also try comparing raw IDs without prefixes
+            prev_raw_ids = {extract_raw_id(get_rule_id(rule)) for rule in previous_data[rule_type] if get_rule_id(rule)}
+            new_raw_ids = {extract_raw_id(get_rule_id(rule)) for rule in new_data[rule_type] if get_rule_id(rule)}
+            raw_deleted_ids = prev_raw_ids - new_raw_ids
+            
+            if raw_deleted_ids and not deleted_ids:
+                LOGGER.info("Found %d deleted rules using raw ID comparison: %s", 
+                            len(raw_deleted_ids), raw_deleted_ids)
+                
+                # Convert raw IDs back to entity IDs for removal
+                for raw_id in raw_deleted_ids:
+                    for rule in previous_data[rule_type]:
+                        rule_id = get_rule_id(rule)
+                        if rule_id and extract_raw_id(rule_id) == raw_id:
+                            deleted_ids.add(rule_id)
+                            LOGGER.info("Adding rule for removal - raw_id: %s -> entity_id: %s", 
+                                        raw_id, rule_id)
+            
+            # Double-check if counts don't match but no deletions found
+            # This could indicate an issue with ID matching or API caching
+            if len(previous_data[rule_type]) != len(new_data[rule_type]) and not deleted_ids:
+                LOGGER.warning(
+                    "Rule count mismatch detected! Previous: %d, Current: %d, but no deleted IDs found. "
+                    "This might indicate a caching issue or ID format mismatch.",
+                    len(previous_data[rule_type]), 
+                    len(new_data[rule_type])
+                )
+                # If we have fewer rules now but no deletions detected, force entity removal based on raw data
+                if len(previous_data[rule_type]) > len(new_data[rule_type]):
+                    LOGGER.warning("Rule count decreased but no deletions detected - comparing rule contents")
+                    
+                    # Create a deep comparison of rule contents
+                    for prev_rule in previous_data[rule_type]:
+                        prev_id = get_rule_id(prev_rule)
+                        if not prev_id:
+                            continue
+                            
+                        # Check if this rule still exists in any form
+                        found = False
+                        for new_rule in new_data[rule_type]:
+                            # Try to match on any attribute that might be stable
+                            if hasattr(prev_rule, 'id') and hasattr(new_rule, 'id') and prev_rule.id == new_rule.id:
+                                found = True
+                                break
+                            elif hasattr(prev_rule, 'name') and hasattr(new_rule, 'name') and prev_rule.name == new_rule.name:
+                                found = True
+                                break
+                                
+                        if not found:
+                            # This rule doesn't seem to exist in the new data
+                            LOGGER.info("Rule %s appears to be missing in new data", prev_id)
+                            deleted_ids.add(prev_id)
+            
+            if deleted_ids:
+                LOGGER.info("Found %d deleted %s rules: %s", len(deleted_ids), rule_type, deleted_ids)
+            
+            # Dispatch deletion events for each deleted rule
+            for rule_id in deleted_ids:
+                LOGGER.debug("Rule deletion detected - type: %s, id: %s", rule_type, rule_id)
+                
+                # The registry in switch.py uses the format: rule_type_rule_id (e.g., firewall_policies_unr_policy_123)
+                # Use this exact format for the signal to ensure match with the registry
+                entity_id = rule_id
+                LOGGER.info("Dispatching entity removal for: %s", entity_id)
+                
+                # Debug log the signal we're sending
+                LOGGER.debug("Sending signal: %s with payload: %s", f"{DOMAIN}_entity_removed", entity_id)
+                
+                # Use try-except to catch any dispatching errors
+                try:
+                    # Explicitly use async_dispatcher_send directly
+                    async_dispatcher_send(
+                        self.hass,
+                        f"{DOMAIN}_entity_removed",
+                        entity_id
+                    )
+                    LOGGER.debug("Entity removal signal dispatched successfully")
+                except Exception as err:
+                    LOGGER.error("Error dispatching entity removal: %s", err)
+
     async def _update_firewall_policies(self, data: Dict[str, List[Any]]) -> None:
         """Update firewall policies."""
         try:
-            policies = await self.api.get_firewall_policies()
+            LOGGER.debug("Fetching firewall policies from API with force_refresh=True")
+            # Force a fresh fetch from the API to bypass any caching
+            policies = await self.api.get_firewall_policies(force_refresh=True)
+            
+            # Log detailed policy information for debugging
+            policy_ids = [get_rule_id(policy) for policy in policies]
+            LOGGER.debug("Received %d firewall policies from API: %s", len(policies), policy_ids)
+            
+            # Additional check: log any policies that might be marked as deleted but still returned
+            for policy in policies:
+                if hasattr(policy, "deleted") and getattr(policy, "deleted", False):
+                    LOGGER.warning("API returned a deleted policy: %s", get_rule_id(policy))
+                    
             data["firewall_policies"] = list(policies)
         except Exception as err:
             LOGGER.error("Error fetching firewall policies: %s", err)
@@ -169,6 +377,16 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             LOGGER.error("Error fetching WLANs: %s", err)
             data["wlans"] = []
 
+    async def _update_legacy_firewall_rules(self, data: Dict[str, List[Any]]) -> None:
+        """Update legacy firewall rules."""
+        try:
+            rules = await self.api.get_legacy_firewall_rules()
+            data["legacy_firewall_rules"] = list(rules)
+            LOGGER.debug("Fetched %d legacy firewall rules", len(rules))
+        except Exception as err:
+            LOGGER.error("Error fetching legacy firewall rules: %s", err)
+            data["legacy_firewall_rules"] = []
+
     @callback
     def _handle_websocket_message(self, message: dict[str, Any]) -> None:
         """Handle incoming websocket message."""
@@ -176,30 +394,94 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             if not message:
                 return
 
-            LOGGER.debug("Processing websocket message: %s", message)
+            # Get message meta data if available
+            meta = message.get("meta", {})
+            msg_type = meta.get("message", "")
+            msg_data = message.get("data", {})
             
-            # Determine if we need to refresh data based on message type
-            should_refresh = False
-            
-            # Check message type and update accordingly
-            if "firewall" in message:
-                should_refresh = True
-                LOGGER.debug("Firewall change detected")
-            elif "portForward" in message:
-                should_refresh = True
-                LOGGER.debug("Port forward change detected")
-            elif "routing" in message:
-                should_refresh = True
-                LOGGER.debug("Routing change detected")
-            elif "wlan" in message:
-                should_refresh = True
-                LOGGER.debug("WLAN change detected")
+            # Only log full message content for relevant message types or when explicitly requested
+            should_log_full = False
+            if DEBUG_WEBSOCKET:
+                # Relevant message types that are likely important for rules
+                relevant_types = [
+                    "firewall", "rule", "policy", "traffic", "route", "port-forward",
+                    "delete", "update", "insert", "events"
+                ]
                 
+                # Check if this is a relevant message type
+                if any(keyword in msg_type.lower() for keyword in relevant_types):
+                    should_log_full = True
+                    LOGGER.debug("Processing important WebSocket message: %s", message)
+                else:
+                    # For non-rule messages, just log the type without the full content
+                    LOGGER.debug("Received WebSocket message type: %s (non-rule related)", msg_type)
+            
+            # Determine if we need to refresh data based on message
+            should_refresh = False
+            refresh_reason = None
+            
+            # Always refresh for certain events
+            if msg_type in ["events", "event", "delete", "update", "insert", "changed", "alarm", "remove", "firewall"]:
+                should_refresh = True
+                refresh_reason = f"Event type detected: {msg_type}"
+            
+            # Check for data attributes that suggest a rule change
+            elif isinstance(msg_data, dict):
+                # Attributes that indicate policy or rule changes
+                rule_attributes = ["_id", "id", "name", "enabled", "type", "deleted", "firewall", "rule", "policy"]
+                
+                for attr in rule_attributes:
+                    if attr in msg_data:
+                        should_refresh = True
+                        refresh_reason = f"Rule attribute detected: {attr}"
+                        break
+                        
+                # Check for special events that might be in nested data
+                if not should_refresh and "data" in msg_data and isinstance(msg_data["data"], dict):
+                    nested_data = msg_data["data"]
+                    for attr in rule_attributes:
+                        if attr in nested_data:
+                            should_refresh = True
+                            refresh_reason = f"Rule attribute detected in nested data: {attr}"
+                            break
+            
+            # Fallback for any message containing keywords that suggest rule changes
+            if not should_refresh:
+                keywords = ["firewall", "rule", "policy", "delete", "removed", "deleted", "changed"]
+                message_str = str(message).lower()
+                
+                for keyword in keywords:
+                    if keyword in message_str:
+                        should_refresh = True
+                        refresh_reason = f"Keyword detected in message: {keyword}"
+                        break
+            
             if should_refresh:
-                self.hass.async_create_task(self.async_refresh())
+                if DEBUG_WEBSOCKET:
+                    LOGGER.info("Refreshing data due to: %s", refresh_reason)
+                # Create a task to clear cache first, then refresh
+                asyncio.create_task(self._force_refresh_with_cache_clear())
+            elif DEBUG_WEBSOCKET and should_log_full:
+                # Only log "no refresh" for messages we're fully logging
+                LOGGER.debug("No refresh triggered for relevant message type: %s", msg_type)
 
         except Exception as err:
             LOGGER.error("Error handling websocket message: %s", err)
+    
+    async def _force_refresh_with_cache_clear(self) -> None:
+        """Force a refresh with cache clearing to ensure fresh data."""
+        try:
+            # Clear API cache first
+            await self.api.clear_cache()
+            if DEBUG_WEBSOCKET:
+                LOGGER.debug("Cache cleared before refresh")
+            
+            # Then force a data refresh
+            await self.async_refresh()
+            if DEBUG_WEBSOCKET:
+                LOGGER.debug("Refresh completed after WebSocket event")
+        except Exception as err:
+            LOGGER.error("Error during forced refresh: %s", err)
 
     @callback
     def shutdown(self) -> None:
