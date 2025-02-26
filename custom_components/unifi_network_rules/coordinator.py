@@ -48,6 +48,13 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         """Initialize the coordinator."""
         self.api = api
         self.websocket = websocket
+        
+        # Track authentication failures and API issues
+        self._auth_failures = 0
+        self._max_auth_failures = 3
+        self._last_successful_data = None
+        self._consecutive_errors = 0
+        self._in_error_state = False
 
         # Convert update_interval from seconds to timedelta
         update_interval_td = timedelta(seconds=update_interval)
@@ -166,16 +173,97 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             LOGGER.debug("Traffic routes received: %d items", len(rules_data["traffic_routes"]))
             for route in rules_data["traffic_routes"]:
                 _log_rule_info(route)
+            
+            # Verify the data is valid - check if we have at least some data in key categories
+            # This helps prevent entity removal during temporary API errors
+            data_valid = (
+                len(rules_data["firewall_policies"]) > 0 or 
+                len(rules_data["traffic_rules"]) > 0 or
+                len(rules_data["port_forwards"]) > 0 or
+                len(rules_data["traffic_routes"]) > 0
+            )
+            
+            # If we get no data but had data before, likely a temporary API issue
+            if not data_valid and previous_data and any(
+                len(previous_data.get(key, [])) > 0 
+                for key in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes"]
+            ):
+                # We're in a potential error state
+                self._consecutive_errors += 1
+                LOGGER.warning(
+                    "No valid rule data received but had previous data. "
+                    "Likely a temporary API issue (attempt %d).", 
+                    self._consecutive_errors
+                )
                 
-            # Check for deleted rules and dispatch events for each
-            if previous_data:
-                LOGGER.debug("Checking for deleted rules in latest update")
-                self._check_for_deleted_rules(previous_data, rules_data)
+                # If this is a persistent issue (3+ consecutive failures)
+                if self._consecutive_errors >= 3:
+                    if not self._in_error_state:
+                        LOGGER.error(
+                            "Multiple consecutive empty data responses. "
+                            "API may be experiencing issues. Using last valid data."
+                        )
+                        self._in_error_state = True
+                        
+                    # Return last known good data instead of empty data
+                    if self._last_successful_data:
+                        LOGGER.info("Using cached data from last successful update")
+                        return self._last_successful_data
+                    
+                # Try forcing a session refresh on error
+                LOGGER.info("Forcing session refresh due to API data issue")
+                try:
+                    await self.api.refresh_session()
+                except Exception as session_err:
+                    LOGGER.error("Failed to refresh session during error recovery: %s", session_err)
+                
+                # If we have previous data and this is likely a temporary failure, return previous data
+                if previous_data:
+                    LOGGER.info("Returning previous data during API issue")
+                    return previous_data
+                    
+                # Otherwise, raise an error
+                raise UpdateFailed("Failed to get any valid rule data")
+            
+            # If we got here with valid data, reset error counters
+            if data_valid:
+                if self._consecutive_errors > 0:
+                    LOGGER.info("Recovered from API data issue after %d attempts", self._consecutive_errors)
+                self._consecutive_errors = 0
+                self._in_error_state = False
+                self._last_successful_data = rules_data.copy()
+                
+                # Check for deleted rules and dispatch events for each
+                if previous_data:
+                    LOGGER.debug("Checking for deleted rules in latest update")
+                    self._check_for_deleted_rules(previous_data, rules_data)
                 
             return rules_data
             
         except Exception as err:
             LOGGER.error("Error updating coordinator data: %s", err)
+            
+            # Check if this is an authentication error
+            if "401 Unauthorized" in str(err) or "403 Forbidden" in str(err):
+                self._auth_failures += 1
+                LOGGER.warning("Authentication failure #%d during data update", self._auth_failures)
+                
+                # Try to refresh the session if we haven't exceeded max failures
+                if self._auth_failures < self._max_auth_failures:
+                    LOGGER.info("Attempting to refresh authentication session")
+                    try:
+                        await self.api.refresh_session()
+                        # If we succeeded in refreshing, return the previous data
+                        if self.data:
+                            return self.data
+                    except Exception as refresh_err:
+                        LOGGER.error("Failed to refresh session: %s", refresh_err)
+            
+            # Return previous data during errors if available to prevent entity flickering
+            if self.data:
+                LOGGER.info("Returning previous data during error")
+                return self.data
+                
             raise UpdateFailed(f"Error updating data: {err}")
 
     def _check_for_deleted_rules(self, previous_data: Dict[str, List[Any]], new_data: Dict[str, List[Any]]) -> None:
@@ -201,11 +289,23 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 
             # If we have fewer items now than before, something was probably deleted
             if len(previous_data[rule_type]) > len(new_data[rule_type]):
-                LOGGER.warning("Count decreased for %s: %d -> %d (-%d items)", 
-                               rule_type, 
-                               len(previous_data[rule_type]), 
-                               len(new_data[rule_type]), 
-                               len(previous_data[rule_type]) - len(new_data[rule_type]))
+                # But only warn if the difference is significant - avoid entity churn on minor changes
+                if len(previous_data[rule_type]) - len(new_data[rule_type]) > len(previous_data[rule_type]) * 0.5:
+                    # If we lost more than 50% of entities, this might be a temporary API issue rather than actual deletions
+                    LOGGER.warning(
+                        "More than 50%% of %s rules disappeared (%d -> %d). This may be a temporary API issue - skipping entity removal",
+                        rule_type,
+                        len(previous_data[rule_type]),
+                        len(new_data[rule_type])
+                    )
+                    # Skip this rule type to avoid entity churn during API issues
+                    continue
+                else:
+                    LOGGER.warning("Count decreased for %s: %d -> %d (-%d items)", 
+                                rule_type, 
+                                len(previous_data[rule_type]), 
+                                len(new_data[rule_type]), 
+                                len(previous_data[rule_type]) - len(new_data[rule_type]))
             
             # Get the raw rule IDs without prefixes to compare data accurately
             # This extracts only the ID portion from each rule for comparison
@@ -286,6 +386,26 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                             deleted_ids.add(prev_id)
             
             if deleted_ids:
+                # If we're removing too many entities at once, this might be an API glitch, require confirmation
+                if len(deleted_ids) > 5 and len(deleted_ids) > len(prev_ids) * 0.25:  # More than 25% of all entities
+                    LOGGER.warning(
+                        "Large number of %s deletions detected (%d of %d, %.1f%%). "
+                        "This could be an API connection issue rather than actual deletions.",
+                        rule_type,
+                        len(deleted_ids),
+                        len(prev_ids),
+                        (len(deleted_ids) / len(prev_ids)) * 100
+                    )
+                    # For major deletions, only process a few at a time to be cautious
+                    # This prevents mass entity removal during API glitches
+                    if len(deleted_ids) > 10:
+                        LOGGER.warning(
+                            "Processing only first 5 deletions to prevent mass removal during potential API issues"
+                        )
+                        deleted_ids_subset = list(deleted_ids)[:5]
+                        LOGGER.info("Processing subset of deletions: %s", deleted_ids_subset)
+                        deleted_ids = set(deleted_ids_subset)
+                
                 LOGGER.info("Found %d deleted %s rules: %s", len(deleted_ids), rule_type, deleted_ids)
             
             # Dispatch deletion events for each deleted rule

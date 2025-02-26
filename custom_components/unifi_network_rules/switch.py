@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Final, Optional, Set
+import time  # Add this import
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
@@ -232,11 +233,17 @@ async def async_setup_entry(
         """Add switches for rules that have been added since last update."""
         new_entities = []
         
+        # Check if data is empty or missing due to temporary API failure
+        if not coordinator.data or not any(rule_type in coordinator.data for rule_type in setup_type_to_method.keys()):
+            LOGGER.warning("Coordinator data is empty or missing rule types, likely a temporary API issue")
+            # Don't remove entities during temporary API failures
+            return
+        
         # Process each rule type
         for setup_type, setup_method in setup_type_to_method.items():
             if not coordinator.data or setup_type not in coordinator.data:
                 continue
-                
+            
             try:
                 for rule in coordinator.data[setup_type]:
                     entity = setup_method(coordinator, api, rule)
@@ -310,16 +317,34 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         # Enable optimistic updates for better UX
         self._attr_assumed_state = True
         self._optimistic_state = None
+        self._optimistic_timestamp = 0  # Add timestamp for optimistic state
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        # Update our rule data with the latest available from the coordinator
+        # Check if we're in a temporary auth failure state
+        if not self.coordinator.data or self._rule_type not in self.coordinator.data:
+            # Likely a temporary API error, don't update state
+            LOGGER.debug("Coordinator missing data for %s - skipping update", self._rule_type)
+            return
+            
+        # Only update rule data if we have a valid rule in the coordinator
         new_rule = self._get_current_rule()
         if new_rule is not None:
+            # Only clear optimistic state if it's been more than 10 seconds
+            # This prevents rapid authentication cycles from clearing optimistic state
+            if self._optimistic_state is not None:
+                current_time = time.time()
+                if current_time - self._optimistic_timestamp > 10:
+                    LOGGER.debug("Clearing optimistic state after 10 seconds")
+                    self._optimistic_state = None
+                    self._optimistic_timestamp = 0
+                else:
+                    LOGGER.debug("Keeping optimistic state, only %d seconds elapsed", 
+                               current_time - self._optimistic_timestamp)
+            
             self._rule_data = new_rule
-            # Clear optimistic state when we get a real update
-            self._optimistic_state = None
+            
         # Schedule update to Home Assistant
         self.async_write_ha_state()
 
@@ -416,8 +441,9 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         """Turn on (enable) the rule."""
         LOGGER.debug("Turning on rule %s (%s)", self._rule_id, self._rule_type)
         
-        # Set optimistic state first for immediate UI feedback
+        # Set optimistic state first for immediate UI feedback with timestamp
         self._optimistic_state = True
+        self._optimistic_timestamp = time.time()
         self.async_write_ha_state()
         
         # Use toggle methods for all rule types
@@ -438,13 +464,14 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
             success = False
             
         if success:
-            # Schedule update after success
-            LOGGER.debug("Rule %s enabled successfully", self._rule_id)
+            # Schedule update after success, but keep optimistic state for a bit
+            LOGGER.debug("Rule %s enabled successfully, scheduling refresh", self._rule_id)
             await self.coordinator.async_request_refresh()
         else:
             # Revert optimistic state if failed
             LOGGER.error("Failed to enable rule %s", self._rule_id)
             self._optimistic_state = False
+            self._optimistic_timestamp = time.time()  # Update timestamp for failed state
             self.async_write_ha_state()
             # Still try to refresh to get actual state
             await self.coordinator.async_request_refresh()
@@ -453,8 +480,9 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         """Turn off (disable) the rule."""
         LOGGER.debug("Turning off rule %s (%s)", self._rule_id, self._rule_type)
         
-        # Set optimistic state first for immediate UI feedback
+        # Set optimistic state first for immediate UI feedback with timestamp
         self._optimistic_state = False
+        self._optimistic_timestamp = time.time()
         self.async_write_ha_state()
         
         # Use toggle methods for all rule types
@@ -475,13 +503,14 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
             success = False
             
         if success:
-            # Schedule update after success
-            LOGGER.debug("Rule %s disabled successfully", self._rule_id)
+            # Schedule update after success, but keep optimistic state for a bit
+            LOGGER.debug("Rule %s disabled successfully, scheduling refresh", self._rule_id)
             await self.coordinator.async_request_refresh()
         else:
             # Revert optimistic state if failed
             LOGGER.error("Failed to disable rule %s", self._rule_id)
             self._optimistic_state = True
+            self._optimistic_timestamp = time.time()  # Update timestamp for failed state 
             self.async_write_ha_state()
             # Still try to refresh to get actual state
             await self.coordinator.async_request_refresh()
