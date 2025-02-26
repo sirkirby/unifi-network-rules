@@ -2,6 +2,49 @@ refresh:
   name: Refresh
   description: Refresh UniFi Network data
 
+refresh_data:
+  name: Refresh Data
+  description: Alternative refresh command to update UniFi Network data
+  fields:
+    entry_id:
+      name: Entry ID
+      description: Optional specific configuration entry ID to refresh
+      required: false
+      example: "1234567890abcdef"
+      selector:
+        text:
+
+toggle_rule:
+  name: Toggle Rule
+  description: Enable or disable a specific rule
+  fields:
+    rule_id:
+      name: Rule ID
+      description: ID of the rule to toggle
+      required: true
+      example: "123456789"
+      selector:
+        text:
+    enabled:
+      name: Enabled
+      description: Whether the rule should be enabled (true) or disabled (false)
+      required: true
+      selector:
+        boolean:
+    rule_type:
+      name: Rule Type
+      description: Type of rule (optional, will try to auto-detect if not provided)
+      required: false
+      example: "policy"
+      selector:
+        select:
+          options:
+            - "policy"
+            - "route"
+            - "port_forward"
+            - "legacy_firewall"
+            - "legacy_traffic"
+
 backup_rules:
   name: Backup rules
   description: Backup rules to a file
@@ -70,6 +113,31 @@ bulk_update_rules:
       selector:
         boolean:
 
+delete_rule:
+  name: Delete Rule
+  description: Delete a specific rule by ID
+  fields:
+    rule_id:
+      name: Rule ID
+      description: ID of the rule to delete
+      required: true
+      example: "123456789"
+      selector:
+        text:
+    rule_type:
+      name: Rule Type
+      description: Type of rule (optional, will try to auto-detect if not provided)
+      required: false
+      example: "policy"
+      selector:
+        select:
+          options:
+            - "policy"
+            - "route" 
+            - "port_forward"
+            - "legacy_firewall"
+            - "legacy_traffic"
+
 apply_template:
   name: Apply template
   description: Apply a rule template
@@ -133,3 +201,11 @@ force_remove_stale:
       default: false
       selector:
         boolean:
+
+reset_rate_limit:
+  name: Reset Rate Limit
+  description: Reset the rate limiter for the UniFi API connection
+
+websocket_diagnostics:
+  name: WebSocket Diagnostics
+  description: Run diagnostics on the WebSocket connection and attempt to repair if needed

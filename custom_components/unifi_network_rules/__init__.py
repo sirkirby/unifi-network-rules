@@ -25,7 +25,7 @@ try:
     from .udm_api import UDMAPI, CannotConnect, InvalidAuth
     from .websocket import UnifiRuleWebsocket
     from .coordinator import UnifiRuleUpdateCoordinator
-    from . import services
+    from .services import async_setup_services, async_unload_services
 except ImportError as err:
     LOGGER.error(
         "Failed to import required modules. This may happen if an older version of "
@@ -49,8 +49,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.data[DOMAIN]["services"] = {}
     
     # Set up services
-    service_setup_result = await services.async_setup_services(hass)
-    await services.async_register_services(hass)
+    await async_setup_services(hass)
     
     return True
 
