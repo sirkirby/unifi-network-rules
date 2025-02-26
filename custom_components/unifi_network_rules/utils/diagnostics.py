@@ -2,170 +2,123 @@
 from __future__ import annotations
 
 import logging
-import json
-import inspect
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from ..const import LOGGER
 
 def analyze_controller(controller: Any) -> Dict[str, Any]:
-    """Analyze controller object structure for diagnostics."""
+    """Analyze controller object structure for diagnostics.
+    
+    Returns a focused subset of controller information relevant for troubleshooting.
+    """
+    if controller is None:
+        return {"status": "error", "message": "Controller is None"}
+        
     result = {
         "class": controller.__class__.__name__,
-        "attributes": [],
-        "methods": [],
-        "has_websocket": False,
-        "has_is_unifi_os": False
+        "websocket": {
+            "available": False,
+            "connected": False,
+            "url": None
+        },
+        "connectivity": {
+            "is_unifi_os": None
+        },
+        "capabilities": []
     }
     
-    # Get all attributes and methods
-    for attr_name in dir(controller):
-        # Skip private attributes
-        if attr_name.startswith("_") and attr_name not in ["__class__"]:
-            continue
-            
-        try:
-            attr = getattr(controller, attr_name)
-            
-            # Check if it's a method
-            if callable(attr):
-                result["methods"].append(attr_name)
-                
-                # Check for important WebSocket methods
-                if attr_name == "start_websocket":
-                    result["has_start_websocket_method"] = True
-                elif attr_name == "stop_websocket":
-                    result["has_stop_websocket_method"] = True
-            else:
-                result["attributes"].append(attr_name)
-                
-                # Track specific important attributes
-                if attr_name == "websocket":
-                    result["has_websocket"] = True
-                elif attr_name == "is_unifi_os":
-                    result["has_is_unifi_os"] = True
-                    result["is_unifi_os_value"] = attr
-                elif attr_name == "ws_handler":
-                    result["has_ws_handler"] = True
-        except Exception as e:
-            LOGGER.debug("Error accessing attribute %s: %s", attr_name, e)
+    # Check for websocket capability
+    if hasattr(controller, "websocket"):
+        ws = getattr(controller, "websocket")
+        result["websocket"]["available"] = True
+        
+        # Only include most important websocket properties
+        if hasattr(ws, "url"):
+            result["websocket"]["url"] = ws.url
+        
+        # Check websocket connection state without doing deep inspection
+        if hasattr(ws, "state") and getattr(ws, "state", None) is not None:
+            result["websocket"]["connected"] = True
     
-    # Analyze websocket if present
-    if result["has_websocket"]:
-        try:
-            ws = getattr(controller, "websocket")
-            result["websocket"] = {
-                "class": ws.__class__.__name__,
-                "attributes": [a for a in dir(ws) if not a.startswith("_") or a == "__class__"],
-                "has_build_url": hasattr(ws, "_build_url"),
-                "has_url": hasattr(ws, "url"),
-            }
-            
-            if hasattr(ws, "url"):
-                result["websocket"]["url"] = ws.url
-        except Exception as e:
-            LOGGER.debug("Error analyzing websocket: %s", e)
-            
-    # Analyze connectivity if present
-    if hasattr(controller, "connectivity"):
-        try:
-            conn = getattr(controller, "connectivity")
-            result["connectivity"] = {
-                "class": conn.__class__.__name__,
-                "has_websocket_method": hasattr(conn, "websocket") and callable(getattr(conn, "websocket")),
-                "has_is_unifi_os": hasattr(conn, "is_unifi_os"),
-            }
-            
-            if hasattr(conn, "is_unifi_os"):
-                result["connectivity"]["is_unifi_os_value"] = getattr(conn, "is_unifi_os")
-        except Exception as e:
-            LOGGER.debug("Error analyzing connectivity: %s", e)
+    # Check for method capabilities in a simplified way
+    capabilities = []
+    for method in ["start_websocket", "stop_websocket"]:
+        if hasattr(controller, method) and callable(getattr(controller, method)):
+            capabilities.append(method)
+    result["capabilities"] = capabilities
+    
+    # Check UniFi OS detection
+    if hasattr(controller, "is_unifi_os"):
+        result["connectivity"]["is_unifi_os"] = getattr(controller, "is_unifi_os")
     
     return result
 
 def log_controller_diagnostics(controller: Any, api_instance: Any = None) -> None:
-    """Log diagnostic information about the controller structure."""
+    """Log focused diagnostic information about the controller structure.
+    
+    Logs only the most relevant information for troubleshooting.
+    """
     try:
-        LOGGER.info("========== CONTROLLER DIAGNOSTICS ==========")
+        LOGGER.info("=== UNIFI NETWORK RULES DIAGNOSTICS SUMMARY ===")
         
         if controller is None:
-            LOGGER.info("Controller is None!")
+            LOGGER.info("Controller is None - unable to connect to UniFi Network")
             return
             
         analysis = analyze_controller(controller)
-        LOGGER.info("Controller class: %s", analysis["class"])
-        LOGGER.info("Has websocket: %s", analysis["has_websocket"])
-        LOGGER.info("Has is_unifi_os: %s", analysis["has_is_unifi_os"])
+        LOGGER.info("Controller type: %s", analysis["class"])
         
-        if analysis["has_is_unifi_os"]:
-            LOGGER.info("is_unifi_os value: %s", analysis.get("is_unifi_os_value"))
-            
-        # Log WebSocket method availability
-        LOGGER.info("Has start_websocket method: %s", analysis.get("has_start_websocket_method", False))
-        LOGGER.info("Has stop_websocket method: %s", analysis.get("has_stop_websocket_method", False))
-        LOGGER.info("Has ws_handler attribute: %s", analysis.get("has_ws_handler", False))
-            
-        if analysis["has_websocket"]:
-            ws_info = analysis.get("websocket", {})
-            LOGGER.info("WebSocket class: %s", ws_info.get("class"))
-            LOGGER.info("WebSocket has _build_url: %s", ws_info.get("has_build_url"))
-            LOGGER.info("WebSocket has url: %s", ws_info.get("has_url"))
-            
-            if ws_info.get("has_url"):
-                LOGGER.info("Current WebSocket URL: %s", ws_info.get("url"))
-                
-        # Log connectivity information if available
-        if "connectivity" in analysis:
-            conn_info = analysis["connectivity"]
-            LOGGER.info("Connectivity class: %s", conn_info.get("class"))
-            LOGGER.info("Connectivity has websocket method: %s", conn_info.get("has_websocket_method"))
-            LOGGER.info("Connectivity has is_unifi_os: %s", conn_info.get("has_is_unifi_os"))
-            
-            if conn_info.get("has_is_unifi_os"):
-                LOGGER.info("Connectivity is_unifi_os value: %s", conn_info.get("is_unifi_os_value"))
+        # Log websocket status
+        ws_info = analysis.get("websocket", {})
+        LOGGER.info("WebSocket: available=%s, connected=%s, url=%s", 
+                    ws_info.get("available"), ws_info.get("connected"), ws_info.get("url"))
         
-        # Also log API instance info if provided
+        # Log connectivity information
+        conn_info = analysis.get("connectivity", {})
+        LOGGER.info("UniFi OS detected: %s", conn_info.get("is_unifi_os"))
+        
+        # Log capabilities
+        LOGGER.info("Controller capabilities: %s", ", ".join(analysis.get("capabilities", [])))
+        
+        # API instance status (minimal info)
         if api_instance:
-            LOGGER.info("========== API INSTANCE DIAGNOSTICS ==========")
+            LOGGER.info("API connection: %s@%s (site: %s)", 
+                        getattr(api_instance, "username", "unknown"),
+                        getattr(api_instance, "host", "unknown"),
+                        getattr(api_instance, "site", "unknown"))
             
-            # Basic info
-            LOGGER.info("API Host: %s", getattr(api_instance, "host", "unknown"))
-            LOGGER.info("API Site: %s", getattr(api_instance, "site", "unknown"))
-            
-            # Session information
+            # Session information (just status, not details)
             has_session = hasattr(api_instance, "_session") and getattr(api_instance, "_session") is not None
-            LOGGER.info("Has session: %s", has_session)
-            
-            # Check if the API has important attributes and methods
-            has_controller = hasattr(api_instance, "controller") and getattr(api_instance, "controller") is not None
-            LOGGER.info("Has controller: %s", has_controller)
-            
-            has_check_udm = hasattr(api_instance, "_check_udm_device")
-            LOGGER.info("Has _check_udm_device method: %s", has_check_udm)
-            
-            has_manual_ws = hasattr(api_instance, "_manual_websocket_connect")
-            LOGGER.info("Has _manual_websocket_connect method: %s", has_manual_ws)
-            
-            has_config = hasattr(api_instance, "_config") and getattr(api_instance, "_config") is not None
-            LOGGER.info("Has config: %s", has_config)
-            
-            initialized = getattr(api_instance, "_initialized", False)
-            LOGGER.info("Is initialized: %s", initialized)
-            
-            # Check custom WebSocket handler
-            has_custom_ws = hasattr(api_instance, "_custom_websocket") and getattr(api_instance, "_custom_websocket") is not None
-            LOGGER.info("Has custom WebSocket handler: %s", has_custom_ws)
-            
-            if has_custom_ws:
-                custom_ws = getattr(api_instance, "_custom_websocket")
-                LOGGER.info("Custom WebSocket URL: %s", getattr(custom_ws, "url", "unknown"))
-                has_callback = getattr(custom_ws, "callback", None) is not None
-                LOGGER.info("Custom WebSocket has callback: %s", has_callback)
-            
-            # Check WebSocket callback status
-            has_ws_message_handler = hasattr(api_instance, "_ws_message_handler") and getattr(api_instance, "_ws_message_handler") is not None
-            LOGGER.info("Has _ws_message_handler: %s", has_ws_message_handler)
+            LOGGER.info("API session established: %s", has_session)
         
-        LOGGER.info("============================================")
+        LOGGER.info("=============================================")
     except Exception as e:
-        LOGGER.error("Error generating diagnostics: %s", e) 
+        LOGGER.error("Error generating diagnostics: %s", e)
+
+def async_get_config_entry_diagnostics(hass, entry):
+    """Return diagnostics for a config entry."""
+    # Get coordinator from entry data
+    coordinator = hass.data[DOMAIN].get(entry.entry_id, {}).get("coordinator")
+    
+    if not coordinator:
+        return {"error": "Coordinator not found"}
+    
+    # Get the UDM API instance
+    api = getattr(coordinator, "api", None)
+    
+    # Get a subset of important diagnostics data
+    diagnostics = {
+        "entry": {
+            "entry_id": entry.entry_id,
+            "title": entry.title,
+            "domain": entry.domain,
+        },
+        "controller": analyze_controller(getattr(api, "controller", None) if api else None),
+        "data_stats": {
+            "firewall_policy_count": len(getattr(coordinator, "data", {}).get("firewall_policies", [])),
+            "traffic_route_count": len(getattr(coordinator, "data", {}).get("traffic_routes", [])),
+            "refresh_timestamp": str(getattr(coordinator, "last_update_success", "unknown")),
+        }
+    }
+    
+    return diagnostics 

@@ -15,10 +15,11 @@ from .const import (
     DOMAIN,
     LOGGER,
     SIGNAL_WEBSOCKET_EVENT,
-    DEBUG_WEBSOCKET,
+    DEBUG_WEBSOCKET,  # Keep for backward compatibility
 )
 from .udm_api import UDMAPI
 from .utils.diagnostics import log_controller_diagnostics
+from .utils.logger import log_websocket
 
 SIGNAL_WEBSOCKET_CONNECTION_LOST = "unifi_network_rules_websocket_connection_lost"
 SIGNAL_WEBSOCKET_MESSAGE = "unifi_network_rules_websocket_message"
@@ -38,16 +39,16 @@ class UnifiRuleWebsocket:
 
     def start(self) -> None:
         """Start listening to the websocket."""
-        LOGGER.debug("Starting UniFi Network Rules websocket %s", self.entry_id)
+        log_websocket("Starting UniFi Network Rules websocket %s", self.entry_id)
         try:
             # First check if the API has the necessary method for setting the callback
             if hasattr(self.api, "set_websocket_callback"):
                 # Set our message handler callback
                 self.api.set_websocket_callback(self._handle_message)
                 
-                # Run diagnostics if DEBUG_WEBSOCKET is enabled
-                if DEBUG_WEBSOCKET and hasattr(self.api, "controller") and self.api.controller:
-                    LOGGER.info("Logging WebSocket controller diagnostics")
+                # Run diagnostics if websocket debugging is enabled
+                if (DEBUG_WEBSOCKET or hasattr(self.api, "controller") and self.api.controller):
+                    log_websocket("Logging WebSocket controller diagnostics")
                     log_controller_diagnostics(self.api.controller, self.api)
                 
                 # Start the websocket connection
@@ -65,19 +66,19 @@ class UnifiRuleWebsocket:
     async def _websocket_connect(self) -> None:
         """Start websocket connection."""
         try:
-            LOGGER.debug("Attempting WebSocket connection (attempt #%s)", self._ws_connection_attempts)
+            log_websocket("Attempting WebSocket connection (attempt #%s)", self._ws_connection_attempts)
             
-            # Log controller diagnostics before attempting connection if DEBUG_WEBSOCKET is enabled
-            if DEBUG_WEBSOCKET and self._ws_connection_attempts == 1:
+            # Log controller diagnostics before attempting connection if websocket debugging is enabled
+            if (DEBUG_WEBSOCKET and self._ws_connection_attempts == 1):
                 if hasattr(self.api, "controller") and self.api.controller:
-                    LOGGER.info("Logging pre-connection WebSocket diagnostics")
+                    log_websocket("Logging pre-connection WebSocket diagnostics")
                     log_controller_diagnostics(self.api.controller, self.api)
             
             # Add a minimum delay between attempts to prevent rate limiting
             if self._ws_connection_attempts > 1:
                 # Fixed minimum delay of 5 seconds between attempts
                 min_delay = 5
-                LOGGER.debug("Enforcing minimum %s second delay between WebSocket attempts", min_delay)
+                log_websocket("Enforcing minimum %s second delay between WebSocket attempts", min_delay)
                 await asyncio.sleep(min_delay)
             
             # Start WebSocket - our enhanced start_websocket will try both built-in and custom
@@ -97,8 +98,8 @@ class UnifiRuleWebsocket:
                        self._ws_connection_attempts, error_str)
             
             # Log additional diagnostics on error
-            if DEBUG_WEBSOCKET and hasattr(self.api, "controller") and self.api.controller:
-                LOGGER.info("Logging WebSocket diagnostics after error")
+            if (DEBUG_WEBSOCKET and hasattr(self.api, "controller") and self.api.controller):
+                log_websocket("Logging WebSocket diagnostics after error")
                 log_controller_diagnostics(self.api.controller, self.api)
             
             # Schedule reconnection with backoff - increased maximum backoff
@@ -112,7 +113,7 @@ class UnifiRuleWebsocket:
                 LOGGER.warning("Websocket connection lost, will reconnect in %s seconds", backoff)
                 async_dispatcher_send(self.hass, f"{SIGNAL_WEBSOCKET_CONNECTION_LOST}_{self.entry_id}")
             else:
-                LOGGER.debug("Scheduling websocket reconnection in %s seconds", backoff)
+                log_websocket("Scheduling websocket reconnection in %s seconds", backoff)
                 
             # After multiple failed attempts, inform the user
             if self._ws_connection_attempts >= 5:
@@ -128,12 +129,12 @@ class UnifiRuleWebsocket:
         """Schedule a reconnection attempt with delay."""
         await asyncio.sleep(delay)
         if not self._connection_lost_dispatched:
-            LOGGER.debug("Reconnecting to websocket after %s second delay", delay)
+            log_websocket("Reconnecting to websocket after %s second delay", delay)
         self._task = asyncio.create_task(self._websocket_connect())
 
     def stop(self) -> None:
         """Close websocket connection."""
-        LOGGER.debug("Closing UniFi Network Rules websocket %s", self.entry_id)
+        log_websocket("Closing UniFi Network Rules websocket %s", self.entry_id)
         
         # Cancel any pending reconnection tasks
         if self._task is not None and not self._task.done():
@@ -149,21 +150,21 @@ class UnifiRuleWebsocket:
 
     def _handle_message(self, message: dict[str, Any]) -> None:
         """Process websocket message."""
+        # Get message type for logging
+        meta = message.get("meta", {})
+        msg_type = meta.get("message", "")
+        
+        # Only log full details for rule-related messages
         if DEBUG_WEBSOCKET:
-            # Get message type for logging
-            meta = message.get("meta", {})
-            msg_type = meta.get("message", "")
-            
-            # Only log full details for rule-related messages
             if any(keyword in msg_type.lower() for keyword in [
                 "firewall", "rule", "policy", "traffic", "route", "port-forward", 
                 "delete", "update", "insert", "events"
             ]):
-                LOGGER.debug("WebSocket rule-related message received: %s - %s", 
+                log_websocket("WebSocket rule-related message received: %s - %s", 
                            msg_type, str(message)[:150])
             else:
                 # For other messages just log the type
-                LOGGER.debug("WebSocket message received: %s", msg_type)
+                log_websocket("WebSocket message received: %s", msg_type)
             
         # In case we get any reconnection message, reset counters
         if message.get("meta", {}).get("message") == "reconnect":
@@ -199,7 +200,7 @@ class UnifiRuleWebsocket:
 
     async def stop_and_wait(self) -> None:
         """Stop listening to the websocket and wait for it to close."""
-        LOGGER.debug("Stopping UniFi Network Rules websocket %s", self.entry_id)
+        log_websocket("Stopping UniFi Network Rules websocket %s", self.entry_id)
         try:
             if self._task:
                 self._task.cancel()

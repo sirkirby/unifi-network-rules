@@ -9,14 +9,22 @@ DOMAIN: Final = "unifi_network_rules"
 MANUFACTURER: Final = "Ubiquiti Inc."
 LOGGER = logging.getLogger(__package__)
 
-# When troubleshooting websocket/API issues, you can enable WebSocket debugging
-# in your configuration.yaml using:
+# Debugging flags - set specific flags to True only when troubleshooting that area
+# These can also be enabled via configuration.yaml:
 # logger:
 #   logs:
 #     custom_components.unifi_network_rules: debug
 #     aiounifi: debug
-# Or set this flag to True temporarily for detailed WebSocket connection logs:
-DEBUG_WEBSOCKET: Final = True  # Set to True only when troubleshooting WebSocket connections
+
+# More targeted debugging flags - enable only what you need
+LOG_WEBSOCKET: Final = False  # WebSocket connection/reconnection logs
+LOG_API_CALLS: Final = False  # API requests and responses
+LOG_DATA_UPDATES: Final = False  # Data refresh and update cycles 
+LOG_ENTITY_CHANGES: Final = False  # Entity addition/removal/state changes
+
+# For backwards compatibility - will be removed in a future update
+# Use LOG_WEBSOCKET instead
+DEBUG_WEBSOCKET: Final = LOG_WEBSOCKET  # Use LOG_WEBSOCKET instead
 
 # Integration services
 SERVICE_SYNC_DEVICE: Final = "sync_device"

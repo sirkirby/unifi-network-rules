@@ -12,6 +12,7 @@ from aiohttp import WSMsgType, client_exceptions
 import orjson
 
 from ..const import LOGGER, DEBUG_WEBSOCKET
+from ..utils.logger import log_websocket
 
 class CustomUnifiWebSocket:
     """Custom WebSocket handler for UniFi devices.
@@ -91,7 +92,7 @@ class CustomUnifiWebSocket:
     def set_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
         """Set callback for WebSocket messages."""
         self.callback = callback
-        LOGGER.debug("WebSocket callback set for %s", self.url)
+        log_websocket("WebSocket callback set for %s", self.url)
     
     async def start(self) -> None:
         """Start WebSocket connection."""
@@ -100,12 +101,12 @@ class CustomUnifiWebSocket:
             return
             
         if self._task and not self._task.done():
-            LOGGER.debug("WebSocket connection already running")
+            log_websocket("WebSocket connection already running")
             return
             
         self._close_requested = False
         self._task = asyncio.create_task(self._connect())
-        LOGGER.debug("Started WebSocket connection task")
+        log_websocket("Started WebSocket connection task")
         
     async def stop(self) -> None:
         """Stop WebSocket connection."""
@@ -123,7 +124,7 @@ class CustomUnifiWebSocket:
                 
         self._task = None
         self._connection = None
-        LOGGER.debug("WebSocket connection stopped")
+        log_websocket("WebSocket connection stopped")
         
     async def _connect(self) -> None:
         """Connect to WebSocket and handle messages."""
@@ -150,7 +151,7 @@ class CustomUnifiWebSocket:
         try:
             # Create temporary session if needed
             if need_temp_session:
-                LOGGER.debug("Creating temporary session for WebSocket connection")
+                log_websocket("Creating temporary session for WebSocket connection")
                 temp_session = aiohttp.ClientSession()
                 self.session = temp_session
             
@@ -166,10 +167,10 @@ class CustomUnifiWebSocket:
                 tried_urls.add(self.url)
                 
                 try:
-                    LOGGER.debug("Connecting to WebSocket URL: %s", self.url)
+                    log_websocket("Connecting to WebSocket URL: %s", self.url)
                     
                     # Add extra logging for connection attempt
-                    LOGGER.debug("Connection details - Host: %s, Site: %s, Headers count: %d", 
+                    log_websocket("Connection details - Host: %s, Site: %s, Headers count: %d", 
                                 self.host or "direct-url", self.site, len(self.headers) if self.headers else 0)
                     
                     # Log some of the headers (sanitizing auth values)
@@ -179,7 +180,7 @@ class CustomUnifiWebSocket:
                             sanitized_headers[key] = f"{value[:10]}...REDACTED..." if value else None
                         else:
                             sanitized_headers[key] = value
-                    LOGGER.debug("Using headers: %s", sanitized_headers)
+                    log_websocket("Using headers: %s", sanitized_headers)
                     
                     async with self.session.ws_connect(
                         self.url,
@@ -200,32 +201,29 @@ class CustomUnifiWebSocket:
                             if msg.type == WSMsgType.TEXT:
                                 try:
                                     data = orjson.loads(msg.data)
-                                    # Log messages based on DEBUG_WEBSOCKET
-                                    if DEBUG_WEBSOCKET:
-                                        # Get message type if available
-                                        meta = data.get("meta", {})
-                                        msg_type = meta.get("message", "unknown")
-                                        
-                                        # Check if this is a rule-related message
-                                        relevant_keywords = ["firewall", "rule", "policy", "traffic", "route", "port-forward", 
-                                                            "delete", "update", "insert", "events"]
-                                                            
-                                        # Look for keywords in message type or full message text
-                                        is_rule_related = any(keyword in msg_type.lower() for keyword in relevant_keywords) or \
-                                                        any(keyword in str(data).lower() for keyword in relevant_keywords)
-                                        
-                                        if is_rule_related:
-                                            # For rule-related messages, log with more detail
-                                            LOGGER.debug("Received rule-related WebSocket message (%s): %s", 
-                                                msg_type, str(data)[:150] + "..." if len(str(data)) > 150 else str(data))
-                                        else:
-                                            # For non-rule messages, just log the type
-                                            LOGGER.debug("Received WebSocket message: %s", msg_type)
-                                    
-                                    # Important rule messages always get logged at info level regardless of DEBUG_WEBSOCKET
-                                    message_str = str(data).lower()
+                                    # Get message type if available
                                     meta = data.get("meta", {})
-                                    msg_type = meta.get("message", "")
+                                    msg_type = meta.get("message", "unknown")
+                                    
+                                    # Use log_websocket instead of DEBUG_WEBSOCKET checks
+                                    # Check if this is a rule-related message
+                                    relevant_keywords = ["firewall", "rule", "policy", "traffic", "route", "port-forward", 
+                                                        "delete", "update", "insert", "events"]
+                                                        
+                                    # Look for keywords in message type or full message text
+                                    is_rule_related = any(keyword in msg_type.lower() for keyword in relevant_keywords) or \
+                                                    any(keyword in str(data).lower() for keyword in relevant_keywords)
+                                    
+                                    if is_rule_related:
+                                        # For rule-related messages, log with more detail
+                                        log_websocket("Received rule-related WebSocket message (%s): %s", 
+                                            msg_type, str(data)[:150] + "..." if len(str(data)) > 150 else str(data))
+                                    else:
+                                        # For non-rule messages, just log the type
+                                        log_websocket("Received WebSocket message: %s", msg_type)
+                                    
+                                    # Important rule messages always get logged at info level regardless of debug settings
+                                    message_str = str(data).lower()
                                     if any(keyword in message_str for keyword in ["firewall", "rule", "policy", "delete"]) or \
                                        any(keyword in msg_type.lower() for keyword in ["firewall", "rule", "policy", "delete"]):
                                         LOGGER.info("Important rule-related WebSocket message (%s)", msg_type)
@@ -248,43 +246,42 @@ class CustomUnifiWebSocket:
                 except client_exceptions.ClientConnectorError as err:
                     LOGGER.warning("Connection error with URL %s: %s", self.url, err)
                     # Continue to next URL
-                    continue
-                    
-                except aiohttp.WSServerHandshakeError as err:
-                    # Log the actual response to help diagnose
-                    LOGGER.debug("WebSocket handshake error response: %s", getattr(err, 'message', 'No message'))
-                    
-                    # Continue to the next URL
-                    LOGGER.warning("%s error with URL %s: %s", err.status, self.url, err)
-                    continue
-                    
-                except Exception as err:
-                    LOGGER.exception("Unexpected error with URL %s: %s", self.url, err)
+                
+                except client_exceptions.ClientResponseError as err:
+                    LOGGER.warning("HTTP error for WebSocket URL %s: %s", self.url, err)
+                    # Continue to next URL if we're still within our retry limit
+                
+                except client_exceptions.WSServerHandshakeError as err:
+                    # This happens when WebSocket URL is correct but authentication is missing
+                    LOGGER.warning("WebSocket handshake failed for %s", self.url)
+                    log_websocket("WebSocket handshake error response: %s", getattr(err, 'message', 'No message'))
+                    # This might be a good URL but with auth issues, don't immediately give up
+                
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    LOGGER.warning("Timeout connecting to %s", self.url)
                     # Continue to next URL
-                    continue
-                    
-                finally:
-                    self._connection = None
+                
+                except Exception as err:
+                    LOGGER.error("Unexpected error connecting to %s: %s", self.url, str(err))
+                    # Continue to next URL
+            
+            # If we get here, we've tried all URLs without success
+            LOGGER.error("Failed to connect to any WebSocket URLs. Check credentials and network connectivity.")
+            
+        except Exception as err:
+            LOGGER.error("Unhandled error in WebSocket connection: %s", str(err))
+        
         finally:
-            # Clean up temporary session if we created one
+            # Clean up temp session if we created one
             if need_temp_session and temp_session:
                 await temp_session.close()
-                if self.session == temp_session:  # Only reset if it hasn't been changed
-                    self.session = None
-            
-        # If we've tried all URLs and none worked
-        LOGGER.error("All WebSocket URL variants failed. Tried %d URLs: %s", 
-                  len(tried_urls), ", ".join(tried_urls))
+                self.session = None
                 
-        # Schedule a reconnection after a delay
-        if not self._close_requested and not asyncio.current_task().cancelled():
-            LOGGER.debug("WebSocket disconnected, reconnecting in 10 seconds...")
-            await asyncio.sleep(10)
+            # Schedule a retry if not explicitly stopped
             if not self._close_requested:
-                try:
-                    await self.start()
-                except Exception as restart_err:
-                    LOGGER.error("Error restarting WebSocket: %s", restart_err)
+                log_websocket("WebSocket disconnected, reconnecting in 10 seconds...")
+                await asyncio.sleep(10)
+                asyncio.create_task(self._connect())
 
     # Alias for set_callback to maintain compatibility
     def set_message_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:

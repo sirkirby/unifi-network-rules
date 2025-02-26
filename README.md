@@ -318,7 +318,60 @@ pytest tests
 
 We've created a [Bruno](https://github.com/sirkirby/bruno-udm-api) collection to manually test the API requests. These are the same requests that the integration makes. This is a great way to verify your credentials are valid and to verify device connectivity and compatibility.
 
-## Troubleshooting
+## Diagnostics and Debugging
+
+The integration includes targeted diagnostics and debugging capabilities to help troubleshoot issues while minimizing resource usage.
+
+### Standard Logging
+
+To enable debug logging for the entire integration, add the following to your `configuration.yaml`:
+
+```yaml
+logger:
+  logs:
+    custom_components.unifi_network_rules: debug
+    aiounifi: debug  # Also log the underlying UniFi library
+```
+
+### Targeted Debugging
+
+For more focused debugging of specific subsystems, you can enable only what you need by editing the constants in `custom_components/unifi_network_rules/const.py`:
+
+- `LOG_WEBSOCKET`: Enable detailed WebSocket connection and message logs
+- `LOG_API_CALLS`: Log API requests and responses
+- `LOG_DATA_UPDATES`: Log data refresh and update cycles
+- `LOG_ENTITY_CHANGES`: Log entity addition, removal, and state changes
+
+These targeted flags help reduce log noise when troubleshooting specific issues.
+
+### Home Assistant Diagnostics
+
+This integration supports Home Assistant's built-in diagnostics. To access:
+
+1. Go to Settings → Devices & Services → Integrations
+2. Find the UniFi Network Rules integration
+3. Click on Configure → Download Diagnostics
+4. Share the generated file when reporting issues
+
+The diagnostics provide essential information about your system configuration without exposing sensitive data.
+
+### Temporary Websocket Health Monitor
+
+For advanced troubleshooting of connectivity issues, the integration includes a WebSocket health monitor that can help identify connection problems with the UniFi controller.
+
+### Temporary Enable API Call Tracing [Advanced]
+
+To temporarily enable API call tracing for a session:
+
+1. SSH into your Home Assistant instance
+2. Enter the `/config/custom_components/unifi_network_rules` directory
+3. Edit the file: `const.py`
+4. Change `LOG_API_CALLS = False` to `LOG_API_CALLS = True`
+5. Restart Home Assistant
+
+*Remember to revert this change after troubleshooting to prevent excessive logging.*
+
+## General Troubleshooting
 
 If you are having trouble getting the integration to work, please check the following:
 
@@ -326,15 +379,6 @@ If you are having trouble getting the integration to work, please check the foll
 2. Ensure the UDM is connected to the same network as your Home Assistant instance.
 3. Ensure you are using the IP address of the UDM, not the hostname.
 4. Verify your local account has proper admin privileges.
-
-### Enable debug logging
-
-```yaml
-logger:
-  default: info
-  logs:
-    custom_components.unifi_network_rules: debug
-```
 
 ### Verify your local account is working
 
@@ -361,37 +405,6 @@ You can do this by logging into your UniFi device locally or via <https://UniFi.
 If you are having trouble getting the integration to work, please open an [Issue](https://github.com/sirkirby/UniFi-network-rules/issues) using the bug report template. Please enable debug logging and include the full log output in your report. Note that it may contain sensitive network information, so please review it before posting. The logs can be large, so i recommend attaching them as a file.
 
 To get the debug log, navigate Devices and Services -> UniFi Network Rules -> Enable Debug Logging. Then reload the integration and try to reproduce the issue. Finally, disable debug logging and download the log file.
-
-### WebSocket Connection Issues
-
-If you're experiencing issues with real-time updates from your UniFi device:
-
-1. **Enable Debug Logging**
-
-   Add the following to your Home Assistant `configuration.yaml` file:
-
-   ```yaml
-   logger:
-     logs:
-       custom_components.unifi_network_rules: debug
-       aiounifi: debug
-   ```
-
-   Then restart Home Assistant to apply the changes.
-
-2. **Check the Logs**
-
-   After enabling debug logging, check your Home Assistant logs for any errors related to WebSocket connections or API communication.
-
-3. **Report Issues**
-
-   If problems persist, please create an issue on GitHub with:
-   - Your debug logs showing the connection attempts
-   - The type of UniFi device you're using (UDM, UDM Pro, UDM SE, etc.)
-   - How you're accessing your UniFi controller (domain name, IP address, etc.)
-   - Whether you're using SSL or not
-
-**Note**: This integration uses both WebSocket for real-time updates and periodic polling (at your configured interval) to ensure data stays synchronized with your UniFi device.
 
 ## Limitations
 

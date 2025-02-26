@@ -85,7 +85,7 @@ from .const import (
     DEFAULT_SITE, 
     LEGACY_FIREWALL_RULES_ENDPOINT,
     SDN_STATUS_ENDPOINT,
-    DEBUG_WEBSOCKET,
+    DEBUG_WEBSOCKET,  # Keep for compatibility
     API_ENDPOINT_FIREWALL_POLICIES,
     API_ENDPOINT_FIREWALL_POLICIES_BATCH_DELETE,
     API_ENDPOINT_TRAFFIC_RULES,
@@ -96,6 +96,7 @@ from .const import (
 from .helpers.rule import get_rule_id
 from .utils.diagnostics import log_controller_diagnostics
 from .utils.websocket_handler import CustomUnifiWebSocket
+from .utils.logger import log_websocket, log_api
 
 class UnifiNetworkRulesError(HomeAssistantError):
     """Base error for UniFi Network Rules."""
@@ -268,9 +269,8 @@ class UDMAPI:
             self._apply_unifi_os_setting(True)
         
         # Log diagnostic info about the controller
-        if DEBUG_WEBSOCKET:
-            LOGGER.info("Logging controller diagnostics before login")
-            log_controller_diagnostics(self.controller, self)
+        log_websocket("Logging controller diagnostics before login")
+        log_controller_diagnostics(self.controller, self)
         
         # Check if this is a UDM device using SDN status endpoint before login
         await self._check_udm_device()
@@ -292,9 +292,8 @@ class UDMAPI:
             raise CannotConnect(f"Login failed: {login_err}")
         
         # Log diagnostic info after login
-        if DEBUG_WEBSOCKET:
-            LOGGER.info("Logging controller diagnostics after login")
-            log_controller_diagnostics(self.controller, self)
+        log_websocket("Logging controller diagnostics after login")
+        log_controller_diagnostics(self.controller, self)
         
         # Final check for UniFi OS detection
         if hasattr(self.controller, "is_unifi_os"):

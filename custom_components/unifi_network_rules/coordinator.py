@@ -18,6 +18,7 @@ from .const import DOMAIN, LOGGER, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
 from .udm_api import UDMAPI
 from .websocket import SIGNAL_WEBSOCKET_MESSAGE, UnifiRuleWebsocket
 from .helpers.rule import get_rule_id
+from .utils.logger import log_data, log_websocket
 
 # This is a fallback if no update_interval is specified
 SCAN_INTERVAL = timedelta(seconds=60)
@@ -25,14 +26,14 @@ SCAN_INTERVAL = timedelta(seconds=60)
 def _log_rule_info(rule: Any) -> None:
     """Log detailed information about a rule object."""
     try:
-        LOGGER.debug(
+        log_data(
             "Rule info - Type: %s, Dir: %s, Dict: %s", 
             type(rule),
-            dir(rule) if not isinstance(rule, dict) else "N/A",
-            rule if isinstance(rule, dict) else "Not a dict"
+            getattr(rule, "__dir__", lambda: ["no __dir__"])(),
+            rule.__dict__ if hasattr(rule, "__dict__") else repr(rule),
         )
-    except Exception as err:
-        LOGGER.error("Error logging rule info: %s", err)
+    except Exception as e:
+        LOGGER.debug("Error logging rule: %s", e)
 
 class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
     """Coordinator to manage data updates."""
@@ -399,22 +400,20 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             msg_type = meta.get("message", "")
             msg_data = message.get("data", {})
             
-            # Only log full message content for relevant message types or when explicitly requested
-            should_log_full = False
-            if DEBUG_WEBSOCKET:
-                # Relevant message types that are likely important for rules
-                relevant_types = [
-                    "firewall", "rule", "policy", "traffic", "route", "port-forward",
-                    "delete", "update", "insert", "events"
-                ]
-                
-                # Check if this is a relevant message type
-                if any(keyword in msg_type.lower() for keyword in relevant_types):
-                    should_log_full = True
-                    LOGGER.debug("Processing important WebSocket message: %s", message)
-                else:
-                    # For non-rule messages, just log the type without the full content
-                    LOGGER.debug("Received WebSocket message type: %s (non-rule related)", msg_type)
+            # Check for relevant message types
+            relevant_types = [
+                "firewall", "rule", "policy", "traffic", "route", "port-forward",
+                "delete", "update", "insert", "events"
+            ]
+            
+            # Check if this is a relevant message type
+            should_log_full = any(keyword in msg_type.lower() for keyword in relevant_types)
+            
+            if should_log_full:
+                log_websocket("Processing important WebSocket message: %s", message)
+            else:
+                # For non-rule messages, just log the type without the full content
+                log_websocket("Received WebSocket message type: %s (non-rule related)", msg_type)
             
             # Determine if we need to refresh data based on message
             should_refresh = False
@@ -457,13 +456,12 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                         break
             
             if should_refresh:
-                if DEBUG_WEBSOCKET:
-                    LOGGER.info("Refreshing data due to: %s", refresh_reason)
+                log_websocket("Refreshing data due to: %s", refresh_reason)
                 # Create a task to clear cache first, then refresh
                 asyncio.create_task(self._force_refresh_with_cache_clear())
-            elif DEBUG_WEBSOCKET and should_log_full:
+            elif should_log_full:
                 # Only log "no refresh" for messages we're fully logging
-                LOGGER.debug("No refresh triggered for relevant message type: %s", msg_type)
+                log_websocket("No refresh triggered for relevant message type: %s", msg_type)
 
         except Exception as err:
             LOGGER.error("Error handling websocket message: %s", err)
@@ -473,13 +471,11 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         try:
             # Clear API cache first
             await self.api.clear_cache()
-            if DEBUG_WEBSOCKET:
-                LOGGER.debug("Cache cleared before refresh")
+            log_data("Cache cleared before refresh")
             
             # Then force a data refresh
             await self.async_refresh()
-            if DEBUG_WEBSOCKET:
-                LOGGER.debug("Refresh completed after WebSocket event")
+            log_data("Refresh completed after WebSocket event")
         except Exception as err:
             LOGGER.error("Error during forced refresh: %s", err)
 
