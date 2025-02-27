@@ -147,6 +147,9 @@ class UDMAPI:
         self._consecutive_failures = 0
         self._max_backoff = 300  # Maximum backoff in seconds (5 minutes)
         
+        # Track last error message for authentication issue detection
+        self._last_error_message = ""
+        
         # Force unifi os detection
         self._force_unifi_os_detection()
 
@@ -970,13 +973,30 @@ class UDMAPI:
             )
             
             if not success:
-                LOGGER.error("Failed to toggle firewall policy: %s", error)
+                error_message = error or "Unknown error"
+                if "401 Unauthorized" in error_message or "403 Forbidden" in error_message:
+                    LOGGER.warning("Authentication issue when toggling firewall policy: %s", error_message)
+                    # Force a coordinator update to refresh all data properly
+                    if hasattr(self, "_on_auth_failure_callback") and self._on_auth_failure_callback:
+                        LOGGER.info("Triggering auth failure callback for data refresh")
+                        await self._on_auth_failure_callback()
+                else:
+                    LOGGER.error("Failed to toggle firewall policy: %s", error_message)
                 return False
                 
+            # After successful toggle, add a small delay to allow the change to propagate
+            # This helps prevent immediate refresh race conditions
+            await asyncio.sleep(0.5)
+            
             return True
         except Exception as err:
             LOGGER.error("Failed to toggle firewall policy: %s", str(err))
             return False
+            
+    # Method to set a callback for authentication failures
+    def set_auth_failure_callback(self, callback):
+        """Set a callback to be called on authentication failures during operations."""
+        self._on_auth_failure_callback = callback
 
     # Traffic Rules Methods
     async def get_traffic_rules(self) -> List[Any]:
@@ -1656,7 +1676,9 @@ class UDMAPI:
                     "Rate limit in effect. %s request blocked for %d more seconds.",
                     request_type, wait_time
                 )
-                return False, f"Rate limited for {wait_time} more seconds"
+                error_msg = f"Rate limited for {wait_time} more seconds"
+                self._last_error_message = error_msg
+                return False, error_msg
                 
         try:
             await action_coroutine()
@@ -1669,13 +1691,18 @@ class UDMAPI:
                 LOGGER.debug("Updating last successful login time based on successful API call")
                 self._last_successful_login = current_time
                 
+            # Clear last error message on success
+            self._last_error_message = ""
             return True, None
         except LoginRequired:
-            LOGGER.warning("%s failed: Session expired, attempting to reconnect", request_type)
-            return await self._handle_authentication_retry(request_type, action_coroutine, "Session expired")
+            error_msg = "Session expired"
+            LOGGER.warning("%s failed: %s, attempting to reconnect", request_type, error_msg)
+            self._last_error_message = error_msg
+            return await self._handle_authentication_retry(request_type, action_coroutine, error_msg)
         except RequestError as err:
             # Check for 403 Forbidden error which might indicate expired session
             error_message = str(err)
+            self._last_error_message = error_message
             if "403 Forbidden" in error_message:
                 LOGGER.warning("%s failed with 403 Forbidden, attempting to re-authenticate", request_type)
                 return await self._handle_authentication_retry(request_type, action_coroutine, "403 Forbidden")
@@ -1688,34 +1715,46 @@ class UDMAPI:
                 current_time = asyncio.get_event_loop().time()
                 self._rate_limit_until = current_time + backoff_time
                 
+                error_msg = f"Rate limited for {backoff_time} seconds"
                 LOGGER.error(
                     "Rate limit hit (429) during %s. Backing off for %d seconds.",
                     request_type, backoff_time
                 )
-                return False, f"Rate limited for {backoff_time} seconds"
+                return False, error_msg
             
             return False, f"Request failed: {err}"
         except (BadGateway, ServiceUnavailable) as err:
-            return False, f"Service unavailable: {err}"
+            error_msg = f"Service unavailable: {err}"
+            self._last_error_message = error_msg
+            return False, error_msg
         except ResponseError as err:
             # Check for 403 Forbidden error in response errors as well
             error_message = str(err) 
+            self._last_error_message = error_message
             if "403 Forbidden" in error_message:
                 LOGGER.warning("%s failed with 403 Forbidden in response, attempting to re-authenticate", request_type)
                 return await self._handle_authentication_retry(request_type, action_coroutine, "403 Forbidden in response")
             return False, f"Invalid response: {err}"
         except Unauthorized as err:
+            error_msg = f"Unauthorized error: {err}"
+            self._last_error_message = error_msg
             LOGGER.warning("%s failed with Unauthorized error, attempting to re-authenticate", request_type)
             return await self._handle_authentication_retry(request_type, action_coroutine, "Unauthorized error")
         except AiounifiException as err:
             # Check for 403 Forbidden in AiounifiException as well
             error_message = str(err)
+            self._last_error_message = error_message
             if "403 Forbidden" in error_message:
                 LOGGER.warning("%s failed with 403 Forbidden in AiounifiException, attempting to re-authenticate", request_type)
                 return await self._handle_authentication_retry(request_type, action_coroutine, "403 Forbidden in AiounifiException")
+            elif "401 Unauthorized" in error_message:
+                LOGGER.warning("%s failed with 401 Unauthorized in AiounifiException, attempting to re-authenticate", request_type)
+                return await self._handle_authentication_retry(request_type, action_coroutine, "401 Unauthorized in AiounifiException")
             return False, f"API error: {err}"
         except Exception as err:
-            return False, f"Unexpected error: {err}"
+            error_msg = f"Unexpected error: {err}"
+            self._last_error_message = error_msg
+            return False, error_msg
 
     async def _handle_authentication_retry(self, request_type: str, action_coroutine, error_context: str) -> Tuple[bool, Optional[str]]:
         """Common handler for authentication retry logic.
@@ -1747,8 +1786,26 @@ class UDMAPI:
             if not login_success:
                 return False, f"Login attempt failed after {error_context}"
                 
-            # Add a small delay after successful login to allow session to propagate
-            await asyncio.sleep(0.5)
+            # Add a longer delay after successful login to allow session to propagate
+            # This is critical to ensure session is fully established
+            LOGGER.debug("Authentication successful, waiting for session propagation")
+            await asyncio.sleep(1.5)  # Increased from 0.5 to 1.5 seconds
+            
+            # Verify session is fully propagated with a lightweight API call
+            try:
+                LOGGER.debug("Verifying session is fully established")
+                await self.get_system_stats()  # This is a lightweight API call
+                LOGGER.debug("Session verification successful, proceeding with original request")
+            except Exception as verify_err:
+                LOGGER.warning("Session verification failed: %s - waiting longer", verify_err)
+                # Give more time for session to propagate
+                await asyncio.sleep(2.0)
+                try:
+                    await self.get_system_stats()
+                    LOGGER.debug("Second session verification successful")
+                except Exception as second_verify_err:
+                    LOGGER.error("Second session verification failed: %s - proceeding anyway", second_verify_err)
+                    # Continue anyway - at least we tried
                 
             # Create a fresh coroutine for the retry
             try:
@@ -1757,7 +1814,7 @@ class UDMAPI:
             except Exception as retry_err:
                 LOGGER.error("Re-attempt failed after %s authentication: %s", error_context, retry_err)
                 # If the retry failed immediately after login, wait a bit longer and try one more time
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(1.5)  # Increased from 1.0 to 1.5 seconds
                 try:
                     await action_coroutine()
                     return True, None

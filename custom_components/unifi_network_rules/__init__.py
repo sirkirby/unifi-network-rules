@@ -166,7 +166,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 unsub()
         
         # Clean up everything
-        await coordinator.shutdown()
+        coordinator.shutdown()
         await websocket.stop_and_wait()
         await api.cleanup()
 

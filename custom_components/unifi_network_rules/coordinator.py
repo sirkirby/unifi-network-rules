@@ -55,6 +55,15 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         self._last_successful_data = None
         self._consecutive_errors = 0
         self._in_error_state = False
+        
+        # Add a lock to prevent concurrent updates during authentication
+        self._update_lock = asyncio.Lock()
+        # Track authentication in progress
+        self._authentication_in_progress = False
+
+        # Set auth failure callback on API
+        if hasattr(api, "set_auth_failure_callback"):
+            api.set_auth_failure_callback(self._handle_auth_failure)
 
         # Convert update_interval from seconds to timedelta
         update_interval_td = timedelta(seconds=update_interval)
@@ -81,199 +90,245 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
 
     async def _async_update_data(self) -> Dict[str, List[Any]]:
         """Fetch data from API endpoint."""
-        try:
-            # Proactively refresh the session to prevent 403 errors
-            # Only refresh every 5 minutes to avoid excessive API calls
-            refresh_interval = 300  # seconds
-            current_time = asyncio.get_event_loop().time()
-            last_refresh = getattr(self, "_last_session_refresh", 0)
-            
-            if current_time - last_refresh > refresh_interval:
-                LOGGER.debug("Proactively refreshing session")
-                try:
-                    # We'll track successful refreshes but not fail the update if refresh fails
-                    refresh_success = await self.api.refresh_session()
-                    if refresh_success:
-                        self._last_session_refresh = current_time
-                        LOGGER.debug("Session refresh successful")
-                    else:
-                        LOGGER.warning("Session refresh skipped or failed, continuing with update")
-                except Exception as refresh_err:
-                    LOGGER.warning("Failed to refresh session: %s", str(refresh_err))
-                    # Continue with update despite refresh failure
-            
-            # Ensure we always use force_refresh to avoid stale data issues
-            LOGGER.debug("Starting data refresh cycle with force_refresh=True")
-            
-            # Initialize with empty lists for each rule type
-            rules_data: Dict[str, List[Any]] = {
-                "firewall_policies": [],
-                "traffic_rules": [],
-                "port_forwards": [],
-                "traffic_routes": [],
-                "firewall_zones": [],
-                "wlans": [],
-                "legacy_firewall_rules": []
-            }
-            
-            # Store the previous data to detect deletions
-            previous_data = self.data.copy() if self.data else {}
-            
-            # Check if we're rate limited before proceeding
-            if hasattr(self.api, "_rate_limited") and self.api._rate_limited:
-                current_time = asyncio.get_event_loop().time()
-                if current_time < getattr(self.api, "_rate_limit_until", 0):
-                    # If rate limited, return last good data and don't attempt API calls
-                    LOGGER.warning(
-                        "Rate limit in effect. Skipping update and returning last good data. "
-                        "This prevents excessive API calls during rate limiting."
-                    )
-                    if self._last_successful_data:
+        # Use a lock to prevent concurrent updates, especially during authentication
+        if self._update_lock.locked():
+            LOGGER.debug("Another update is already in progress, waiting for it to complete")
+            # If an update is already in progress, wait for it to complete and use its result
+            if self.data:
+                return self.data
+            elif self._last_successful_data:
+                return self._last_successful_data
+        
+        async with self._update_lock:
+            try:
+                # Track authentication state at start of update
+                authentication_active = self._authentication_in_progress
+                if authentication_active:
+                    LOGGER.warning("Update started while authentication is in progress - using cached data")
+                    if self.data:
+                        return self.data
+                    elif self._last_successful_data:
                         return self._last_successful_data
-                    else:
-                        return rules_data
-            
-            # Clear any caches before fetching to ensure we get fresh data
-            await self.api.clear_cache()
-            
-            # Log the start of the update process
-            LOGGER.debug("Beginning rule data collection with fresh cache")
-            
-            # Periodically force a cleanup of stale entities (once per hour)
-            force_cleanup_interval = 3600  # seconds
-            last_cleanup = getattr(self, "_last_entity_cleanup", 0)
-            if current_time - last_cleanup > force_cleanup_interval:
-                setattr(self, "_force_cleanup", True)
-                setattr(self, "_last_entity_cleanup", current_time)
-                LOGGER.debug("Scheduling forced entity cleanup after this update cycle")
-            
-            # Add delay between API calls to avoid rate limiting
-            # Increase the delay for more aggressive throttling
-            api_call_delay = 1.0  # seconds (increased from default)
-            
-            # First get firewall policies
-            await self._update_firewall_policies(rules_data)
-            await asyncio.sleep(api_call_delay)
-            
-            # Then port forwards
-            await self._update_port_forwards(rules_data)
-            await asyncio.sleep(api_call_delay)
-            
-            # Then traffic routes
-            await self._update_traffic_routes(rules_data)
-            await asyncio.sleep(api_call_delay)
-            
-            # Then firewall zones
-            await self._update_firewall_zones(rules_data)
-            await asyncio.sleep(api_call_delay)
-            
-            # Then WLANs
-            await self._update_wlans(rules_data)
-            await asyncio.sleep(api_call_delay)
-            
-            # Then traffic rules
-            await self._update_traffic_rules(rules_data)
-            await asyncio.sleep(api_call_delay)
-            
-            # Finally legacy firewall rules
-            await self._update_legacy_firewall_rules(rules_data)
-            
-            # Log detailed info for traffic routes
-            LOGGER.debug("Traffic routes received: %d items", len(rules_data["traffic_routes"]))
-            for route in rules_data["traffic_routes"]:
-                _log_rule_info(route)
-            
-            # Verify the data is valid - check if we have at least some data in key categories
-            # This helps prevent entity removal during temporary API errors
-            data_valid = (
-                len(rules_data["firewall_policies"]) > 0 or 
-                len(rules_data["traffic_rules"]) > 0 or
-                len(rules_data["port_forwards"]) > 0 or
-                len(rules_data["traffic_routes"]) > 0
-            )
-            
-            # If we get no data but had data before, likely a temporary API issue
-            if not data_valid and previous_data and any(
-                len(previous_data.get(key, [])) > 0 
-                for key in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes"]
-            ):
-                # We're in a potential error state
-                self._consecutive_errors += 1
-                LOGGER.warning(
-                    "No valid rule data received but had previous data. "
-                    "Likely a temporary API issue (attempt %d).", 
-                    self._consecutive_errors
+                
+                # Proactively refresh the session to prevent 403 errors
+                # Only refresh every 5 minutes to avoid excessive API calls
+                refresh_interval = 300  # seconds
+                current_time = asyncio.get_event_loop().time()
+                last_refresh = getattr(self, "_last_session_refresh", 0)
+                
+                if current_time - last_refresh > refresh_interval:
+                    LOGGER.debug("Proactively refreshing session")
+                    try:
+                        # We'll track successful refreshes but not fail the update if refresh fails
+                        refresh_success = await self.api.refresh_session()
+                        if refresh_success:
+                            self._last_session_refresh = current_time
+                            LOGGER.debug("Session refresh successful")
+                        else:
+                            LOGGER.warning("Session refresh skipped or failed, continuing with update")
+                    except Exception as refresh_err:
+                        LOGGER.warning("Failed to refresh session: %s", str(refresh_err))
+                        # Continue with update despite refresh failure
+                
+                # Ensure we always use force_refresh to avoid stale data issues
+                LOGGER.debug("Starting data refresh cycle with force_refresh=True")
+                
+                # Initialize with empty lists for each rule type
+                rules_data: Dict[str, List[Any]] = {
+                    "firewall_policies": [],
+                    "traffic_rules": [],
+                    "port_forwards": [],
+                    "traffic_routes": [],
+                    "firewall_zones": [],
+                    "wlans": [],
+                    "legacy_firewall_rules": []
+                }
+                
+                # Store the previous data to detect deletions and protect against API failures
+                previous_data = self.data.copy() if self.data else {}
+                
+                # Check if we're rate limited before proceeding
+                if hasattr(self.api, "_rate_limited") and self.api._rate_limited:
+                    current_time = asyncio.get_event_loop().time()
+                    if current_time < getattr(self.api, "_rate_limit_until", 0):
+                        # If rate limited, return last good data and don't attempt API calls
+                        LOGGER.warning(
+                            "Rate limit in effect. Skipping update and returning last good data. "
+                            "This prevents excessive API calls during rate limiting."
+                        )
+                        if self._last_successful_data:
+                            return self._last_successful_data
+                        else:
+                            return rules_data
+                
+                # Clear any caches before fetching to ensure we get fresh data
+                await self.api.clear_cache()
+                
+                # Log the start of the update process
+                LOGGER.debug("Beginning rule data collection with fresh cache")
+                
+                # Periodically force a cleanup of stale entities (once per hour)
+                force_cleanup_interval = 3600  # seconds
+                last_cleanup = getattr(self, "_last_entity_cleanup", 0)
+                if current_time - last_cleanup > force_cleanup_interval:
+                    setattr(self, "_force_cleanup", True)
+                    setattr(self, "_last_entity_cleanup", current_time)
+                    LOGGER.debug("Scheduling forced entity cleanup after this update cycle")
+                
+                # Add delay between API calls to avoid rate limiting
+                # Increase the delay for more aggressive throttling
+                api_call_delay = 1.0  # seconds (increased from default)
+                
+                # Track authentication failures during the update
+                auth_failure_during_update = False
+                
+                # First get firewall policies
+                await self._update_firewall_policies(rules_data)
+                await asyncio.sleep(api_call_delay)
+                
+                # Then port forwards - CRITICAL to preserve during auth failures
+                port_forwards_success = await self._update_port_forwards(rules_data)
+                if not port_forwards_success and "401 Unauthorized" in str(self.api._last_error_message):
+                    auth_failure_during_update = True
+                    LOGGER.warning("Authentication failure detected during port forwards fetch")
+                    # Preserve previous port forwards data if available
+                    if previous_data and "port_forwards" in previous_data and previous_data["port_forwards"]:
+                        LOGGER.info("Preserving previous port forwards data during authentication failure")
+                        rules_data["port_forwards"] = previous_data["port_forwards"]
+                
+                await asyncio.sleep(api_call_delay)
+                
+                # Then traffic routes
+                await self._update_traffic_routes(rules_data)
+                await asyncio.sleep(api_call_delay)
+                
+                # Then firewall zones
+                await self._update_firewall_zones(rules_data)
+                await asyncio.sleep(api_call_delay)
+                
+                # Then WLANs
+                await self._update_wlans(rules_data)
+                await asyncio.sleep(api_call_delay)
+                
+                # Then traffic rules
+                await self._update_traffic_rules(rules_data)
+                await asyncio.sleep(api_call_delay)
+                
+                # Finally legacy firewall rules
+                await self._update_legacy_firewall_rules(rules_data)
+                
+                # Log detailed info for traffic routes
+                LOGGER.debug("Traffic routes received: %d items", len(rules_data["traffic_routes"]))
+                for route in rules_data["traffic_routes"]:
+                    _log_rule_info(route)
+                
+                # Verify the data is valid - check if we have at least some data in key categories
+                # This helps prevent entity removal during temporary API errors
+                data_valid = (
+                    len(rules_data["firewall_policies"]) > 0 or 
+                    len(rules_data["traffic_rules"]) > 0 or
+                    len(rules_data["port_forwards"]) > 0 or
+                    len(rules_data["traffic_routes"]) > 0
                 )
                 
-                # If this is a persistent issue (3+ consecutive failures)
-                if self._consecutive_errors >= 3:
-                    if not self._in_error_state:
-                        LOGGER.error(
-                            "Multiple consecutive empty data responses. "
-                            "API may be experiencing issues. Using last valid data."
-                        )
-                        self._in_error_state = True
+                # Special handling for authentication failures
+                if auth_failure_during_update:
+                    LOGGER.warning("Authentication issues detected during update - preserving existing data")
+                    # If authentication failures occurred, preserve previous data for key categories
+                    for key in ["port_forwards", "firewall_policies", "traffic_rules", "traffic_routes"]:
+                        if not rules_data[key] and previous_data and key in previous_data and previous_data[key]:
+                            LOGGER.info(f"Preserving previous {key} data due to authentication issues")
+                            rules_data[key] = previous_data[key]
+                
+                # If we get no data but had data before, likely a temporary API issue
+                if not data_valid and previous_data and any(
+                    len(previous_data.get(key, [])) > 0 
+                    for key in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes"]
+                ):
+                    # We're in a potential error state
+                    self._consecutive_errors += 1
+                    LOGGER.warning(
+                        "No valid rule data received but had previous data. "
+                        "Likely a temporary API issue (attempt %d).", 
+                        self._consecutive_errors
+                    )
+                    
+                    # If this is a persistent issue (3+ consecutive failures)
+                    if self._consecutive_errors >= 3:
+                        if not self._in_error_state:
+                            LOGGER.error(
+                                "Multiple consecutive empty data responses. "
+                                "API may be experiencing issues. Using last valid data."
+                            )
+                            self._in_error_state = True
+                            
+                        # Return last known good data instead of empty data
+                        if self._last_successful_data:
+                            LOGGER.info("Using cached data from last successful update")
+                            return self._last_successful_data
                         
-                    # Return last known good data instead of empty data
-                    if self._last_successful_data:
-                        LOGGER.info("Using cached data from last successful update")
-                        return self._last_successful_data
-                    
-                # Try forcing a session refresh on error
-                LOGGER.info("Forcing session refresh due to API data issue")
-                try:
-                    await self.api.refresh_session()
-                except Exception as session_err:
-                    LOGGER.error("Failed to refresh session during error recovery: %s", session_err)
-                
-                # If we have previous data and this is likely a temporary failure, return previous data
-                if previous_data:
-                    LOGGER.info("Returning previous data during API issue")
-                    return previous_data
-                    
-                # Otherwise, raise an error
-                raise UpdateFailed("Failed to get any valid rule data")
-            
-            # If we got here with valid data, reset error counters
-            if data_valid:
-                if self._consecutive_errors > 0:
-                    LOGGER.info("Recovered from API data issue after %d attempts", self._consecutive_errors)
-                self._consecutive_errors = 0
-                self._in_error_state = False
-                self._last_successful_data = rules_data.copy()
-                
-                # Check for deleted rules and dispatch events for each
-                if previous_data:
-                    LOGGER.debug("Checking for deleted rules in latest update")
-                    self._check_for_deleted_rules(previous_data, rules_data)
-                
-            return rules_data
-            
-        except Exception as err:
-            LOGGER.error("Error updating coordinator data: %s", err)
-            
-            # Check if this is an authentication error
-            if "401 Unauthorized" in str(err) or "403 Forbidden" in str(err):
-                self._auth_failures += 1
-                LOGGER.warning("Authentication failure #%d during data update", self._auth_failures)
-                
-                # Try to refresh the session if we haven't exceeded max failures
-                if self._auth_failures < self._max_auth_failures:
-                    LOGGER.info("Attempting to refresh authentication session")
+                    # Try forcing a session refresh on error - mark authentication in progress
+                    self._authentication_in_progress = True
                     try:
+                        LOGGER.info("Forcing session refresh due to API data issue")
                         await self.api.refresh_session()
-                        # If we succeeded in refreshing, return the previous data
-                        if self.data:
-                            return self.data
-                    except Exception as refresh_err:
-                        LOGGER.error("Failed to refresh session: %s", refresh_err)
-            
-            # Return previous data during errors if available to prevent entity flickering
-            if self.data:
-                LOGGER.info("Returning previous data during error")
-                return self.data
+                    except Exception as session_err:
+                        LOGGER.error("Failed to refresh session during error recovery: %s", session_err)
+                    finally:
+                        self._authentication_in_progress = False
+                    
+                    # If we have previous data and this is likely a temporary failure, return previous data
+                    if previous_data:
+                        LOGGER.info("Returning previous data during API issue")
+                        return previous_data
+                        
+                    # Otherwise, raise an error
+                    raise UpdateFailed("Failed to get any valid rule data")
                 
-            raise UpdateFailed(f"Error updating data: {err}")
+                # If we got here with valid data, reset error counters
+                if data_valid:
+                    if self._consecutive_errors > 0:
+                        LOGGER.info("Recovered from API data issue after %d attempts", self._consecutive_errors)
+                    self._consecutive_errors = 0
+                    self._in_error_state = False
+                    self._last_successful_data = rules_data.copy()
+                    
+                    # Check for deleted rules and dispatch events for each
+                    if previous_data:
+                        LOGGER.debug("Checking for deleted rules in latest update")
+                        self._check_for_deleted_rules(previous_data, rules_data)
+                    
+                return rules_data
+                
+            except Exception as err:
+                LOGGER.error("Error updating coordinator data: %s", err)
+                
+                # Check if this is an authentication error
+                if "401 Unauthorized" in str(err) or "403 Forbidden" in str(err):
+                    self._auth_failures += 1
+                    self._authentication_in_progress = True
+                    try:
+                        LOGGER.warning("Authentication failure #%d during data update", self._auth_failures)
+                        
+                        # Try to refresh the session if we haven't exceeded max failures
+                        if self._auth_failures < self._max_auth_failures:
+                            LOGGER.info("Attempting to refresh authentication session")
+                            try:
+                                await self.api.refresh_session()
+                                # If we succeeded in refreshing, return the previous data
+                                if self.data:
+                                    return self.data
+                            except Exception as refresh_err:
+                                LOGGER.error("Failed to refresh session: %s", refresh_err)
+                    finally:
+                        self._authentication_in_progress = False
+                
+                # Return previous data during errors if available to prevent entity flickering
+                if self.data:
+                    LOGGER.info("Returning previous data during error")
+                    return self.data
+                    
+                raise UpdateFailed(f"Error updating data: {err}")
 
     def _check_for_deleted_rules(self, previous_data: Dict[str, List[Any]], new_data: Dict[str, List[Any]]) -> None:
         """Check for rules that existed in previous data but not in new data."""
@@ -487,9 +542,23 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         """Update traffic rules."""
         await self._update_rule_type(data, "traffic_rules", self.api.get_traffic_rules)
 
-    async def _update_port_forwards(self, data: Dict[str, List[Any]]) -> None:
-        """Update port forwards."""
-        await self._update_rule_type(data, "port_forwards", self.api.get_port_forwards)
+    async def _update_port_forwards(self, data: Dict[str, List[Any]]) -> bool:
+        """Update port forwards.
+        
+        Returns True if successful, False if there was an error.
+        """
+        try:
+            rules = await self.api.get_port_forwards()
+            rules_list = list(rules)
+            LOGGER.debug(f"Fetched {len(rules_list)} port_forwards")
+            data["port_forwards"] = rules_list
+            return True
+        except Exception as err:
+            LOGGER.error(f"Error fetching port_forwards: {err}")
+            # Store the last error message for authentication checking
+            self.api._last_error_message = str(err)
+            data["port_forwards"] = []
+            return False
 
     async def _update_traffic_routes(self, data: Dict[str, List[Any]]) -> None:
         """Update traffic routes."""
@@ -651,3 +720,12 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         """Clean up resources."""
         for cleanup_callback in self._cleanup_callbacks:
             cleanup_callback()
+
+    async def _handle_auth_failure(self):
+        """Handle authentication failures from API operations."""
+        LOGGER.info("Authentication failure callback triggered, requesting data refresh")
+        # Reset authentication flag
+        self._authentication_in_progress = False
+        # Request a refresh with some delay to allow auth to stabilize
+        await asyncio.sleep(2.0)
+        await self.async_refresh()
