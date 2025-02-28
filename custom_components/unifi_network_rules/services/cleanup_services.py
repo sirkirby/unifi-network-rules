@@ -15,7 +15,6 @@ from ..const import DOMAIN, LOGGER
 from .constants import (
     SERVICE_FORCE_CLEANUP,
     SERVICE_FORCE_REMOVE_STALE,
-    SIGNAL_ENTITIES_CLEANUP,
 )
 
 # Schema for force_remove_stale service

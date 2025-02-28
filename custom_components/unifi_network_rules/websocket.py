@@ -17,7 +17,7 @@ from .const import (
     SIGNAL_WEBSOCKET_EVENT,
     DEBUG_WEBSOCKET,  # Keep for backward compatibility
 )
-from .udm_api import UDMAPI
+from .udm import UDMAPI
 from .utils.diagnostics import log_controller_diagnostics
 from .utils.logger import log_websocket
 

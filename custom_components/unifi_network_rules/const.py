@@ -46,16 +46,10 @@ MAX_FAILED_ATTEMPTS: Final = 5
 # Config entry keys
 CONF_SITE_ID: Final = "site_id"
 CONF_UPDATE_INTERVAL: Final = "update_interval"
-
-# API endpoints - using v2 API endpoints where available
-FIREWALL_RULE_ENDPOINT: Final = "/proxy/network/api/s/{site}/rest/firewallrule"
-LEGACY_FIREWALL_RULES_ENDPOINT: Final = "/proxy/network/api/s/{site}/rest/firewallrule"
-
 CONF_MAX_RETRIES = "max_retries"
 CONF_RETRY_DELAY = "retry_delay"
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_DELAY = 1
-
 CONF_UPDATE_INTERVAL = "update_interval"
 DEFAULT_UPDATE_INTERVAL = 300  # 5 minutes - longer interval is fine since websocket provides real-time updates
 SESSION_TIMEOUT = 30
@@ -75,33 +69,59 @@ SIGNAL_WEBSOCKET_EVENT = f"{DOMAIN}_websocket_event"
 SERVICE_APPLY_TEMPLATE = "apply_template"
 SERVICE_SAVE_TEMPLATE = "save_template"
 
+# Backup and Restore
+BACKUP_FILE_PREFIX = "unr_backup"
+BACKUP_LOCATION = "/"
+CONF_FILENAME = "network_rules.json"
+CONF_RULE_IDS = ""
+CONF_NAME_FILTER = ""
+CONF_RULE_TYPES = ""
+
 # Configuration
 CONF_TEMPLATE_ID = "template_id"
 CONF_TEMPLATE_VARIABLES = "variables"
 CONF_RULE_TYPE = "rule_type"
 
 # API Endpoints
-SITE_FEATURE_MIGRATION_ENDPOINT = "/proxy/network/v2/api/site/{site}/site-feature-migration"
-FIREWALL_POLICIES_ENDPOINT = "/proxy/network/v2/api/site/{site}/firewall-policies"
-FIREWALL_POLICIES_DELETE_ENDPOINT = "/proxy/network/v2/api/site/{site}/firewall-policies/batch-delete"
-TRAFFIC_ROUTES_ENDPOINT = "/proxy/network/v2/api/site/{site}/trafficroutes"
-LEGACY_TRAFFIC_RULES_ENDPOINT = "/proxy/network/v2/api/site/{site}/trafficrules"
-FIREWALL_ZONE_MATRIX_ENDPOINT = "/proxy/network/v2/api/site/{site}/firewall/zone-matrix"
-FIREWALL_POLICY_TOGGLE_ENDPOINT = "/proxy/network/v2/api/site/{site}/firewall-policies/batch"
-PORT_FORWARD_ENDPOINT = "/proxy/network/api/s/{site}/rest/portforward"
-
-# V2 API EndPoint Constants for ApiRequestV2
+API_ENDPOINT_SITE_FEATURE_MIGRATION = "/site-feature-migration"
 API_ENDPOINT_FIREWALL_POLICIES = "/firewall-policies"
+API_ENDPOINT_FIREWALL_POLICIES_BATCH_UPDATE = "/proxy/network/v2/api/site/{site}/firewall-policies/batch"
 API_ENDPOINT_FIREWALL_POLICIES_BATCH_DELETE = "/firewall-policies/batch-delete"
-API_ENDPOINT_TRAFFIC_RULES = "/trafficrules"
-API_ENDPOINT_TRAFFIC_RULE_DETAIL = "/trafficrules/{rule_id}"
-API_ENDPOINT_TRAFFIC_ROUTES = "/trafficroutes"
-API_ENDPOINT_TRAFFIC_ROUTE_DETAIL = "/trafficroutes/{route_id}"
+API_ENDPOINT_TRAFFIC_ROUTES  = "/proxy/network/v2/api/site/{site}/trafficroutes"
+API_ENDPOINT_TRAFFIC_ROUTES_DETAIL = "/proxy/network/v2/api/site/{site}/trafficroutes/{route_id}"
+API_ENDPOINT_LEGACY_TRAFFIC_RULES = "/proxy/network/v2/api/site/{site}/trafficrules"
+API_ENDPOINT_LEGACY_TRAFFIC_RULES_DETAIL = "/proxy/network/v2/api/site/{site}/trafficrules/{rule_id}"
+API_ENDPOINT_LEGACY_FIREWALL_RULES = "/proxy/network/api/s/{site}/rest/firewallrule"
+API_ENDPOINT_LEGACY_FIREWALL_RULES_DETAIL = "/proxy/network/api/s/{site}/rest/firewallrule/{rule_id}"
+API_ENDPOINT_FIREWALL_ZONES = "/proxy/network/v2/api/site/{site}/firewall/zones"
+API_ENDPOINT_WLANS = "/proxy/network/api/s/{site}/rest/wlanconf"
+API_ENDPOINT_WLAN_DETAIL = "/proxy/network/api/s/{site}/rest/wlanconf/{wlan_id}"
+API_ENDPOINT_FIREWALL_ZONE_MATRIX = "/proxy/network/v2/api/site/{site}/firewall/zone-matrix"
+API_ENDPOINT_PORT_FORWARD = "/proxy/network/api/s/{site}/rest/portforward"
+API_ENDPOINT_PORT_FORWARD_DETAIL = "/proxy/network/api/s/{site}/rest/portforward/{forward_id}"
+
+# API Paths used for aiounifi API Requests
+API_PATH_FIREWALL_POLICIES = "/firewall-policies"
+API_PATH_FIREWALL_POLICIES_BATCH_DELETE = "/firewall-policies/batch-delete"
+API_PATH_FIREWALL_POLICIES_BATCH_UPDATE = "/firewall-policies/batch"
+API_PATH_LEGACY_TRAFFIC_RULES = "/trafficrules"
+API_PATH_LEGACY_TRAFFIC_RULE_DETAIL = "/trafficrules/{rule_id}"
+API_PATH_LEGACY_FIREWALL_RULES = "/firewallrule"
+API_PATH_LEGACY_FIREWALL_RULE_DETAIL = "/firewallrule/{rule_id}"
+API_PATH_TRAFFIC_ROUTES = "/trafficroutes"
+API_PATH_TRAFFIC_ROUTE_DETAIL = "/trafficroutes/{route_id}"
+API_PATH_PORT_FORWARDS = "/portforward"
+API_PATH_PORT_FORWARD_DETAIL = "/portforward/{forward_id}"
+API_PATH_FIREWALL_ZONES = "/firewall/zones"
+API_PATH_FIREWALL_ZONE_MATRIX = "/firewall/zone-matrix"
+API_PATH_WLANS = "/wlanconf"
+API_PATH_WLAN_DETAIL = "/wlanconf/{wlan_id}"
+API_PATH_SITE_FEATURE_MIGRATION = "/site-feature-migration"
 
 # Detection endpoints
-SDN_STATUS_ENDPOINT = "/proxy/network/api/s/{site}/stat/sdn"
+API_ENDPOINT_SDN_STATUS = "/proxy/network/api/s/{site}/stat/sdn"
 
-AUTH_LOGIN_ENDPOINT = "/api/auth/login"
+API_ENDPOINT_AUTH_LOGIN = "/api/auth/login"
 
 ZONE_BASED_FIREWALL_FEATURE = "ZONE_BASED_FIREWALL"
 

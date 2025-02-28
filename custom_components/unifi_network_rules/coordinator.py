@@ -13,12 +13,15 @@ from aiounifi.models.traffic_route import TrafficRoute
 from aiounifi.models.firewall_policy import FirewallPolicy
 from aiounifi.models.traffic_rule import TrafficRule
 from aiounifi.models.port_forward import PortForward
+from aiounifi.models.firewall_zone import FirewallZone
+from aiounifi.models.wlan import Wlan
 
 from .const import DOMAIN, LOGGER, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DEBUG_WEBSOCKET
-from .udm_api import UDMAPI
+from .udm import UDMAPI
 from .websocket import SIGNAL_WEBSOCKET_MESSAGE, UnifiRuleWebsocket
 from .helpers.rule import get_rule_id
 from .utils.logger import log_data, log_websocket
+from .models.firewall_rule import FirewallRule  # Import the FirewallRule type
 
 # This is a fallback if no update_interval is specified
 SCAN_INTERVAL = timedelta(seconds=60)
@@ -26,12 +29,33 @@ SCAN_INTERVAL = timedelta(seconds=60)
 def _log_rule_info(rule: Any) -> None:
     """Log detailed information about a rule object."""
     try:
-        log_data(
-            "Rule info - Type: %s, Dir: %s, Dict: %s", 
-            type(rule),
-            getattr(rule, "__dir__", lambda: ["no __dir__"])(),
-            rule.__dict__ if hasattr(rule, "__dict__") else repr(rule),
-        )
+        # For all API objects with common properties (including FirewallRule)
+        if hasattr(rule, "id") and hasattr(rule, "raw"):
+            # Get common attributes that most rule objects have
+            attrs = {
+                "ID": getattr(rule, "id", ""),
+                "Name": getattr(rule, "name", ""),
+                "Enabled": getattr(rule, "enabled", False)
+            }
+            
+            # Add description if available
+            if hasattr(rule, "description"):
+                attrs["Description"] = getattr(rule, "description", "")
+                
+            # Log the common attributes
+            log_data(
+                "Rule info - Type: %s, Attributes: %s",
+                type(rule),
+                attrs
+            )
+        else:
+            # Fallback for other objects
+            log_data(
+                "Rule info - Type: %s, Dir: %s, Dict: %s", 
+                type(rule),
+                getattr(rule, "__dir__", lambda: ["no __dir__"])(),
+                rule.__dict__ if hasattr(rule, "__dict__") else repr(rule),
+            )
     except Exception as e:
         LOGGER.debug("Error logging rule: %s", e)
 
@@ -88,6 +112,42 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             )
         )
 
+        # For tracking entity updates
+        self.device_name = None
+        self.data: Dict[str, Any] = {}
+        
+        # Rule collections - initialized during update
+        self.port_forwards: List[PortForward] = []
+        self.traffic_routes: List[TrafficRoute] = []
+        self.firewall_policies: List[FirewallPolicy] = []
+        self.traffic_rules: List[TrafficRule] = []
+        self.legacy_firewall_rules: List[FirewallRule] = []
+        self.firewall_zones: List[FirewallZone] = []
+        self.wlans: List[Wlan] = []
+        
+        # Sets to track what rules we have seen for deletion detection
+        self._tracked_port_forwards = set()
+        self._tracked_routes = set()
+        self._tracked_policies = set()
+        self._tracked_traffic_rules = set()
+        self._tracked_firewall_rules = set()  
+        self._tracked_wlans = set()
+        
+        # Entity removal callback
+        self._entity_removal_callback = None
+        
+        # Entity creation callback
+        self.on_create_entity = None
+        
+        # Task handling queued entity creation
+        self._queue_task = None
+        self._queue_lock = asyncio.Lock()
+        self._entity_creation_queue = []
+
+        # API fetch counts
+        self._api_requests = 0
+        self._api_errors = 0
+
     async def _async_update_data(self) -> Dict[str, List[Any]]:
         """Fetch data from API endpoint."""
         # Use a lock to prevent concurrent updates, especially during authentication
@@ -109,6 +169,11 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                         return self.data
                     elif self._last_successful_data:
                         return self._last_successful_data
+                
+                # ADDED: Log at start of update
+                LOGGER.info("Starting data update process - current data state: %s", 
+                           {k: len(v) if isinstance(v, list) else v 
+                            for k, v in (self.data or {}).items()})
                 
                 # Proactively refresh the session to prevent 403 errors
                 # Only refresh every 5 minutes to avoid excessive API calls
@@ -183,11 +248,11 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 auth_failure_during_update = False
                 
                 # First get firewall policies
-                await self._update_firewall_policies(rules_data)
+                await self._update_firewall_policies_in_dict(rules_data)
                 await asyncio.sleep(api_call_delay)
                 
                 # Then port forwards - CRITICAL to preserve during auth failures
-                port_forwards_success = await self._update_port_forwards(rules_data)
+                port_forwards_success = await self._update_port_forwards_in_dict(rules_data)
                 if not port_forwards_success and "401 Unauthorized" in str(self.api._last_error_message):
                     auth_failure_during_update = True
                     LOGGER.warning("Authentication failure detected during port forwards fetch")
@@ -199,23 +264,23 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 await asyncio.sleep(api_call_delay)
                 
                 # Then traffic routes
-                await self._update_traffic_routes(rules_data)
+                await self._update_traffic_routes_in_dict(rules_data)
                 await asyncio.sleep(api_call_delay)
                 
                 # Then firewall zones
-                await self._update_firewall_zones(rules_data)
+                await self._update_firewall_zones_in_dict(rules_data)
                 await asyncio.sleep(api_call_delay)
                 
                 # Then WLANs
-                await self._update_wlans(rules_data)
+                await self._update_wlans_in_dict(rules_data)
                 await asyncio.sleep(api_call_delay)
                 
                 # Then traffic rules
-                await self._update_traffic_rules(rules_data)
+                await self._update_traffic_rules_in_dict(rules_data)
                 await asyncio.sleep(api_call_delay)
                 
                 # Finally legacy firewall rules
-                await self._update_legacy_firewall_rules(rules_data)
+                await self._update_legacy_firewall_rules_in_dict(rules_data)
                 
                 # Log detailed info for traffic routes
                 LOGGER.debug("Traffic routes received: %d items", len(rules_data["traffic_routes"]))
@@ -293,10 +358,28 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                     self._in_error_state = False
                     self._last_successful_data = rules_data.copy()
                     
-                    # Check for deleted rules and dispatch events for each
+                    # Check for deleted rules in latest update
                     if previous_data:
                         LOGGER.debug("Checking for deleted rules in latest update")
                         self._check_for_deleted_rules(previous_data, rules_data)
+                    
+                    # Update rule collections from new data for immediate use
+                    self.port_forwards = rules_data.get("port_forwards", [])
+                    self.traffic_routes = rules_data.get("traffic_routes", [])
+                    self.firewall_policies = rules_data.get("firewall_policies", [])
+                    self.traffic_rules = rules_data.get("traffic_rules", [])
+                    self.legacy_firewall_rules = rules_data.get("legacy_firewall_rules", [])
+                    self.wlans = rules_data.get("wlans", [])
+                    self.firewall_zones = rules_data.get("firewall_zones", [])
+                    
+                    # Log the populated rule counts
+                    LOGGER.info("Rule collections after update: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d", 
+                               len(self.port_forwards),
+                               len(self.traffic_routes),
+                               len(self.firewall_policies),
+                               len(self.traffic_rules),
+                               len(self.legacy_firewall_rules),
+                               len(self.wlans))
                     
                 return rules_data
                 
@@ -361,119 +444,82 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             if deleted_ids:
                 self._process_deleted_rules(rule_type, deleted_ids, len(previous_data[rule_type]))
 
-    def _detect_deleted_rules(
-        self, rule_type: str, previous_rules: List[Any], new_rules: List[Any]
-    ) -> set:
-        """Detect rules that have been deleted between updates.
+    async def _detect_deleted_rules(self, current_data: Dict[str, List[Any]], previous_data: Dict[str, List[Any]], rule_type: str) -> None:
+        """Detect rules that have been deleted and remove associated entities."""
+        # Create maps of current rules by their IDs
+        current_port_forwards = {
+            get_rule_id(rule): rule for rule in self.port_forwards
+        }
+        current_routes = {
+            get_rule_id(rule): rule for rule in self.traffic_routes
+        }
+        current_policies = {
+            get_rule_id(rule): rule for rule in self.firewall_policies
+        }
+        current_traffic_rules = {
+            get_rule_id(rule): rule for rule in self.traffic_rules
+        }
+        current_firewall_rules = {
+            get_rule_id(rule): rule for rule in self.legacy_firewall_rules
+        }
+        current_wlans = {
+            get_rule_id(rule): rule for rule in self.wlans
+        }
         
-        Args:
-            rule_type: The type of rule being processed
-            previous_rules: The list of rules from the previous update
-            new_rules: The list of rules from the current update
-            
-        Returns:
-            Set of rule IDs that were detected as deleted
-        """
-        # If we have fewer items now than before, something was probably deleted
-        if len(previous_rules) > len(new_rules):
-            # But only warn if the difference is significant - avoid entity churn on minor changes
-            if len(previous_rules) - len(new_rules) > len(previous_rules) * 0.5:
-                # If we lost more than 50% of entities, this might be a temporary API issue
-                LOGGER.warning(
-                    "More than 50%% of %s rules disappeared (%d -> %d). This may be a temporary API issue - skipping entity removal",
-                    rule_type,
-                    len(previous_rules),
-                    len(new_rules)
-                )
-                # Skip this rule type to avoid entity churn during API issues
-                return set()
-            else:
-                LOGGER.warning("Count decreased for %s: %d -> %d (-%d items)", 
-                            rule_type, 
-                            len(previous_rules), 
-                            len(new_rules), 
-                            len(previous_rules) - len(new_rules))
+        # Check if previously tracked rules are still in the current rules
+        # For each rule type, if a previously tracked rule is not in current_rules,
+        # call on_entity_remove to remove the corresponding entity
         
-        # Extract raw ID helper function
-        def extract_raw_id(rule_id):
-            """Extract the raw ID part without the prefix."""
-            if rule_id and "_" in rule_id:
-                parts = rule_id.split("_")
-                # Return the last part which should be the actual ID
-                return parts[-1]
-            return rule_id
-            
-        # Create maps of rules by ID for efficient comparison
-        prev_rules = {get_rule_id(rule): rule for rule in previous_rules if get_rule_id(rule)}
-        new_rules = {get_rule_id(rule): rule for rule in new_rules if get_rule_id(rule)}
-        
-        # Create sets for more efficient comparison
-        prev_ids = set(prev_rules.keys())
-        new_ids = set(new_rules.keys())
-        
-        # Add debug logs to show what IDs we're comparing
-        LOGGER.debug("Checking for deleted %s rules - Previous IDs: %s", rule_type, sorted(list(prev_ids)))
-        LOGGER.debug("Checking for deleted %s rules - Current IDs: %s", rule_type, sorted(list(new_ids)))
-        
-        # Find IDs that existed before but not now (deleted rules)
-        deleted_ids = prev_ids - new_ids
-        
-        # Also try comparing raw IDs without prefixes if we didn't find any deletions
-        if not deleted_ids and len(previous_rules) != len(new_rules):
-            prev_raw_ids = {extract_raw_id(get_rule_id(rule)) for rule in previous_rules if get_rule_id(rule)}
-            new_raw_ids = {extract_raw_id(get_rule_id(rule)) for rule in new_rules if get_rule_id(rule)}
-            raw_deleted_ids = prev_raw_ids - new_raw_ids
-            
-            if raw_deleted_ids:
-                LOGGER.info("Found %d deleted rules using raw ID comparison: %s", 
-                            len(raw_deleted_ids), raw_deleted_ids)
+        # Port Forwards
+        for rule_id in self._tracked_port_forwards.copy():
+            if rule_id not in current_port_forwards:
+                LOGGER.debug("Detected deleted port forward: %s", rule_id)
+                self._remove_entity(rule_id)
+                self._tracked_port_forwards.remove(rule_id)
                 
-                # Convert raw IDs back to entity IDs for removal
-                for raw_id in raw_deleted_ids:
-                    for rule in previous_rules:
-                        rule_id = get_rule_id(rule)
-                        if rule_id and extract_raw_id(rule_id) == raw_id:
-                            deleted_ids.add(rule_id)
-                            LOGGER.info("Adding rule for removal - raw_id: %s -> entity_id: %s", 
-                                        raw_id, rule_id)
-        
-        # Double-check if counts don't match but no deletions found
-        # This could indicate an issue with ID matching or API caching
-        if len(previous_rules) != len(new_rules) and not deleted_ids:
-            LOGGER.warning(
-                "Rule count mismatch detected! Previous: %d, Current: %d, but no deleted IDs found. "
-                "This might indicate a caching issue or ID format mismatch.",
-                len(previous_rules), 
-                len(new_rules)
-            )
-            # If we have fewer rules now but no deletions detected, force entity removal based on raw data
-            if len(previous_rules) > len(new_rules):
-                LOGGER.warning("Rule count decreased but no deletions detected - comparing rule contents")
+        # Traffic Routes
+        for rule_id in self._tracked_routes.copy():
+            if rule_id not in current_routes:
+                LOGGER.debug("Detected deleted route: %s", rule_id)
+                self._remove_entity(rule_id)
+                self._tracked_routes.remove(rule_id)
                 
-                # Create a deep comparison of rule contents
-                for prev_rule in previous_rules:
-                    prev_id = get_rule_id(prev_rule)
-                    if not prev_id:
-                        continue
-                        
-                    # Check if this rule still exists in any form
-                    found = False
-                    for new_rule in new_rules:
-                        # Try to match on any attribute that might be stable
-                        if hasattr(prev_rule, 'id') and hasattr(new_rule, 'id') and prev_rule.id == new_rule.id:
-                            found = True
-                            break
-                        elif hasattr(prev_rule, 'name') and hasattr(new_rule, 'name') and prev_rule.name == new_rule.name:
-                            found = True
-                            break
-                            
-                    if not found:
-                        # This rule doesn't seem to exist in the new data
-                        LOGGER.info("Rule %s appears to be missing in new data", prev_id)
-                        deleted_ids.add(prev_id)
-                        
-        return deleted_ids
-            
+        # Firewall Policies
+        for rule_id in self._tracked_policies.copy():
+            if rule_id not in current_policies:
+                LOGGER.debug("Detected deleted policy: %s", rule_id)
+                self._remove_entity(rule_id)
+                self._tracked_policies.remove(rule_id)
+                
+        # Traffic Rules
+        for rule_id in self._tracked_traffic_rules.copy():
+            if rule_id not in current_traffic_rules:
+                LOGGER.debug("Detected deleted traffic rule: %s", rule_id)
+                self._remove_entity(rule_id)
+                self._tracked_traffic_rules.remove(rule_id)
+                
+        # Legacy Firewall Rules
+        for rule_id in self._tracked_firewall_rules.copy():
+            if rule_id not in current_firewall_rules:
+                LOGGER.debug("Detected deleted firewall rule: %s", rule_id)
+                self._remove_entity(rule_id)
+                self._tracked_firewall_rules.remove(rule_id)
+                
+        # WLANs
+        for rule_id in self._tracked_wlans.copy():
+            if rule_id not in current_wlans:
+                LOGGER.debug("Detected deleted WLAN: %s", rule_id)
+                self._remove_entity(rule_id)
+                self._tracked_wlans.remove(rule_id)
+
+        # Update tracked rules to current state
+        self._tracked_port_forwards = set(current_port_forwards.keys())
+        self._tracked_routes = set(current_routes.keys())
+        self._tracked_policies = set(current_policies.keys())
+        self._tracked_traffic_rules = set(current_traffic_rules.keys())
+        self._tracked_firewall_rules = set(current_firewall_rules.keys())
+        self._tracked_wlans = set(current_wlans.keys())
+
     def _process_deleted_rules(self, rule_type: str, deleted_ids: set, total_previous_count: int) -> None:
         """Process detected rule deletions and dispatch removal events.
         
@@ -528,101 +574,111 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             except Exception as err:
                 LOGGER.error("Error dispatching entity removal: %s", err)
 
-    async def _update_firewall_policies(self, data: Dict[str, List[Any]]) -> None:
-        """Update firewall policies."""
-        await self._update_rule_type(
-            data, 
-            "firewall_policies", 
-            self.api.get_firewall_policies, 
-            force_refresh=True,
-            log_details=True
-        )
-            
-    async def _update_traffic_rules(self, data: Dict[str, List[Any]]) -> None:
-        """Update traffic rules."""
-        await self._update_rule_type(data, "traffic_rules", self.api.get_traffic_rules)
+    async def _update_firewall_policies_in_dict(self, data: Dict[str, List[Any]]) -> None:
+        """Update firewall policies in the provided dictionary."""
+        await self._update_rule_type_in_dict(data, "firewall_policies", self.api.get_firewall_policies)
+                    
+    async def _update_traffic_rules_in_dict(self, data: Dict[str, List[Any]]) -> None:
+        """Update traffic rules in the provided dictionary."""
+        await self._update_rule_type_in_dict(data, "traffic_rules", self.api.get_traffic_rules)
 
-    async def _update_port_forwards(self, data: Dict[str, List[Any]]) -> bool:
-        """Update port forwards.
-        
-        Returns True if successful, False if there was an error.
-        """
+    async def _update_port_forwards_in_dict(self, data: Dict[str, List[Any]]) -> bool:
+        """Update port forwards in the provided dictionary."""
         try:
-            rules = await self.api.get_port_forwards()
-            rules_list = list(rules)
-            LOGGER.debug(f"Fetched {len(rules_list)} port_forwards")
-            data["port_forwards"] = rules_list
+            await self._update_rule_type_in_dict(data, "port_forwards", self.api.get_port_forwards)
             return True
         except Exception as err:
-            LOGGER.error(f"Error fetching port_forwards: {err}")
-            # Store the last error message for authentication checking
-            self.api._last_error_message = str(err)
-            data["port_forwards"] = []
+            LOGGER.error("Error updating port forwards: %s", err)
             return False
+        
+    async def _update_traffic_routes_in_dict(self, data: Dict[str, List[Any]]) -> None:
+        """Update traffic routes in the provided dictionary."""
+        await self._update_rule_type_in_dict(data, "traffic_routes", self.api.get_traffic_routes)
 
-    async def _update_traffic_routes(self, data: Dict[str, List[Any]]) -> None:
-        """Update traffic routes."""
-        await self._update_rule_type(data, "traffic_routes", self.api.get_traffic_routes)
+    async def _update_firewall_zones_in_dict(self, data: Dict[str, List[Any]]) -> None:
+        """Update firewall zones in the provided dictionary."""
+        await self._update_rule_type_in_dict(data, "firewall_zones", self.api.get_firewall_zones)
 
-    async def _update_firewall_zones(self, data: Dict[str, List[Any]]) -> None:
-        """Update firewall zones."""
-        await self._update_rule_type(data, "firewall_zones", self.api.get_firewall_zones)
+    async def _update_wlans_in_dict(self, data: Dict[str, List[Any]]) -> None:
+        """Update WLANs in the provided dictionary."""
+        await self._update_rule_type_in_dict(data, "wlans", self.api.get_wlans)
 
-    async def _update_wlans(self, data: Dict[str, List[Any]]) -> None:
-        """Update WLANs."""
-        await self._update_rule_type(data, "wlans", self.api.get_wlans)
+    async def _update_legacy_firewall_rules_in_dict(self, data: Dict[str, List[Any]]) -> None:
+        """Update legacy firewall rules in the provided dictionary."""
+        await self._update_rule_type_in_dict(data, "legacy_firewall_rules", self.api.get_legacy_firewall_rules)
 
-    async def _update_legacy_firewall_rules(self, data: Dict[str, List[Any]]) -> None:
-        """Update legacy firewall rules."""
-        await self._update_rule_type(
-            data, 
-            "legacy_firewall_rules", 
-            self.api.get_legacy_firewall_rules,
-            log_details=True
-        )
-
-    async def _update_rule_type(
-        self, 
-        data: Dict[str, List[Any]], 
-        rule_type: str, 
-        fetch_method: Callable, 
-        force_refresh: bool = False,
-        log_details: bool = False
-    ) -> None:
-        """Generic method to update a rule type.
+    async def _update_rule_type(self, rule_type: str, fetch_method: Callable) -> None:
+        """Update a specific rule type in self.data.
         
         Args:
-            data: Data dictionary to update
-            rule_type: Type of rule being updated
-            fetch_method: API method to call to fetch the rules
-            force_refresh: Whether to force a refresh in the API call
-            log_details: Whether to log detailed rule information
+            rule_type: The key to use in the data dictionary
+            fetch_method: The API method to call to fetch the rules
         """
+        LOGGER.debug("Updating %s rules", rule_type)
         try:
-            if force_refresh:
-                LOGGER.debug(f"Fetching {rule_type} from API with force_refresh=True")
-                rules = await fetch_method(force_refresh=True)
-            else:
-                rules = await fetch_method()
+            rules = await fetch_method()
+            self.data[rule_type] = rules
+            LOGGER.debug("Updated %s rules: %d items", rule_type, len(rules))
+        except Exception as err:  # pylint: disable=broad-except
+            LOGGER.error("Error updating %s rules: %s", rule_type, err)
+            # Keep previous data if update fails
+            if rule_type not in self.data:
+                self.data[rule_type] = []
+    
+    async def _update_rule_type_in_dict(self, target_data: Dict[str, List[Any]], rule_type: str, fetch_method: Callable) -> None:
+        """Update a specific rule type in the provided data dictionary.
+        
+        Args:
+            target_data: The dictionary to update
+            rule_type: The key to use in the data dictionary
+            fetch_method: The API method to call to fetch the rules
+        """
+        LOGGER.debug("Updating %s rules in external dictionary", rule_type)
+        try:
+            # Log method being called
+            LOGGER.info("Calling API method for %s: %s", rule_type, fetch_method.__name__)
             
-            rules_list = list(rules)
+            rules = await fetch_method()
             
-            if log_details:
-                # Log detailed rule information for debugging
-                rule_ids = [get_rule_id(rule) for rule in rules_list]
-                LOGGER.debug(f"Received {len(rules_list)} {rule_type} from API: {rule_ids}")
+            # Validate that we received properly typed objects
+            if rules:
+                LOGGER.info("API returned %d %s rules", len(rules), rule_type)
                 
-                # Additional check: log any rules that might be marked as deleted but still returned
-                for rule in rules_list:
-                    if hasattr(rule, "deleted") and getattr(rule, "deleted", False):
-                        LOGGER.warning(f"API returned a deleted {rule_type}: {get_rule_id(rule)}")
+                # Check the first rule to validate type
+                if len(rules) > 0:
+                    first_rule = rules[0]
+                    
+                    # All our rule objects should have an 'id' attribute
+                    if not hasattr(first_rule, "id"):
+                        LOGGER.error(
+                            "API returned non-typed object for %s: %s (type: %s)",
+                            rule_type,
+                            first_rule,
+                            type(first_rule).__name__
+                        )
+                        # Don't update with untyped data
+                        return
+
+                    # Log rule details for debugging
+                    rule_id = getattr(first_rule, "id", "unknown")
+                    LOGGER.debug(
+                        "First %s rule: ID=%s, Type=%s",
+                        rule_type, 
+                        rule_id, 
+                        type(first_rule).__name__
+                    )
+                
+                # Update the data with the new rules
+                target_data[rule_type] = rules
             else:
-                LOGGER.debug(f"Fetched {len(rules_list)} {rule_type}")
-                
-            data[rule_type] = rules_list
-        except Exception as err:
-            LOGGER.error(f"Error fetching {rule_type}: {err}")
-            data[rule_type] = []
+                LOGGER.warning("API returned no %s rules (None or empty list)", rule_type)
+                # Initialize with empty list if no rules returned
+                target_data[rule_type] = []
+        except Exception as err:  # pylint: disable=broad-except
+            LOGGER.error("Error updating %s rules: %s", rule_type, err)
+            # Keep previous data if update fails
+            if rule_type not in target_data:
+                target_data[rule_type] = []
 
     @callback
     def _handle_websocket_message(self, message: dict[str, Any]) -> None:
@@ -729,3 +785,221 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         # Request a refresh with some delay to allow auth to stabilize
         await asyncio.sleep(2.0)
         await self.async_refresh()
+
+    def _remove_entity(self, rule_id: str) -> None:
+        """Remove entity associated with a rule.
+        
+        Args:
+            rule_id: The rule ID generated by get_rule_id()
+        """
+        LOGGER.debug("Entity removal initiated for rule_id: %s", rule_id)
+        
+        if self._entity_removal_callback is not None:
+            self._entity_removal_callback(rule_id)
+        else:
+            LOGGER.warning("No entity removal callback registered")
+
+    async def async_refresh(self) -> bool:
+        """Refresh data from the UniFi API."""
+        try:
+            if not await self.api.async_connect():
+                LOGGER.warning("Failed to connect to UniFi Network API")
+                return False
+                
+            # Use a default device name
+            self.device_name = "UniFi Network Controller"
+             
+            # Update each rule type with specialized helper functions
+            await self._update_port_forwards()
+            await self._update_traffic_routes() 
+            await self._update_firewall_rules()
+            await self._update_traffic_rules()
+            await self._update_firewall_zones()
+            await self._update_wlans()
+            
+            # Process new entities
+            await self.process_new_entities()
+            
+            # Process the entity creation queue if needed
+            await self._process_entity_queue()
+            
+            self.async_set_updated_data(self.data)
+            
+            # Ensure the rule collections are populated from updated data
+            # This is critical for entity creation and updates
+            self.port_forwards = self.data.get("port_forwards", [])
+            self.traffic_routes = self.data.get("traffic_routes", [])
+            self.firewall_policies = self.data.get("firewall_policies", [])
+            self.traffic_rules = self.data.get("traffic_rules", [])
+            self.legacy_firewall_rules = self.data.get("legacy_firewall_rules", [])
+            self.wlans = self.data.get("wlans", [])
+            self.firewall_zones = self.data.get("firewall_zones", [])
+            
+            # Log the updated rule counts
+            LOGGER.info("Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d", 
+                       len(self.port_forwards),
+                       len(self.traffic_routes),
+                       len(self.firewall_policies),
+                       len(self.traffic_rules),
+                       len(self.legacy_firewall_rules),
+                       len(self.wlans))
+            
+            return True
+            
+        except Exception as err:  # pylint: disable=broad-except
+            LOGGER.exception("Error refreshing data: %s", err)
+            return False
+
+    async def _update_port_forwards(self) -> None:
+        """Update port forward rules."""
+        await self._update_rule_type("port_forwards", self.api.get_port_forwards)
+        self.port_forwards = self.data.get("port_forwards", [])
+        
+    async def _update_traffic_routes(self) -> None:
+        """Update traffic route rules."""
+        await self._update_rule_type("traffic_routes", self.api.get_traffic_routes)
+        self.traffic_routes = self.data.get("traffic_routes", [])
+        
+    async def _update_firewall_rules(self) -> None:
+        """Update firewall rules and policies."""
+        # Update legacy firewall rules
+        await self._update_rule_type("legacy_firewall_rules", self.api.get_legacy_firewall_rules)
+        self.legacy_firewall_rules = self.data.get("legacy_firewall_rules", [])
+        
+        # Update firewall policies
+        await self._update_rule_type("firewall_policies", self.api.get_firewall_policies)
+        self.firewall_policies = self.data.get("firewall_policies", [])
+        
+    async def _update_traffic_rules(self) -> None:
+        """Update traffic rules."""
+        await self._update_rule_type("traffic_rules", self.api.get_traffic_rules)
+        self.traffic_rules = self.data.get("traffic_rules", [])
+        
+    async def _update_firewall_zones(self) -> None:
+        """Update firewall zones."""
+        await self._update_rule_type("firewall_zones", self.api.get_firewall_zones)
+        self.firewall_zones = self.data.get("firewall_zones", [])
+        
+    async def _update_wlans(self) -> None:
+        """Update WLANs."""
+        await self._update_rule_type("wlans", self.api.get_wlans)
+        self.wlans = self.data.get("wlans", [])
+        
+    async def _process_entity_queue(self) -> None:
+        """Process any queued entity creation tasks."""
+        if not self._entity_creation_queue:
+            return
+            
+        async with self._queue_lock:
+            LOGGER.debug("Processing entity creation queue - %d items", len(self._entity_creation_queue))
+            # Process entity creation queue
+            for item in self._entity_creation_queue.copy():
+                rule_type = item.get("rule_type")
+                rule = item.get("rule")
+                if not rule or not rule_type:
+                    continue
+                    
+                try:
+                    # Call the entity creation callback if registered
+                    if self.on_create_entity is not None:
+                        await self.on_create_entity(rule_type, rule)
+                    self._entity_creation_queue.remove(item)
+                except Exception as err:  # pylint: disable=broad-except
+                    LOGGER.error("Error creating entity: %s", err)
+            
+            LOGGER.debug("Entity queue processing complete - %d items remaining", 
+                      len(self._entity_creation_queue))
+
+    async def process_new_entities(self) -> None:
+        """Check for new entities in all rule types and queue them for creation."""
+        # Create sets of currently tracked rule IDs for comparison
+        port_forwards_to_add = {
+            get_rule_id(rule) for rule in self.port_forwards
+            if get_rule_id(rule) not in self._tracked_port_forwards
+        }
+        
+        routes_to_add = {
+            get_rule_id(rule) for rule in self.traffic_routes 
+            if get_rule_id(rule) not in self._tracked_routes
+        }
+        
+        policies_to_add = {
+            get_rule_id(rule) for rule in self.firewall_policies 
+            if get_rule_id(rule) not in self._tracked_policies
+        }
+        
+        traffic_rules_to_add = {
+            get_rule_id(rule) for rule in self.traffic_rules 
+            if get_rule_id(rule) not in self._tracked_traffic_rules
+        }
+        
+        firewall_rules_to_add = {
+            get_rule_id(rule) for rule in self.legacy_firewall_rules 
+            if get_rule_id(rule) not in self._tracked_firewall_rules
+        }
+        
+        wlans_to_add = {
+            get_rule_id(rule) for rule in self.wlans 
+            if get_rule_id(rule) not in self._tracked_wlans
+        }
+        
+        # Queue new entities for creation
+        for rule in self.port_forwards:
+            rule_id = get_rule_id(rule)
+            if rule_id in port_forwards_to_add:
+                LOGGER.debug("Queueing new port forward for creation: %s", rule_id)
+                self._entity_creation_queue.append({
+                    "rule_type": "port_forwards",
+                    "rule": rule
+                })
+                self._tracked_port_forwards.add(rule_id)
+                
+        for rule in self.traffic_routes:
+            rule_id = get_rule_id(rule)
+            if rule_id in routes_to_add:
+                LOGGER.debug("Queueing new traffic route for creation: %s", rule_id)
+                self._entity_creation_queue.append({
+                    "rule_type": "traffic_routes",
+                    "rule": rule
+                })
+                self._tracked_routes.add(rule_id)
+                
+        for rule in self.firewall_policies:
+            rule_id = get_rule_id(rule)
+            if rule_id in policies_to_add:
+                LOGGER.debug("Queueing new firewall policy for creation: %s", rule_id)
+                self._entity_creation_queue.append({
+                    "rule_type": "firewall_policies",
+                    "rule": rule
+                })
+                self._tracked_policies.add(rule_id)
+                
+        for rule in self.traffic_rules:
+            rule_id = get_rule_id(rule)
+            if rule_id in traffic_rules_to_add:
+                LOGGER.debug("Queueing new traffic rule for creation: %s", rule_id)
+                self._entity_creation_queue.append({
+                    "rule_type": "traffic_rules",
+                    "rule": rule
+                })
+                self._tracked_traffic_rules.add(rule_id)
+                
+        for rule in self.legacy_firewall_rules:
+            rule_id = get_rule_id(rule)
+            if rule_id in firewall_rules_to_add:
+                LOGGER.debug("Queueing new firewall rule for creation: %s", rule_id)
+                self._entity_creation_queue.append({
+                    "rule_type": "legacy_firewall_rules",
+                    "rule": rule
+                })
+                self._tracked_firewall_rules.add(rule_id)
+                
+        for rule in self.wlans:
+            rule_id = get_rule_id(rule)
+            if rule_id in wlans_to_add:
+                LOGGER.debug("Queueing new WLAN for creation: %s", rule_id)
+                self._entity_creation_queue.append({
+                    "rule_type": "wlans",
+                    "rule": rule
+                })
+                self._tracked_wlans.add(rule_id)

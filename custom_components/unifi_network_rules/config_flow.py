@@ -20,7 +20,7 @@ from .const import (
     DEFAULT_SITE,
     LOGGER
 )
-from .udm_api import CannotConnect, InvalidAuth
+from .udm import CannotConnect, InvalidAuth, UDMAPI
 
 from aiounifi.errors import (
     AiounifiException,
@@ -57,8 +57,6 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> None:
     """Validate the user input allows us to connect."""
-    from .udm_api import UDMAPI
-
     api = UDMAPI(
         data[CONF_HOST],
         data[CONF_USERNAME],
