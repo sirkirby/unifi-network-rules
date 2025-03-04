@@ -372,6 +372,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                     self.wlans = rules_data.get("wlans", [])
                     self.firewall_zones = rules_data.get("firewall_zones", [])
                     
+                    # Update tracking collections with current rule IDs
+                    self._update_tracked_rules()
+                    
                     # Log the populated rule counts
                     LOGGER.info("Rule collections after update: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d", 
                                len(self.port_forwards),
@@ -435,17 +438,44 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                          rule_type, len(previous_data[rule_type]), len(new_data[rule_type]))
             
             # Process each rule type to detect and handle deletions
-            deleted_ids = self._detect_deleted_rules(
+            self._process_deleted_rules(
                 rule_type,
-                previous_data[rule_type],
-                new_data[rule_type]
+                self._get_deleted_rule_ids(rule_type, previous_data[rule_type], new_data[rule_type]),
+                len(previous_data[rule_type])
             )
-            
-            if deleted_ids:
-                self._process_deleted_rules(rule_type, deleted_ids, len(previous_data[rule_type]))
 
-    async def _detect_deleted_rules(self, current_data: Dict[str, List[Any]], previous_data: Dict[str, List[Any]], rule_type: str) -> None:
-        """Detect rules that have been deleted and remove associated entities."""
+    def _get_deleted_rule_ids(self, rule_type: str, previous_rules: List[Any], current_rules: List[Any]) -> set:
+        """Identify rules that have been deleted.
+        
+        Args:
+            rule_type: The type of rule being processed
+            previous_rules: List of rules from the previous update
+            current_rules: List of rules from the current update
+            
+        Returns:
+            set: Set of rule IDs that were detected as deleted
+        """
+        # Extract IDs from previous and current rules
+        previous_ids = {get_rule_id(rule) for rule in previous_rules}
+        current_ids = {get_rule_id(rule) for rule in current_rules}
+        
+        # Find IDs that are in previous_ids but not in current_ids
+        deleted_ids = previous_ids - current_ids
+        
+        if deleted_ids:
+            LOGGER.debug("Detected %d deleted %s rules: %s", 
+                         len(deleted_ids), rule_type, deleted_ids)
+        
+        return deleted_ids
+        
+    def _update_tracked_rules(self) -> None:
+        """Update the collections of tracked rules based on current data.
+        
+        This updates the internal tracking collections used to detect rule deletions
+        between update cycles.
+        """
+        LOGGER.debug("Updating tracked rule collections")
+        
         # Create maps of current rules by their IDs
         current_port_forwards = {
             get_rule_id(rule): rule for rule in self.port_forwards
@@ -466,52 +496,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             get_rule_id(rule): rule for rule in self.wlans
         }
         
-        # Check if previously tracked rules are still in the current rules
-        # For each rule type, if a previously tracked rule is not in current_rules,
-        # call on_entity_remove to remove the corresponding entity
-        
-        # Port Forwards
-        for rule_id in self._tracked_port_forwards.copy():
-            if rule_id not in current_port_forwards:
-                LOGGER.debug("Detected deleted port forward: %s", rule_id)
-                self._remove_entity(rule_id)
-                self._tracked_port_forwards.remove(rule_id)
-                
-        # Traffic Routes
-        for rule_id in self._tracked_routes.copy():
-            if rule_id not in current_routes:
-                LOGGER.debug("Detected deleted route: %s", rule_id)
-                self._remove_entity(rule_id)
-                self._tracked_routes.remove(rule_id)
-                
-        # Firewall Policies
-        for rule_id in self._tracked_policies.copy():
-            if rule_id not in current_policies:
-                LOGGER.debug("Detected deleted policy: %s", rule_id)
-                self._remove_entity(rule_id)
-                self._tracked_policies.remove(rule_id)
-                
-        # Traffic Rules
-        for rule_id in self._tracked_traffic_rules.copy():
-            if rule_id not in current_traffic_rules:
-                LOGGER.debug("Detected deleted traffic rule: %s", rule_id)
-                self._remove_entity(rule_id)
-                self._tracked_traffic_rules.remove(rule_id)
-                
-        # Legacy Firewall Rules
-        for rule_id in self._tracked_firewall_rules.copy():
-            if rule_id not in current_firewall_rules:
-                LOGGER.debug("Detected deleted firewall rule: %s", rule_id)
-                self._remove_entity(rule_id)
-                self._tracked_firewall_rules.remove(rule_id)
-                
-        # WLANs
-        for rule_id in self._tracked_wlans.copy():
-            if rule_id not in current_wlans:
-                LOGGER.debug("Detected deleted WLAN: %s", rule_id)
-                self._remove_entity(rule_id)
-                self._tracked_wlans.remove(rule_id)
-
         # Update tracked rules to current state
         self._tracked_port_forwards = set(current_port_forwards.keys())
         self._tracked_routes = set(current_routes.keys())
@@ -519,6 +503,15 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         self._tracked_traffic_rules = set(current_traffic_rules.keys())
         self._tracked_firewall_rules = set(current_firewall_rules.keys())
         self._tracked_wlans = set(current_wlans.keys())
+        
+        LOGGER.debug("Tracked rule counts: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, "
+                     "Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d",
+                     len(self._tracked_port_forwards),
+                     len(self._tracked_routes),
+                     len(self._tracked_policies),
+                     len(self._tracked_traffic_rules),
+                     len(self._tracked_firewall_rules),
+                     len(self._tracked_wlans))
 
     def _process_deleted_rules(self, rule_type: str, deleted_ids: set, total_previous_count: int) -> None:
         """Process detected rule deletions and dispatch removal events.
@@ -528,6 +521,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             deleted_ids: Set of rule IDs that were detected as deleted
             total_previous_count: Total number of rules in the previous update
         """
+        if not deleted_ids:
+            return
+            
         # If we're removing too many entities at once, this might be an API glitch
         if len(deleted_ids) > 5 and len(deleted_ids) > total_previous_count * 0.25:  # More than 25% of all entities
             LOGGER.warning(
@@ -553,6 +549,23 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         # Dispatch deletion events for each deleted rule
         for rule_id in deleted_ids:
             LOGGER.debug("Rule deletion detected - type: %s, id: %s", rule_type, rule_id)
+            
+            # Remove entity from Home Assistant
+            self._remove_entity(rule_id)
+            
+            # Also remove from our tracking collections to keep them in sync
+            if rule_type == "port_forwards" and hasattr(self, "_tracked_port_forwards"):
+                self._tracked_port_forwards.discard(rule_id)
+            elif rule_type == "traffic_routes" and hasattr(self, "_tracked_routes"):
+                self._tracked_routes.discard(rule_id)
+            elif rule_type == "firewall_policies" and hasattr(self, "_tracked_policies"):
+                self._tracked_policies.discard(rule_id)
+            elif rule_type == "traffic_rules" and hasattr(self, "_tracked_traffic_rules"):
+                self._tracked_traffic_rules.discard(rule_id)
+            elif rule_type == "legacy_firewall_rules" and hasattr(self, "_tracked_firewall_rules"):
+                self._tracked_firewall_rules.discard(rule_id)
+            elif rule_type == "wlans" and hasattr(self, "_tracked_wlans"):
+                self._tracked_wlans.discard(rule_id)
             
             # The registry in switch.py uses the format: rule_type_rule_id (e.g., firewall_policies_unr_policy_123)
             # Use this exact format for the signal to ensure match with the registry
@@ -834,6 +847,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             self.legacy_firewall_rules = self.data.get("legacy_firewall_rules", [])
             self.wlans = self.data.get("wlans", [])
             self.firewall_zones = self.data.get("firewall_zones", [])
+            
+            # Update tracking collections with current rule IDs
+            self._update_tracked_rules()
             
             # Log the updated rule counts
             LOGGER.info("Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d", 
