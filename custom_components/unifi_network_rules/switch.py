@@ -4,16 +4,18 @@ from __future__ import annotations
 import logging
 from typing import Any, Final, Optional, Set
 import time  # Add this import
+import asyncio
 
-from homeassistant.components.switch import SwitchEntity
+from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription, PLATFORM_SCHEMA
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.device_registry import async_get as async_get_entity_registry
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
+import homeassistant.helpers.config_validation as cv
 
 from aiounifi.models.traffic_route import TrafficRoute
 from aiounifi.models.firewall_policy import FirewallPolicy
@@ -24,7 +26,7 @@ from aiounifi.models.wlan import Wlan
 
 from .const import DOMAIN, MANUFACTURER
 from .coordinator import UnifiRuleUpdateCoordinator
-from .helpers.rule import get_rule_id, get_rule_name, get_rule_enabled
+from .helpers.rule import get_rule_id, get_rule_name, get_rule_enabled, get_object_id, get_full_entity_id
 from .models.firewall_rule import FirewallRule  # Import FirewallRule
 
 LOGGER = logging.getLogger(__name__)
@@ -41,231 +43,94 @@ RULE_TYPES: Final = {
 # Track entities across the platform
 _ENTITY_CACHE: Set[str] = set()
 
-# Shared registry to track entities for removal
-entity_registry = {}
+# Global registry to track created entity unique IDs
+_CREATED_UNIQUE_IDS = set()
 
-# Utility functions to set up entities for each rule type
-def _setup_firewall_policy_switches(coordinator, api, rule) -> Optional[SwitchEntity]:
-    """Set up firewall policy switch."""
-    rule_id = get_rule_id(rule)
-    if not rule_id:
-        LOGGER.warning("Unable to get rule_id for firewall policy")
-        return None
-    LOGGER.debug("Creating firewall policy switch for rule_id: %s", rule_id)
-    return UnifiFirewallPolicySwitch(coordinator, rule, "firewall_policies")
-
-def _setup_traffic_rule_switches(coordinator, api, rule) -> Optional[SwitchEntity]:
-    """Set up traffic rule switch."""
-    rule_id = get_rule_id(rule)
-    if not rule_id:
-        LOGGER.warning("Unable to get rule_id for traffic rule")
-        return None
-    LOGGER.debug("Creating traffic rule switch for rule_id: %s", rule_id)
-    return UnifiTrafficRuleSwitch(coordinator, rule, "traffic_rules")
-
-def _setup_port_forward_switches(coordinator, api, rule) -> Optional[SwitchEntity]:
-    """Set up port forward switch."""
-    rule_id = get_rule_id(rule)
-    if not rule_id:
-        LOGGER.warning("Unable to get rule_id for port forward")
-        return None
-    LOGGER.debug("Creating port forward switch for rule_id: %s", rule_id)
-    return UnifiPortForwardSwitch(coordinator, rule, "port_forwards")
-
-def _setup_traffic_route_switches(coordinator, api, rule) -> Optional[SwitchEntity]:
-    """Set up traffic route switch."""
-    rule_id = get_rule_id(rule)
-    if not rule_id:
-        LOGGER.warning("Unable to get rule_id for traffic route")
-        return None
-    LOGGER.debug("Creating traffic route switch for rule_id: %s", rule_id)
-    return UnifiTrafficRouteSwitch(coordinator, rule, "traffic_routes")
-
-def _setup_legacy_firewall_rule_switches(coordinator, api, rule) -> Optional[SwitchEntity]:
-    """Set up legacy firewall rule switch."""
-    rule_id = get_rule_id(rule)
-    if not rule_id:
-        LOGGER.warning("Unable to get rule_id for legacy firewall rule")
-        return None
-    LOGGER.debug("Creating legacy firewall rule switch for rule_id: %s", rule_id)
-    return UnifiLegacyFirewallRuleSwitch(coordinator, rule, "legacy_firewall_rules")
-
-def _setup_wlan_switches(coordinator, api, rule) -> Optional[SwitchEntity]:
-    """Set up WLAN switch."""
-    rule_id = get_rule_id(rule)
-    if not rule_id:
-        LOGGER.warning("Unable to get rule_id for WLAN")
-        return None
-    LOGGER.debug("Creating WLAN switch for rule_id: %s", rule_id)
-    return UnifiWlanSwitch(coordinator, rule, "wlans")
-
-async def async_setup_entry(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
+async def async_setup_platform(hass: HomeAssistant, config, async_add_entities, discovery_info=None):
     """Set up the UniFi Network Rules switch platform."""
+    LOGGER.debug("Setting up switch platform for UniFi Network Rules")
+    # This function will be called when the platform is loaded manually
+    # Most functionality is handled through config_flow and config_entries
+    return True
+
+async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
+    """Set up switches for UniFi Network Rules component."""
+    LOGGER.debug("Setting up UniFi Network Rules switches")
+    
     coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
     
-    # Add detailed debug logging about coordinator state
-    LOGGER.info("Setting up switch platform with coordinator data status:")
-    LOGGER.info("- Coordinator last update success: %s", coordinator.last_update_success)
-    LOGGER.info("- Coordinator data present: %s", bool(coordinator.data))
+    # Initialize platform with entities that already exist
+    switches = []
     
-    if coordinator.data:
-        rule_counts = {
-            "port_forwards": len(coordinator.port_forwards),
-            "traffic_routes": len(coordinator.traffic_routes),
-            "firewall_policies": len(coordinator.firewall_policies),
-            "traffic_rules": len(coordinator.traffic_rules),
-            "legacy_firewall_rules": len(coordinator.legacy_firewall_rules),
-            "wlans": len(coordinator.wlans) if hasattr(coordinator, "wlans") else 0
-        }
-        LOGGER.info("- Rule counts: %s", rule_counts)
-    else:
-        LOGGER.warning("No coordinator data available for entity creation")
+    # Track entity IDs to prevent duplicates - use unique_ids not entity_ids
+    unique_ids_seen = set()
     
-    # Create a closure that has access to hass
-    @callback
-    def handle_entity_removal(entity_id: str) -> None:
-        """Handle entity removal with access to hass."""
-        if entity_id in entity_registry:
-            entity = entity_registry[entity_id]
-            LOGGER.info("Found entity to remove: %s", entity_id)
-            
-            # Get the entity registry to properly remove the entity
-            er = async_get_entity_registry(hass)
-            
-            # Find and remove the entity from HA entity registry by unique_id
-            if hasattr(entity, "unique_id"):
-                unique_id = entity.unique_id
-                for reg_entity_id, reg_entity in er.entities.items():
-                    if reg_entity.unique_id == unique_id:
-                        LOGGER.info("Removing entity from HA registry: %s", reg_entity_id)
-                        er.async_remove(reg_entity_id)
-                        break
-            
-            # Signal platform to remove entity
+    # Get the entity registry to check for existing entities
+    from homeassistant.helpers.entity_registry import async_get as get_entity_registry
+    entity_registry = get_entity_registry(hass)
+    
+    # Process all rule types using consistent entity creation
+    for rule_type, rules in [
+        ("port_forwards", coordinator.port_forwards),
+        ("traffic_routes", coordinator.traffic_routes),
+        ("firewall_policies", coordinator.firewall_policies),
+        ("traffic_rules", coordinator.traffic_rules),
+        ("legacy_firewall_rules", coordinator.legacy_firewall_rules),
+        ("wlans", coordinator.wlans)
+    ]:
+        for rule in rules:
             try:
-                hass.async_create_task(entity.async_remove())
-                LOGGER.debug("Async remove task created for entity: %s", entity_id)
+                # Get the rule ID first - if we can't get a valid ID, skip this rule
+                rule_id = get_rule_id(rule)
+                if not rule_id:
+                    LOGGER.error("Cannot create entity for rule without ID: %s", rule)
+                    continue
+                
+                # Check if we've already seen this unique_id
+                if rule_id in unique_ids_seen:
+                    LOGGER.debug("Skipping duplicate rule ID: %s", rule_id)
+                    continue
+                
+                # Check if this entity already exists in the registry
+                existing_entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, rule_id)
+                if existing_entity_id:
+                    LOGGER.debug("Entity already exists in registry: %s (%s)", existing_entity_id, rule_id)
+                
+                # Use the appropriate entity class based on rule type
+                entity_class = None
+                if rule_type == "port_forwards":
+                    entity_class = UnifiPortForwardSwitch
+                elif rule_type == "traffic_routes":
+                    entity_class = UnifiTrafficRouteSwitch
+                elif rule_type == "firewall_policies":
+                    entity_class = UnifiFirewallPolicySwitch
+                elif rule_type == "traffic_rules":
+                    entity_class = UnifiTrafficRuleSwitch
+                elif rule_type == "legacy_firewall_rules":
+                    entity_class = UnifiLegacyFirewallRuleSwitch
+                elif rule_type == "wlans":
+                    entity_class = UnifiWlanSwitch
+                
+                if entity_class:
+                    entity = entity_class(coordinator, rule, rule_type, config_entry.entry_id)
+                    
+                    # Add to seen unique IDs
+                    unique_ids_seen.add(rule_id)
+                    
+                    # Add to switch list
+                    switches.append(entity)
+                    LOGGER.debug("Added %s entity: %s (unique_id: %s)", rule_type, entity.name, entity.unique_id)
             except Exception as err:
-                LOGGER.error("Error creating remove task: %s", err)
-            
-            # Remove from our registry
-            del entity_registry[entity_id]
-            LOGGER.debug("Entity removed from registry: %s", entity_id)
-            
-            # Also remove from the entity cache
-            if entity_id in _ENTITY_CACHE:
-                LOGGER.debug("Removing entity from cache: %s", entity_id)
-                _ENTITY_CACHE.remove(entity_id)
-                LOGGER.debug("Entity removed from cache")
-        else:
-            LOGGER.warning("Entity not found for removal: %s", entity_id)
-    
-    # Register our entity removal handler with the coordinator
-    coordinator._entity_removal_callback = handle_entity_removal
-
-    # Create entities for each existing rule
-    entities = []
-    entry_id = config_entry.entry_id
-    
-    # Port Forwards
-    for rule in coordinator.port_forwards:
-        # Generate a unique rule ID for this rule
-        rule_id = get_rule_id(rule)
-        if not rule_id:
-            continue
-            
-        # Create a new entity for this rule
-        entity = UnifiPortForwardSwitch(
-            coordinator, rule, "port_forwards", entry_id
-        )
-        entities.append(entity)
-        entity_registry[rule_id] = entity
+                LOGGER.error("Error creating %s entity: %s", rule_type, err)
         
-        # Store the rule ID for tracking
-        if rule_id not in coordinator._tracked_port_forwards:
-            coordinator._tracked_port_forwards.add(rule_id)
-    
-    # Traffic Routes
-    for rule in coordinator.traffic_routes:
-        rule_id = get_rule_id(rule)
-        if not rule_id:
-            continue
-            
-        entity = UnifiTrafficRouteSwitch(
-            coordinator, rule, "traffic_routes", entry_id
-        )
-        entities.append(entity)
-        entity_registry[rule_id] = entity
-        
-        if rule_id not in coordinator._tracked_routes:
-            coordinator._tracked_routes.add(rule_id)
-    
-    # Firewall Policies
-    for rule in coordinator.firewall_policies:
-        rule_id = get_rule_id(rule)
-        if not rule_id:
-            continue
-            
-        entity = UnifiFirewallPolicySwitch(
-            coordinator, rule, "firewall_policies", entry_id
-        )
-        entities.append(entity)
-        entity_registry[rule_id] = entity
-        
-        if rule_id not in coordinator._tracked_policies:
-            coordinator._tracked_policies.add(rule_id)
-    
-    # Traffic Rules
-    for rule in coordinator.traffic_rules:
-        rule_id = get_rule_id(rule)
-        if not rule_id:
-            continue
-            
-        entity = UnifiTrafficRuleSwitch(
-            coordinator, rule, "traffic_rules", entry_id
-        )
-        entities.append(entity)
-        entity_registry[rule_id] = entity
-        
-        if rule_id not in coordinator._tracked_traffic_rules:
-            coordinator._tracked_traffic_rules.add(rule_id)
-    
-    # Legacy Firewall Rules
-    for rule in coordinator.legacy_firewall_rules:
-        rule_id = get_rule_id(rule)
-        if not rule_id:
-            continue
-            
-        entity = UnifiLegacyFirewallRuleSwitch(
-            coordinator, rule, "legacy_firewall_rules", entry_id
-        )
-        entities.append(entity)
-        entity_registry[rule_id] = entity
-        
-        if rule_id not in coordinator._tracked_firewall_rules:
-            coordinator._tracked_firewall_rules.add(rule_id)
-    
-    # Wireless Networks
-    for rule in coordinator.wlans:
-        rule_id = get_rule_id(rule)
-        if not rule_id:
-            continue
-            
-        entity = UnifiWlanSwitch(
-            coordinator, rule, "wlans", entry_id
-        )
-        entities.append(entity)
-        entity_registry[rule_id] = entity
-        
-        if rule_id not in coordinator._tracked_wlans:
-            coordinator._tracked_wlans.add(rule_id)
-    
-    LOGGER.info("Adding %d entities to Home Assistant", len(entities))
-    async_add_entities(entities)
+    if switches:
+        LOGGER.info("Adding %d UniFi Network Rules switch entities", len(switches))
+        try:
+            # Add entities with update_before_add=True to ensure they're fully initialized
+            async_add_entities(switches, update_before_add=True)
+                
+        except Exception as e:
+            LOGGER.error("Error adding entities: %s", e)
 
 class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntity):
     """Switch to enable/disable UniFi Network rules."""
@@ -285,30 +150,36 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         # Set entity category as a configuration entity
         self.entity_category = EntityCategory.CONFIG
         
-        # Log detailed information about the rule object
-        LOGGER.debug(
-            "Initializing switch for rule - Type: %s", 
-            type(rule_data)
-        )
-        
         # Get rule ID using helper function
         self._rule_id = get_rule_id(rule_data)
         if not self._rule_id:
             raise ValueError("Rule must have an ID")
+            
+        # Track globally that we're creating this unique ID
+        global _CREATED_UNIQUE_IDS
+        if self._rule_id in _CREATED_UNIQUE_IDS:
+            LOGGER.warning("Duplicate entity creation attempted with unique_id: %s", self._rule_id)
+        _CREATED_UNIQUE_IDS.add(self._rule_id)
         
-        # Get rule name using helper function
-        name = get_rule_name(rule_data) or f"Rule {self._rule_id}"
-        self._attr_name = name
+        # Get rule name using helper function - rely entirely on rule.py for naming
+        self._attr_name = get_rule_name(rule_data) or f"Rule {self._rule_id}"
         
-        # Fix unique_id to use the rule_id directly since it already has type prefixes
-        # This prevents double-prefixing issues
+        # Set unique_id to the rule ID directly - this is what the helper provides
+        # This ensures consistency with how rules are identified throughout the integration
         self._attr_unique_id = self._rule_id
+        
+        # Explicitly set the entity_id to force our naming convention
+        # Use the centralized function from rule.py for entity ID creation
+        self._attr_entity_id = get_full_entity_id(rule_data, rule_type)
+        
+        # Set has_entity_name to False to ensure the entity name is shown in UI
+        self._attr_has_entity_name = False
         
         # Set device info
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, coordinator.api.host)},
             name="UniFi Network Rules",
-            manufacturer="Ubiquiti",
+            manufacturer=MANUFACTURER,
             model="UniFi Dream Machine"
         )
         
@@ -316,6 +187,9 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         self._attr_assumed_state = True
         self._optimistic_state = None
         self._optimistic_timestamp = 0  # Add timestamp for optimistic state
+        
+        LOGGER.debug("Initialized entity with unique_id=%s, entity_id=%s", 
+                   self._attr_unique_id, self.entity_id)
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -346,8 +220,28 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                 current_time = time.time()
                 if current_time - self._optimistic_timestamp > 10:
                     LOGGER.debug("Clearing optimistic state after 10 seconds")
-                    self._optimistic_state = None
-                    self._optimistic_timestamp = 0
+                    # Before clearing optimistic state, verify the rule's current state from coordinator data
+                    if hasattr(new_rule, "enabled"):
+                        current_state = new_rule.enabled
+                        LOGGER.debug("Actual rule state from API is %s for rule %s", 
+                                  current_state, self._rule_id)
+                        # Only clear if actual state matches optimistic state
+                        if self._optimistic_state == current_state:
+                            self._optimistic_state = None
+                            self._optimistic_timestamp = 0
+                        else:
+                            LOGGER.warning(
+                                "Optimistic state (%s) doesn't match actual state (%s) for rule %s, keeping optimistic", 
+                                self._optimistic_state, 
+                                current_state, 
+                                self._rule_id
+                            )
+                            # Extend optimistic state time to give more time for state to sync
+                            self._optimistic_timestamp = time.time()
+                    else:
+                        # If no enabled attribute, default to clearing optimistic state
+                        self._optimistic_state = None
+                        self._optimistic_timestamp = 0
                 else:
                     LOGGER.debug("Keeping optimistic state, only %d seconds elapsed", 
                                current_time - self._optimistic_timestamp)
@@ -473,9 +367,25 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                     self._optimistic_state = not enable
                     self._optimistic_timestamp = time.time()
                     self.async_write_ha_state()
+                else:
+                    # On success, refresh the optimistic state timestamp to prevent premature clearing
+                    self._optimistic_timestamp = time.time()
+                    self.async_write_ha_state()
                 
                 # Request refresh to update state from backend
                 await self.coordinator.async_request_refresh()
+                
+                # Extra verification: If operation succeeded, schedule a delayed verification refresh
+                # to ensure state is consistent after UI navigation
+                if success:
+                    async def delayed_verify():
+                        # Wait a bit to allow navigation events to complete
+                        await asyncio.sleep(2)
+                        await self.coordinator.async_request_refresh()
+                        LOGGER.debug("Performed delayed verification refresh for rule %s", self._rule_id)
+                    
+                    asyncio.create_task(delayed_verify())
+                
             except Exception as err:
                 LOGGER.error("Error in toggle operation for rule %s: %s", 
                             self._rule_id, err)
@@ -543,6 +453,151 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
             self._rule_id,
             self.unique_id
         )
+        
+        # Explicitly remove from entity registry to ensure complete removal
+        try:
+            from homeassistant.helpers.entity_registry import async_get as get_entity_registry
+            registry = get_entity_registry(self.hass)
+            if registry and self.registry_entry:
+                registry.async_remove(self.entity_id)
+                LOGGER.debug("Entity %s explicitly removed from registry", self.entity_id)
+        except Exception as err:
+            LOGGER.error("Error removing entity from registry: %s", err)
+            
+    @callback
+    def _handle_entity_removal(self, removed_entity_id: str) -> None:
+        """Handle the removal of an entity."""
+        LOGGER.debug("Entity removal notification received: %s, my id: %s", 
+                   removed_entity_id, self._rule_id)
+        
+        # Check if this is our entity that's being removed
+        if removed_entity_id == self._rule_id:
+            LOGGER.info("Removing entity %s", self.entity_id)
+            
+            # Explicitly remove from entity registry first
+            try:
+                from homeassistant.helpers.entity_registry import async_get as get_entity_registry
+                registry = get_entity_registry(self.hass)
+                entity_id = self.entity_id
+                
+                # Schedule the removal for after current execution
+                async def remove_entity():
+                    try:
+                        # First remove from the entity registry
+                        if registry and registry.async_get(entity_id):
+                            registry.async_remove(entity_id)
+                            LOGGER.debug("Entity %s removed from registry", entity_id)
+                        
+                        # Force removal from Home Assistant through HA's API
+                        try:
+                            # Set the entity as unavailable first
+                            self._attr_available = False
+                            self.async_write_ha_state()
+                            
+                            # Use the async_remove method from Entity
+                            await self.async_remove(force_remove=True)
+                            LOGGER.info("Force-removed entity %s", entity_id)
+                        except Exception as force_err:
+                            LOGGER.error("Error during force-removal: %s", force_err)
+                            
+                    except Exception as err:
+                        LOGGER.error("Error during entity removal: %s", err)
+                        
+                # Create task to run asynchronously
+                self.hass.async_create_task(remove_entity())
+            except Exception as err:
+                LOGGER.error("Error during entity removal: %s", err)
+
+    async def async_added_to_hass(self) -> None:
+        """When entity is added to hass."""
+        await super().async_added_to_hass()
+        
+        # Add update callbacks
+        self.async_on_remove(
+            self.coordinator.async_add_listener(self._handle_coordinator_update)
+        )
+        
+        # Also listen for specific events related to this entity
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, 
+                f"{DOMAIN}_entity_update_{self._rule_id}", 
+                self.async_schedule_update_ha_state
+            )
+        )
+        
+        # Listen for entity removal signals
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                f"{DOMAIN}_entity_removed",
+                self._handle_entity_removal
+            )
+        )
+        
+        # Listen for entity created events
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                f"{DOMAIN}_entity_created",
+                self._handle_entity_created
+            )
+        )
+        
+        # Make sure the entity is properly registered in the entity registry
+        try:
+            from homeassistant.helpers.entity_registry import async_get as get_entity_registry
+            registry = get_entity_registry(self.hass)
+            
+            # Log the entity registry state
+            LOGGER.debug("Entity registry check - unique_id: %s, entity_id: %s", 
+                      self.unique_id, self.entity_id)
+            
+            # Check if the entity already exists in the registry
+            existing_entity = registry.async_get_entity_id("switch", DOMAIN, self.unique_id)
+            
+            if existing_entity:
+                LOGGER.debug("Entity already exists in registry: %s", existing_entity)
+                # Don't try to update the entity_id - this has been causing problems
+                # Just force a state update to ensure it's current
+                self.async_write_ha_state()
+            else:
+                # Register the entity with our consistent ID format
+                try:
+                    # Use the object_id from rule.py
+                    object_id = get_object_id(self._rule_data, self._rule_type)
+                    
+                    entity_entry = registry.async_get_or_create(
+                        "switch",
+                        DOMAIN,
+                        self.unique_id,
+                        suggested_object_id=object_id,
+                        # Don't set disabled_by to ensure it's enabled
+                        disabled_by=None,
+                    )
+                    
+                    if entity_entry:
+                        LOGGER.info("Entity registered in registry: %s", entity_entry.entity_id)
+                    else:
+                        LOGGER.warning("Failed to register entity with registry")
+                except Exception as reg_err:
+                    LOGGER.warning("Could not register entity: %s", reg_err)
+            
+            # Force a state update to ensure it shows up
+            self.async_write_ha_state()
+        except Exception as err:
+            LOGGER.error("Error during entity registration: %s", err)
+
+    @callback
+    def _handle_entity_created(self) -> None:
+        """Handle entity created event."""
+        LOGGER.debug("Entity created event received for %s", self.entity_id)
+        
+        # Force a state update
+        self.async_write_ha_state()
+        
+        # Use a dispatcher instead of trying to call async_update_entity directly
+        async_dispatcher_send(self.hass, f"{DOMAIN}_entity_update_{self.unique_id}")
 
 # Define specific switch classes for each rule type
 class UnifiPortForwardSwitch(UnifiRuleSwitch):

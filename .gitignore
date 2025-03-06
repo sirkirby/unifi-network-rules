@@ -213,3 +213,5 @@ coverage.xml
 
 unifi/
 aiounifi/
+
+changelog.md

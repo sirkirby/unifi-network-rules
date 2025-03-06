@@ -200,7 +200,7 @@ class UnifiRuleTriggerProtocol(TriggerProtocol):
             if "websocket" in config_entry_data:
                 websocket = config_entry_data["websocket"]
                 # Store the previous callback if it exists
-                previous_callback = websocket.message_handler
+                previous_callback = websocket._message_handler
                 
                 @callback
                 def combined_callback(msg: Dict[str, Any]) -> None:
@@ -209,9 +209,9 @@ class UnifiRuleTriggerProtocol(TriggerProtocol):
                     if previous_callback:
                         self.hass.async_create_task(previous_callback(msg))
                 
-                websocket.set_message_handler(combined_callback)
+                websocket.set_callback(combined_callback)
                 # Store remove function to restore previous callback
-                self.remove_handler = lambda: websocket.set_message_handler(previous_callback)
+                self.remove_handler = lambda: websocket.set_callback(previous_callback)
                 break
 
         return self.async_detach

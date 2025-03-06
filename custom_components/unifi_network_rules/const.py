@@ -4,9 +4,45 @@ from __future__ import annotations
 import logging
 from typing import Final
 
+from homeassistant.const import Platform
+
 # Integration
-DOMAIN: Final = "unifi_network_rules"
-MANUFACTURER: Final = "Ubiquiti Inc."
+DOMAIN = "unifi_network_rules"
+DEFAULT_NAME = "UniFi Network Rules"
+MANUFACTURER = "Ubiquiti, Inc."
+
+# Platforms
+PLATFORMS = [Platform.SWITCH]
+
+# Configuration and options
+CONF_SITE = "site"
+CONF_UPDATE_INTERVAL = "update_interval"
+CONF_HOST = "host"
+CONF_PASSWORD = "password"
+CONF_PORT = "port"
+CONF_USERNAME = "username"
+CONF_VERIFY_SSL = "verify_ssl"
+
+# Default values
+DEFAULT_SITE = "default"
+DEFAULT_PORT = 443
+
+# Timers and retry values
+DEFAULT_UPDATE_INTERVAL: Final = 300  # 5 minutes - longer interval is fine since websocket provides real-time updates
+DEFAULT_RETRY_TIMER = 30  # seconds - Time between retries for failed commands
+DEFAULT_TIMEOUT = 10
+DEFAULT_WEBSOCKET_RECONNECT_DELAY = 30  # seconds - Time to wait before reconnecting after websocket error
+
+# Web Socket Events
+WS_EVENT_TYPE = "type"
+WS_EVENT_DATA = "data"
+WS_EVENT_META = "meta"
+WS_EVENT_MESSAGE = "message"
+
+# Debug related constants
+DEBUG_WEBSOCKET = False  # Set to True to enable detailed WebSocket debug logging
+
+# Define logger
 LOGGER = logging.getLogger(__package__)
 
 # Debugging flags - set specific flags to True only when troubleshooting that area
@@ -45,14 +81,10 @@ MAX_FAILED_ATTEMPTS: Final = 5
 
 # Config entry keys
 CONF_SITE_ID: Final = "site_id"
-CONF_UPDATE_INTERVAL: Final = "update_interval"
 CONF_MAX_RETRIES = "max_retries"
 CONF_RETRY_DELAY = "retry_delay"
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_DELAY = 1
-CONF_UPDATE_INTERVAL = "update_interval"
-DEFAULT_UPDATE_INTERVAL = 300  # 5 minutes - longer interval is fine since websocket provides real-time updates
-SESSION_TIMEOUT = 30
 
 # Site configuration
 CONF_SITE = "site"

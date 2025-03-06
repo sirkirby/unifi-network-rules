@@ -19,7 +19,7 @@ from aiounifi.models.wlan import Wlan
 from .const import DOMAIN, LOGGER, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DEBUG_WEBSOCKET
 from .udm import UDMAPI
 from .websocket import SIGNAL_WEBSOCKET_MESSAGE, UnifiRuleWebsocket
-from .helpers.rule import get_rule_id
+from .helpers.rule import get_rule_id, get_rule_name, get_rule_enabled
 from .utils.logger import log_data, log_websocket
 from .models.firewall_rule import FirewallRule  # Import the FirewallRule type
 
@@ -100,7 +100,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         )
 
         # Set up websocket message handler
-        self.websocket.set_message_handler(self._handle_websocket_message)
+        self.websocket.set_callback(self._handle_websocket_message)
 
         # Subscribe to websocket messages
         self._cleanup_callbacks: list[Callable[[], None]] = []
@@ -705,82 +705,153 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             msg_type = meta.get("message", "")
             msg_data = message.get("data", {})
             
-            # Check for relevant message types
-            relevant_types = [
-                "firewall", "rule", "policy", "traffic", "route", "port-forward",
-                "delete", "update", "insert", "events"
-            ]
+            # Log the message for debugging to keep full context
+            log_websocket("Rule event received: %s - %s", 
+                       msg_type, str(message)[:150] + "..." if len(str(message)) > 150 else str(message))
             
-            # Check if this is a relevant message type
-            should_log_full = any(keyword in msg_type.lower() for keyword in relevant_types)
+            # Device state changes don't require a full refresh
+            if "device" in msg_type.lower() and "state" in str(message).lower():
+                # Check if this is just a state update, not a configuration change
+                if "state" in str(message).lower():
+                    state_value = None
+                    if isinstance(msg_data, list) and len(msg_data) > 0 and "state" in msg_data[0]:
+                        state_value = msg_data[0].get("state")
+                        log_websocket("Detected state change in %s: %s", msg_type, state_value)
+                        # State updates don't need a full refresh
+                        return
             
-            if should_log_full:
-                log_websocket("Processing important WebSocket message: %s", message)
-            else:
-                # For non-rule messages, just log the type without the full content
-                log_websocket("Received WebSocket message type: %s (non-rule related)", msg_type)
+            # Define rule type-specific keywords to help identify relevant events
+            rule_type_keywords = {
+                "firewall_policies": ["firewall", "policy", "allow", "deny"],
+                "traffic_rules": ["traffic", "rule"],
+                "port_forwards": ["port", "forward", "nat"],
+                "traffic_routes": ["route", "traffic"],
+                "legacy_firewall_rules": ["firewall", "rule", "allow", "deny"]
+            }
             
-            # Determine if we need to refresh data based on message
+            # Check if this message might relate to rule changes
             should_refresh = False
             refresh_reason = None
+            rule_type_affected = None
             
-            # Always refresh for certain events
-            if msg_type in ["events", "event", "delete", "update", "insert", "changed", "alarm", "remove", "firewall"]:
+            # Configuration changes and provisioning often relate to rule updates
+            if "cfgversion" in str(message).lower() or "provisioned" in str(message).lower():
                 should_refresh = True
-                refresh_reason = f"Event type detected: {msg_type}"
+                refresh_reason = "Configuration version change detected"
             
-            # Check for data attributes that suggest a rule change
-            elif isinstance(msg_data, dict):
-                # Attributes that indicate policy or rule changes
-                rule_attributes = ["_id", "id", "name", "enabled", "type", "deleted", "firewall", "rule", "policy"]
+            # Direct rule-related events
+            elif any(word in msg_type.lower() for word in ["firewall", "rule", "policy", "route", "forward"]):
+                should_refresh = True
+                refresh_reason = f"Rule-related event type: {msg_type}"
                 
-                for attr in rule_attributes:
-                    if attr in msg_data:
-                        should_refresh = True
-                        refresh_reason = f"Rule attribute detected: {attr}"
+                # Try to determine the specific rule type affected
+                for rule_type, keywords in rule_type_keywords.items():
+                    if any(keyword in msg_type.lower() for keyword in keywords):
+                        rule_type_affected = rule_type
                         break
-                        
-                # Check for special events that might be in nested data
-                if not should_refresh and "data" in msg_data and isinstance(msg_data["data"], dict):
-                    nested_data = msg_data["data"]
-                    for attr in rule_attributes:
-                        if attr in nested_data:
-                            should_refresh = True
-                            refresh_reason = f"Rule attribute detected in nested data: {attr}"
-                            break
             
-            # Fallback for any message containing keywords that suggest rule changes
-            if not should_refresh:
-                keywords = ["firewall", "rule", "policy", "delete", "removed", "deleted", "changed"]
+            # General CRUD operations that might indicate rule changes
+            elif any(op in msg_type.lower() for op in ["add", "delete", "update", "remove"]):
+                # Check if the operation relates to any rule types
+                for rule_type, keywords in rule_type_keywords.items():
+                    if any(keyword in str(message).lower() for keyword in keywords):
+                        should_refresh = True
+                        rule_type_affected = rule_type
+                        refresh_reason = f"CRUD operation detected for {rule_type}"
+                        break
+            
+            # Device updates - only process if they contain config changes
+            elif "device" in msg_type.lower() and "update" in msg_type.lower():
+                # Only refresh for specific configuration changes
                 message_str = str(message).lower()
+                config_keywords = ["config", "firewall", "rule", "policy"]
                 
-                for keyword in keywords:
-                    if keyword in message_str:
-                        should_refresh = True
-                        refresh_reason = f"Keyword detected in message: {keyword}"
-                        break
+                if any(keyword in message_str for keyword in config_keywords):
+                    should_refresh = True
+                    refresh_reason = "Device update with potential rule changes"
+                else:
+                    # Not all device updates need a refresh - skip ones without config changes
+                    return
             
             if should_refresh:
-                log_websocket("Refreshing data due to: %s", refresh_reason)
-                # Create a task to clear cache first, then refresh
-                asyncio.create_task(self._force_refresh_with_cache_clear())
-            elif should_log_full:
-                # Only log "no refresh" for messages we're fully logging
-                log_websocket("No refresh triggered for relevant message type: %s", msg_type)
+                # Use a semaphore to prevent multiple concurrent refreshes
+                if not hasattr(self, '_refresh_semaphore'):
+                    self._refresh_semaphore = asyncio.Semaphore(1)
+                
+                # Only proceed if we can acquire the semaphore
+                if self._refresh_semaphore.locked():
+                    log_websocket("Skipping refresh as one is already in progress")
+                    return
+                
+                log_websocket("Refreshing data due to: %s (rule type: %s)", 
+                             refresh_reason, rule_type_affected or "unknown")
+                
+                # Acquire semaphore before starting refresh
+                async def controlled_refresh():
+                    async with self._refresh_semaphore:
+                        await self._force_refresh_with_cache_clear()
+                        # Wait a moment before refreshing entities to let states settle
+                        await asyncio.sleep(0.5)
+                        await self._schedule_entity_refresh()
+                
+                # Start the controlled refresh task
+                self.hass.async_create_task(controlled_refresh())
+            elif DEBUG_WEBSOCKET:
+                # Only log non-refreshing messages when debug is enabled
+                log_websocket("No refresh triggered for message type: %s", msg_type)
 
         except Exception as err:
             LOGGER.error("Error handling websocket message: %s", err)
     
     async def _force_refresh_with_cache_clear(self) -> None:
-        """Force a refresh with cache clearing to ensure fresh data."""
+        """Force a refresh with cache clearing to ensure fresh data.
+        
+        This method is triggered by WebSocket events and follows the same core refresh
+        and entity management logic as the regular polling updates:
+        1. Clear API cache
+        2. Call async_refresh() which updates rule collections
+        3. Process new entities through the same entity creation path
+        4. Check for deleted rules to maintain consistency with polling
+        
+        The only major difference is the explicit call to _check_for_deleted_rules()
+        which happens automatically during polling updates.
+        """
         try:
-            # Clear API cache first
-            await self.api.clear_cache()
+            # Log that we're starting a refresh
+            log_websocket("Starting forced refresh after rule change detected")
+            
+            # Store previous data for deletion detection
+            previous_data = self.data.copy() if self.data else {}
+            
+            # Clear the API cache to ensure we get fresh data
+            LOGGER.debug("Clearing API cache")
+            if hasattr(self.api, "clear_cache"):
+                self.api.clear_cache()
+            else:
+                LOGGER.warning("API object does not have clear_cache method")
+            LOGGER.debug("API cache cleared")
             log_data("Cache cleared before refresh")
             
-            # Then force a data refresh
-            await self.async_refresh()
-            log_data("Refresh completed after WebSocket event")
+            # Force a full data refresh
+            refresh_successful = await self.async_refresh()
+            
+            if refresh_successful:
+                # After refreshing data, check for and process new entities
+                await self.process_new_entities()
+                
+                # Also check for deleted rules
+                if previous_data:
+                    self._check_for_deleted_rules(previous_data, self.data)
+                
+                # Update the data timestamp
+                self._last_update = self.hass.loop.time()
+                
+                # Force an update of all entities
+                self.async_update_listeners()
+                
+                log_data("Refresh completed successfully after WebSocket event")
+            else:
+                LOGGER.error("WebSocket-triggered refresh failed")
         except Exception as err:
             LOGGER.error("Error during forced refresh: %s", err)
 
@@ -789,6 +860,14 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         """Clean up resources."""
         for cleanup_callback in self._cleanup_callbacks:
             cleanup_callback()
+            
+    async def async_shutdown(self) -> None:
+        """Clean up resources asynchronously."""
+        # Call the synchronous shutdown method
+        self.shutdown()
+        
+        # Any additional async cleanup can be added here
+        # For example, wait for pending tasks to complete
 
     async def _handle_auth_failure(self):
         """Handle authentication failures from API operations."""
@@ -811,6 +890,25 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             self._entity_removal_callback(rule_id)
         else:
             LOGGER.warning("No entity removal callback registered")
+            
+        # In any case, also dispatch the entity removed event
+        # Entities listen for this event to handle their own removal
+        LOGGER.info("Dispatching entity removal for: %s", rule_id)
+        
+        # Debug log the signal we're sending
+        LOGGER.debug("Sending signal: %s with payload: %s", f"{DOMAIN}_entity_removed", rule_id)
+        
+        # Use try-except to catch any dispatching errors
+        try:
+            # Explicitly use async_dispatcher_send directly
+            async_dispatcher_send(
+                self.hass,
+                f"{DOMAIN}_entity_removed",
+                rule_id
+            )
+            LOGGER.debug("Entity removal signal dispatched successfully")
+        except Exception as err:
+            LOGGER.error("Error dispatching entity removal: %s", err)
 
     async def async_refresh(self) -> bool:
         """Refresh data from the UniFi API."""
@@ -821,6 +919,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 
             # Use a default device name
             self.device_name = "UniFi Network Controller"
+            
+            # Store the previous data for state comparison
+            previous_data = self.data.copy() if self.data else {}
              
             # Update each rule type with specialized helper functions
             await self._update_port_forwards()
@@ -836,6 +937,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             # Process the entity creation queue if needed
             await self._process_entity_queue()
             
+            # Set updated data based on the refreshed rule collections
+            # This triggers entity state updates
             self.async_set_updated_data(self.data)
             
             # Ensure the rule collections are populated from updated data
@@ -903,119 +1006,306 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         
     async def _process_entity_queue(self) -> None:
         """Process any queued entity creation tasks."""
+        import asyncio
+        
         if not self._entity_creation_queue:
             return
+        
+        # Wait for platforms to be ready to ensure reliable entity creation
+        platforms_ready = False
+        max_platform_wait_attempts = 5
+        platform_wait_attempts = 0
+        
+        while not platforms_ready and platform_wait_attempts < max_platform_wait_attempts:
+            platform_wait_attempts += 1
             
-        async with self._queue_lock:
-            LOGGER.debug("Processing entity creation queue - %d items", len(self._entity_creation_queue))
-            # Process entity creation queue
-            for item in self._entity_creation_queue.copy():
-                rule_type = item.get("rule_type")
-                rule = item.get("rule")
-                if not rule or not rule_type:
-                    continue
-                    
+            try:
+                if DOMAIN in self.hass.data and "platforms" in self.hass.data[DOMAIN]:
+                    platforms = self.hass.data[DOMAIN]["platforms"]
+                    if "switch" in platforms:
+                        platforms_ready = True
+                        LOGGER.debug("Switch platform found - ready to process entity queue")
+                        break
+                    else:
+                        LOGGER.debug("Switch platform not ready (attempt %d/%d)", 
+                                   platform_wait_attempts, max_platform_wait_attempts)
+                else:
+                    LOGGER.debug("Platform data structure not initialized (attempt %d/%d)",
+                               platform_wait_attempts, max_platform_wait_attempts)
+            except Exception as err:
+                LOGGER.error("Error checking platform readiness: %s", err)
+            
+            # Wait before next attempt
+            await asyncio.sleep(1)
+        
+        if not platforms_ready:
+            LOGGER.warning("Platform not ready after %d attempts - deferring entity creation", 
+                         max_platform_wait_attempts)
+            # Schedule a retry
+            self.hass.async_create_task(self._schedule_queue_reprocessing())
+            return
+        
+        # Use a semaphore to prevent concurrent entity creation
+        if not hasattr(self, '_entity_queue_semaphore'):
+            self._entity_queue_semaphore = asyncio.Semaphore(1)
+        
+        # Only proceed if we can acquire the semaphore
+        if self._entity_queue_semaphore.locked():
+            LOGGER.debug("Skipping entity queue processing as one is already in progress")
+            return
+        
+        async with self._entity_queue_semaphore:
+            # Process the queue with rate limiting to prevent overwhelming HA
+            from homeassistant.helpers.entity_registry import async_get as get_entity_registry
+            entity_registry = get_entity_registry(self.hass)
+            
+            # Create a copy of the queue to process
+            queue_to_process = self._entity_creation_queue.copy()
+            self._entity_creation_queue = []
+            
+            # Track successfully created entities
+            created_entities = []
+            
+            # Process each item in the queue
+            for item in queue_to_process:
                 try:
-                    # Call the entity creation callback if registered
-                    if self.on_create_entity is not None:
-                        await self.on_create_entity(rule_type, rule)
-                    self._entity_creation_queue.remove(item)
-                except Exception as err:  # pylint: disable=broad-except
-                    LOGGER.error("Error creating entity: %s", err)
+                    # Expect only dictionary format items
+                    if not isinstance(item, dict) or "rule_type" not in item or "rule" not in item:
+                        LOGGER.error("Invalid queue item format: %s", item)
+                        continue
+                    
+                    rule_type = item["rule_type"]
+                    rule = item["rule"]
+                    
+                    # Skip if rule or rule_type is invalid
+                    if not rule or not rule_type:
+                        LOGGER.warning("Skipping invalid queue item: %s", item)
+                        continue
+                        
+                    # Get rule ID for tracking
+                    from .helpers.rule import get_rule_id
+                    rule_id = get_rule_id(rule)
+                    
+                    if not rule_id:
+                        LOGGER.warning("Cannot create entity for rule without ID")
+                        continue
+                    
+                    # Check if entity already exists in registry
+                    existing_entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, rule_id)
+                    if existing_entity_id:
+                        LOGGER.debug("Entity already exists in registry: %s", existing_entity_id)
+                        continue
+                    
+                    # Import the entity creation function
+                    from . import async_create_entity
+                    
+                    # Create the entity
+                    success = await async_create_entity(self.hass, rule_type, rule)
+                    
+                    if success:
+                        created_entities.append((rule_type, rule_id))
+                    else:
+                        # Re-queue for later if creation failed
+                        self._entity_creation_queue.append({
+                            "rule_type": rule_type,
+                            "rule": rule
+                        })
+                    
+                    # Rate limit entity creation to prevent overwhelming HA
+                    await asyncio.sleep(0.5)
+                    
+                except Exception as err:
+                    LOGGER.error("Error creating entity for queue item: %s", err)
+                    # Don't re-queue - it might be causing the errors
             
-            LOGGER.debug("Entity queue processing complete - %d items remaining", 
-                      len(self._entity_creation_queue))
+            # Log summary of created entities
+            if created_entities:
+                LOGGER.info("Created %d entities in this batch", len(created_entities))
+            
+            # If there are still items in the queue, schedule another processing
+            if self._entity_creation_queue:
+                LOGGER.debug("%d entities remaining in queue - scheduling another processing",
+                           len(self._entity_creation_queue))
+                self.hass.async_create_task(self._schedule_queue_reprocessing())
+
+    async def _schedule_entity_refresh(self) -> None:
+        """Schedule a delayed refresh of all entities to ensure they appear in the UI."""
+        # Wait a short time to allow Home Assistant to process the entity creation
+        await asyncio.sleep(1)
+        
+        try:
+            # Update data to refresh entity states
+            await self.async_request_refresh()
+            
+            # Option 1: Use dispatcher to notify entities to update
+            async_dispatcher_send(self.hass, f"{DOMAIN}_update")
+            
+            # Option 2: Try to update the component directly if available
+            try:
+                from homeassistant.helpers.entity_component import EntityComponent
+                component = self.hass.data.get("switch")
+                if isinstance(component, EntityComponent) and hasattr(component, "async_update_entity_states"):
+                    # This is a low-level method that forces all entities in the component to update
+                    LOGGER.debug("Forcing component entity states update")
+                    await component.async_update_entity_states()
+            except Exception as component_err:
+                LOGGER.debug("Error updating component entity states: %s", component_err)
+        except Exception as err:
+            LOGGER.error("Error in entity refresh: %s", err)
 
     async def process_new_entities(self) -> None:
         """Check for new entities in all rule types and queue them for creation."""
+        LOGGER.debug("Starting process_new_entities check")
+        
         # Create sets of currently tracked rule IDs for comparison
         port_forwards_to_add = {
             get_rule_id(rule) for rule in self.port_forwards
-            if get_rule_id(rule) not in self._tracked_port_forwards
+            if get_rule_id(rule) not in self._tracked_port_forwards and get_rule_id(rule) is not None
         }
         
         routes_to_add = {
             get_rule_id(rule) for rule in self.traffic_routes 
-            if get_rule_id(rule) not in self._tracked_routes
+            if get_rule_id(rule) not in self._tracked_routes and get_rule_id(rule) is not None
         }
         
         policies_to_add = {
             get_rule_id(rule) for rule in self.firewall_policies 
-            if get_rule_id(rule) not in self._tracked_policies
+            if get_rule_id(rule) not in self._tracked_policies and get_rule_id(rule) is not None
         }
         
         traffic_rules_to_add = {
             get_rule_id(rule) for rule in self.traffic_rules 
-            if get_rule_id(rule) not in self._tracked_traffic_rules
+            if get_rule_id(rule) not in self._tracked_traffic_rules and get_rule_id(rule) is not None
         }
         
         firewall_rules_to_add = {
             get_rule_id(rule) for rule in self.legacy_firewall_rules 
-            if get_rule_id(rule) not in self._tracked_firewall_rules
+            if get_rule_id(rule) not in self._tracked_firewall_rules and get_rule_id(rule) is not None
         }
         
         wlans_to_add = {
             get_rule_id(rule) for rule in self.wlans 
-            if get_rule_id(rule) not in self._tracked_wlans
+            if get_rule_id(rule) not in self._tracked_wlans and get_rule_id(rule) is not None
         }
+        
+        # Log counts of new rules detected
+        if (port_forwards_to_add or routes_to_add or policies_to_add or 
+            traffic_rules_to_add or firewall_rules_to_add or wlans_to_add):
+            LOGGER.debug(
+                "Detected new rules - Port Forwards: %d, Traffic Routes: %d, "
+                "Firewall Policies: %d, Traffic Rules: %d, Legacy Firewall Rules: %d, WLANs: %d",
+                len(port_forwards_to_add), len(routes_to_add), len(policies_to_add),
+                len(traffic_rules_to_add), len(firewall_rules_to_add), len(wlans_to_add)
+            )
         
         # Queue new entities for creation
         for rule in self.port_forwards:
             rule_id = get_rule_id(rule)
             if rule_id in port_forwards_to_add:
-                LOGGER.debug("Queueing new port forward for creation: %s", rule_id)
-                self._entity_creation_queue.append({
-                    "rule_type": "port_forwards",
-                    "rule": rule
-                })
-                self._tracked_port_forwards.add(rule_id)
+                LOGGER.debug("Queueing new port forward for creation: %s (class: %s)", 
+                           rule_id, type(rule).__name__)
+                # Ensure rule is valid before queueing
+                if hasattr(rule, 'id'):
+                    self._entity_creation_queue.append({
+                        "rule_type": "port_forwards",
+                        "rule": rule
+                    })
+                    self._tracked_port_forwards.add(rule_id)
+                else:
+                    LOGGER.error("Cannot queue port forward rule without id attribute")
                 
         for rule in self.traffic_routes:
             rule_id = get_rule_id(rule)
             if rule_id in routes_to_add:
-                LOGGER.debug("Queueing new traffic route for creation: %s", rule_id)
-                self._entity_creation_queue.append({
-                    "rule_type": "traffic_routes",
-                    "rule": rule
-                })
-                self._tracked_routes.add(rule_id)
+                LOGGER.debug("Queueing new traffic route for creation: %s (class: %s)", 
+                           rule_id, type(rule).__name__)
+                # Ensure rule is valid before queueing
+                if hasattr(rule, 'id'):
+                    self._entity_creation_queue.append({
+                        "rule_type": "traffic_routes",
+                        "rule": rule
+                    })
+                    self._tracked_routes.add(rule_id)
+                else:
+                    LOGGER.error("Cannot queue traffic route rule without id attribute")
                 
         for rule in self.firewall_policies:
             rule_id = get_rule_id(rule)
             if rule_id in policies_to_add:
-                LOGGER.debug("Queueing new firewall policy for creation: %s", rule_id)
-                self._entity_creation_queue.append({
-                    "rule_type": "firewall_policies",
-                    "rule": rule
-                })
-                self._tracked_policies.add(rule_id)
-                
+                LOGGER.debug(
+                    "Queueing new firewall policy for creation: %s (class: %s)",
+                    rule_id, 
+                    type(rule).__name__
+                )
+                # Ensure rule is valid before queueing
+                if hasattr(rule, 'id'):
+                    self._entity_creation_queue.append({
+                        "rule_type": "firewall_policies",
+                        "rule": rule
+                    })
+                    self._tracked_policies.add(rule_id)
+                else:
+                    LOGGER.error("Cannot queue firewall policy rule without id attribute")
+
         for rule in self.traffic_rules:
             rule_id = get_rule_id(rule)
             if rule_id in traffic_rules_to_add:
-                LOGGER.debug("Queueing new traffic rule for creation: %s", rule_id)
-                self._entity_creation_queue.append({
-                    "rule_type": "traffic_rules",
-                    "rule": rule
-                })
-                self._tracked_traffic_rules.add(rule_id)
+                LOGGER.debug("Queueing new traffic rule for creation: %s (class: %s)", 
+                          rule_id, type(rule).__name__)
+                # Ensure rule is valid before queueing
+                if hasattr(rule, 'id'):
+                    self._entity_creation_queue.append({
+                        "rule_type": "traffic_rules",
+                        "rule": rule
+                    })
+                    self._tracked_traffic_rules.add(rule_id)
+                else:
+                    LOGGER.error("Cannot queue traffic rule without id attribute")
                 
         for rule in self.legacy_firewall_rules:
             rule_id = get_rule_id(rule)
             if rule_id in firewall_rules_to_add:
-                LOGGER.debug("Queueing new firewall rule for creation: %s", rule_id)
-                self._entity_creation_queue.append({
-                    "rule_type": "legacy_firewall_rules",
-                    "rule": rule
-                })
-                self._tracked_firewall_rules.add(rule_id)
+                LOGGER.debug("Queueing new firewall rule for creation: %s (class: %s)", 
+                          rule_id, type(rule).__name__)
+                # Ensure rule is valid before queueing
+                if hasattr(rule, 'id'):
+                    self._entity_creation_queue.append({
+                        "rule_type": "legacy_firewall_rules",
+                        "rule": rule
+                    })
+                    self._tracked_firewall_rules.add(rule_id)
+                else:
+                    LOGGER.error("Cannot queue legacy firewall rule without id attribute")
                 
         for rule in self.wlans:
             rule_id = get_rule_id(rule)
             if rule_id in wlans_to_add:
-                LOGGER.debug("Queueing new WLAN for creation: %s", rule_id)
-                self._entity_creation_queue.append({
-                    "rule_type": "wlans",
-                    "rule": rule
-                })
-                self._tracked_wlans.add(rule_id)
+                LOGGER.debug(
+                    "Queueing new WLAN for creation: %s (class: %s)",
+                    rule_id, 
+                    type(rule).__name__
+                )
+                # Ensure rule is valid before queueing
+                if hasattr(rule, 'id'):
+                    self._entity_creation_queue.append({
+                        "rule_type": "wlans",
+                        "rule": rule
+                    })
+                    self._tracked_wlans.add(rule_id)
+                else:
+                    LOGGER.error("Cannot queue WLAN rule without id attribute")
+
+    def set_entity_removal_callback(self, callback):
+        """Set callback for entity removal.
+        
+        Args:
+            callback: Function to call when an entity should be removed
+        """
+        self._entity_removal_callback = callback
+        LOGGER.debug("Entity removal callback registered")
+
+    async def _schedule_queue_reprocessing(self) -> None:
+        """Schedule a delayed reprocessing of the entity creation queue."""
+        import asyncio
+        await asyncio.sleep(5)  # Wait 5 seconds before retrying
+        await self._process_entity_queue()
