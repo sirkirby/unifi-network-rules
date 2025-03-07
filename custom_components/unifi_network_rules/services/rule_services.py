@@ -48,10 +48,16 @@ DELETE_RULE_SCHEMA = vol.Schema(
 
 async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: ServiceCall) -> None:
     """Handle toggling a rule by ID."""
-    rule_id = call.data.get(CONF_RULE_ID)
-    enabled = call.data.get(CONF_STATE)
+    rule_id = call.data[CONF_RULE_ID]
+    enabled = call.data["enabled"]
     rule_type = call.data.get(CONF_RULE_TYPE)
     
+    # Check if we have any coordinators
+    if not coordinators:
+        LOGGER.error("No UniFi Network Rules coordinators available")
+        return {"error": "No coordinators available"}
+    
+    # Get the rule based on its ID and type (from any coordinator)
     if not rule_id:
         raise HomeAssistantError("Rule ID is required")
     
@@ -140,12 +146,20 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
     # Force a refresh on all coordinators
     for coordinator in coordinators.values():
         await coordinator.async_refresh()
+    
+    return {"status": "success", "rule_id": rule_id, "enabled": enabled}
 
 async def async_delete_rule(hass: HomeAssistant, coordinators: Dict, call: ServiceCall) -> None:
     """Handle deleting a rule by ID."""
-    rule_id = call.data.get(CONF_RULE_ID)
+    rule_id = call.data[CONF_RULE_ID]
     rule_type = call.data.get(CONF_RULE_TYPE)
     
+    # Check if we have any coordinators
+    if not coordinators:
+        LOGGER.error("No UniFi Network Rules coordinators available")
+        return {"error": "No coordinators available"}
+    
+    # Get the rule based on its ID and type (from any coordinator)
     if not rule_id:
         raise HomeAssistantError("Rule ID is required")
     
@@ -192,12 +206,19 @@ async def async_delete_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
     # Refresh all coordinators after deletion
     for coordinator in coordinators.values():
         await coordinator.async_refresh()
+        
+    return {"status": "success", "rule_id": rule_id}
 
 async def async_bulk_update_rules(hass: HomeAssistant, coordinators: Dict, call: ServiceCall) -> None:
     """Service to enable/disable multiple rules based on name matching."""
     name_filter = call.data[CONF_NAME_FILTER].lower()
     desired_state = call.data[CONF_STATE]
     updated_count = 0
+    
+    # Check if we have any coordinators
+    if not coordinators:
+        LOGGER.error("No UniFi Network Rules coordinators available")
+        return {"error": "No coordinators available", "updated_count": 0}
 
     # Function to toggle rule based on its type and current state
     async def toggle_rule_if_needed(api, rule_type, rule_obj, desired_state):
@@ -261,6 +282,8 @@ async def async_bulk_update_rules(hass: HomeAssistant, coordinators: Dict, call:
         LOGGER.warning("No rules found matching filter: %s", name_filter)
     else:
         LOGGER.info("Updated %s rules matching filter: %s", updated_count, name_filter)
+    
+    return {"status": "success", "updated_count": updated_count, "filter": name_filter}
 
 async def async_setup_rule_services(hass: HomeAssistant, coordinators: Dict) -> None:
     """Set up rule-related services."""

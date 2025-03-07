@@ -4,8 +4,11 @@ from __future__ import annotations
 import json
 import os
 import logging
+import time
+import aiofiles
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from pathlib import Path
 
 import voluptuous as vol
 
@@ -22,7 +25,13 @@ from .constants import (
     CONF_NAME_FILTER,
     CONF_RULE_TYPES,
 )
-from ..models.firewall_rule import FirewallRule  # Import FirewallRule
+
+# Import the typed model classes for conversion
+from aiounifi.models.traffic_route import TrafficRoute
+from aiounifi.models.port_forward import PortForward
+from aiounifi.models.firewall_policy import FirewallPolicy
+from aiounifi.models.traffic_rule import TrafficRule
+from ..models.firewall_rule import FirewallRule
 
 # Schema for backup_rules service
 BACKUP_RULES_SCHEMA = vol.Schema(
@@ -41,16 +50,67 @@ RESTORE_RULES_SCHEMA = vol.Schema(
     }
 )
 
+def create_backup_from_coordinator(coordinator, filename: str, hostname: str = None) -> Dict:
+    """Create a backup data structure from a coordinator's data.
+    
+    Args:
+        coordinator: The coordinator containing the rule data
+        filename: The filename for the backup
+        hostname: Optional hostname override (will use coordinator's api.host if not provided)
+        
+    Returns:
+        Dict containing the backup data structure
+    """
+    if not hostname and hasattr(coordinator.api, "host"):
+        hostname = coordinator.api.host
+    
+    # Create backup data structure
+    backup_data = {
+        "hostname": hostname,
+        "timestamp": datetime.now().isoformat(),
+        "rules": {}
+    }
+    
+    # Track which rule types we've backed up
+    available_rules = []
+    
+    # Collect all rules from the coordinator data
+    for rule_type, rules in coordinator.data.items():
+        if not rules:
+            continue
+            
+        # Serialize rules for backup
+        serialized_rules = []
+        for rule in rules:
+            if hasattr(rule, "raw"):
+                # API objects usually have a raw property with the dict representation
+                serialized_rules.append(rule.raw)
+            elif isinstance(rule, dict):
+                # Some rules might already be dictionaries
+                serialized_rules.append(rule)
+                
+        if serialized_rules:
+            backup_data["rules"][rule_type] = serialized_rules
+            available_rules.append(rule_type)
+    
+    return backup_data, available_rules
+
 async def async_backup_rules_service(hass: HomeAssistant, coordinators: Dict, call: ServiceCall) -> None:
     """Back up rules to a file."""
     entry_id = call.data.get("config_entry_id")
     filename = call.data.get("filename")
     
-    # Get coordinator and API for the specified entry
-    if entry_id not in coordinators:
-        raise ValueError(f"Config entry {entry_id} not found")
+    # Get coordinator and API for the specified entry or use the first available one
+    if entry_id and entry_id in coordinators:
+        coordinator = coordinators[entry_id]
+    else:
+        # If no specific entry_id is provided or it's invalid, use the first available coordinator
+        if not coordinators:
+            raise ValueError("No UniFi Network Rules coordinators available")
+        entry_id = next(iter(coordinators))
+        coordinator = coordinators[entry_id]
+        LOGGER.info("Using default coordinator for entry_id: %s", entry_id)
     
-    coordinator = coordinators[entry_id]
     api = coordinator.api
     
     # Generate backup filename
@@ -61,72 +121,81 @@ async def async_backup_rules_service(hass: HomeAssistant, coordinators: Dict, ca
     elif not filename.endswith(".json"):
         filename = f"{filename}.json"
     
-    # Get rules data
-    backup_data = {
-        "hostname": api.host,
-        "timestamp": datetime.now().isoformat(),
-        "rules": {}
-    }
-    
-    # Check what types of rules are available
-    available_rules = []
-    
-    # Add available rule types to the backup
-    if coordinator.data:
-        # Convert each rule to a serializable format
-        for rule_type, rules in coordinator.data.items():
-            if rules:
-                # Convert each rule to a serializable dictionary
-                serialized_rules = []
-                for rule in rules:
-                    # Simplified logic for serializing all API object types
-                    # All our API objects now have a consistent .raw property
-                    if hasattr(rule, "raw"):
-                        serialized_rules.append(rule.raw)
-                    # Handle plain dictionaries
-                    elif isinstance(rule, dict):
-                        serialized_rules.append(rule)
-                    # Handle other objects (unlikely with our updates)
-                    else:
-                        LOGGER.warning("Encountered non-standard rule object type: %s", type(rule).__name__)
-                        # Try to convert to dict using __dict__
-                        try:
-                            rule_dict = rule.__dict__
-                            serialized_rules.append(rule_dict)
-                        except AttributeError:
-                            # Last resort: try to make a dict from properties
-                            rule_dict = {}
-                            for attr in dir(rule):
-                                if not attr.startswith("_") and not callable(getattr(rule, attr)):
-                                    rule_dict[attr] = getattr(rule, attr)
-                            serialized_rules.append(rule_dict)
-                
-                backup_data["rules"][rule_type] = serialized_rules
-                available_rules.append(rule_type)
+    # Get rules data using helper function
+    backup_data, available_rules = create_backup_from_coordinator(coordinator, filename)
     
     # Save backup file
     backup_path = hass.config.path(BACKUP_LOCATION, filename)
     
+    # Ensure the backup directory exists
+    Path(os.path.dirname(backup_path)).mkdir(parents=True, exist_ok=True)
+    
     with open(backup_path, "w") as f:
         json.dump(backup_data, f, indent=2)
     
-    return {"filename": filename, "path": backup_path, "rule_types": available_rules}
+    LOGGER.info("Backed up %d rule types to %s", len(available_rules), backup_path)
+    
+    return {
+        "status": "success", 
+        "filename": filename, 
+        "path": backup_path, 
+        "rule_types": available_rules,
+        "rule_count": sum(len(backup_data["rules"].get(rule_type, [])) for rule_type in available_rules)
+    }
 
 async def async_restore_rules_service(hass: HomeAssistant, coordinators: Dict, call: ServiceCall) -> None:
     """Restore rules from a file."""
     entry_id = call.data.get("config_entry_id")
     filename = call.data.get("filename")
+    force_restore = call.data.get("force_restore", False)
+    rule_ids = call.data.get("rule_ids", [])
+    name_filter = call.data.get("name_filter", "")
+    rule_types = call.data.get("rule_types", [])
+    
+    if rule_types:
+        LOGGER.info("Filtering restore to only include rule types: %s", rule_types)
+    if rule_ids:
+        LOGGER.info("Filtering restore to only include rule IDs: %s", rule_ids)
+    if name_filter:
+        LOGGER.info("Filtering restore to only include rules with names containing: %s", name_filter)
+    
+    # Helper function to robustly check if a rule exists
+    def rule_exists_in_collection(rule_dict: dict, collection: List[Any]) -> bool:
+        """Check if a rule exists in a collection, using primarily ID matching.
+        
+        First checks by ID, then falls back to minimal attribute matching only for specific cases.
+        """
+        rule_id = rule_dict.get("_id", "")
+        
+        # If we have an ID, use that as the primary comparison method
+        if rule_id:
+            for existing_rule in collection:
+                existing_id = getattr(existing_rule, "id", None)
+                if existing_id is None and isinstance(existing_rule, dict):
+                    existing_id = existing_rule.get("_id", None)
+                
+                if existing_id == rule_id:
+                    LOGGER.debug("Rule ID match found: %s", rule_id)
+                    return True
+        
+        return False
+    
+    # Get coordinator and API for the specified entry or use the first available one
+    if entry_id and entry_id in coordinators:
+        coordinator = coordinators[entry_id]
+    else:
+        # If no specific entry_id is provided or it's invalid, use the first available coordinator
+        if not coordinators:
+            raise ValueError("No UniFi Network Rules coordinators available")
+        entry_id = next(iter(coordinators))
+        coordinator = coordinators[entry_id]
+        LOGGER.info("Using default coordinator for entry_id: %s", entry_id)
+    
+    api = coordinator.api
     
     # Validate parameters
     if not filename:
         raise ValueError("Filename is required")
-    
-    # Get coordinator and API for the specified entry
-    if entry_id not in coordinators:
-        raise ValueError(f"Config entry {entry_id} not found")
-    
-    coordinator = coordinators[entry_id]
-    api = coordinator.api
     
     # Make sure filename has .json extension
     if not filename.endswith(".json"):
@@ -135,72 +204,440 @@ async def async_restore_rules_service(hass: HomeAssistant, coordinators: Dict, c
     # Load backup file
     backup_path = hass.config.path(BACKUP_LOCATION, filename)
     
+    # Ensure the backup directory exists
+    Path(os.path.dirname(backup_path)).mkdir(parents=True, exist_ok=True)
+    
     try:
-        with open(backup_path, "r") as f:
-            backup_data = json.load(f)
+        # Use aiofiles for async file operations
+        async with aiofiles.open(backup_path, "r") as f:
+            backup_data = json.loads(await f.read())
     except FileNotFoundError:
         raise ValueError(f"Backup file {filename} not found")
     except json.JSONDecodeError:
-        raise ValueError(f"Invalid JSON in backup file {filename}")
+        raise ValueError(f"Backup file {filename} is not valid JSON")
     
     # Get rules from backup
     if "rules" not in backup_data:
         raise ValueError("Invalid backup file: 'rules' section not found")
     
     backup_entry = backup_data["rules"]
-
-    # Define a function to determine if a rule should be restored
-    def should_restore(rule: dict, rule_type: str) -> bool:
-        """Determine if a rule should be restored."""
-        # Check if rule has required fields
-        if "_id" not in rule:
-            return False
+    
+    # Ensure we have fresh data before processing
+    LOGGER.info("Refreshing coordinator data to ensure we have the latest state...")
+    await coordinator.async_refresh()
+    
+    # Create an automatic backup of the current state before restoring
+    # This serves as a safety net in case anything goes wrong during restore
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    auto_backup_filename = f"auto_backup_before_restore_{timestamp}.json"
+    LOGGER.info("Creating automatic backup of current state before restoration: %s", auto_backup_filename)
+    
+    # Use the helper function to create the backup data
+    auto_backup_data, auto_backup_rule_types = create_backup_from_coordinator(
+        coordinator, auto_backup_filename
+    )
+    
+    # Save the automatic backup file
+    auto_backup_path = hass.config.path(BACKUP_LOCATION, auto_backup_filename)
+    Path(os.path.dirname(auto_backup_path)).mkdir(parents=True, exist_ok=True)
+    
+    # Use aiofiles for async file operations
+    async with aiofiles.open(auto_backup_path, "w") as f:
+        await f.write(json.dumps(auto_backup_data, indent=2))
         
-        # Allow restore based on rule type
-        return True
+    LOGGER.info("Automatic backup created at %s with %d rule types", 
+              auto_backup_path, len(auto_backup_rule_types))
+    
+    # Log restore mode
+    if force_restore:
+        LOGGER.info("Force restore mode enabled - all rules will be restored/overwritten")
+    else:
+        LOGGER.info("Selective restore mode - only restoring rules that don't already exist")
 
+    # Define a function to determine if a rule should be restored (handles filtering)
+    async def should_restore(rule_dict: dict, rule_type: str) -> bool:
+        """Determine if a rule should be restored based on filters.
+        
+        Applies rule_ids, name_filter, and rule_types filters.
+        Does NOT check if the rule exists - that's handled separately.
+        
+        Returns True if the rule passes all filters and should be restored.
+        """
+        # Check if rule has required fields
+        if "_id" not in rule_dict:
+            return False
+            
+        rule_id = rule_dict["_id"]
+        
+        # Apply rule_ids filter if specified
+        if rule_ids and rule_id not in rule_ids:
+            LOGGER.debug("Rule %s not in specified rule_ids list, skipping", rule_id)
+            return False
+            
+        # Apply name_filter if specified
+        if name_filter:
+            rule_name = rule_dict.get("name", "")
+            if not rule_name or name_filter.lower() not in rule_name.lower():
+                LOGGER.debug("Rule name '%s' doesn't match filter '%s', skipping", rule_name, name_filter)
+                return False
+                
+        # Apply rule_types filter if specified
+        if rule_types:
+            # Map rule_type to the corresponding type in rule_types
+            rule_type_map = {
+                # Standard selectable types in service schema
+                "firewall_policy": "policy",   # Newer version of rules
+                "port_forward": "port_forward",
+                "traffic_route": "route",
+                
+                # Legacy types - older controllers will have these instead of firewall_policy
+                "legacy_firewall": "policy",   # Maps to policy as it's the older version
+                "traffic_rule": "policy",      # Maps to policy as it's the older version of firewall rules
+                "legacy_traffic": "policy"     # Maps to policy as it's the older version of firewall rules
+            }
+            mapped_type = rule_type_map.get(rule_type)
+            
+            # Only apply rule_types filter if it's specified
+            if rule_types and mapped_type not in rule_types:
+                LOGGER.debug(
+                    "Rule type %s (mapped to %s) not in specified rule_types list, skipping", 
+                    rule_type, mapped_type
+                )
+                return False
+            
+        # All filters passed
+        return True
+    
+    # Using queue_api_operation for all API calls to prevent rate limiting
+    # and avoid overwhelming the UniFi controller with too many concurrent requests.
+    # This queues operations and executes them at a controlled rate.
+    
     # Restore firewall policies
+    restore_counts = {}
+    skip_counts = {}
     if "firewall_policies" in backup_entry and hasattr(api, "update_firewall_policy"):
-        for rule in backup_entry["firewall_policies"]:
-            if should_restore(rule, "firewall_policy"):
-                await api.update_firewall_policy(rule["_id"], rule)
+        restore_counts["firewall_policies"] = 0
+        skip_counts["firewall_policies"] = 0
+        LOGGER.info("Restoring firewall policies...")
+        for rule_dict in backup_entry["firewall_policies"]:
+            rule_id = rule_dict.get("_id", "")
+            
+            # Apply filters first
+            should_restore_rule = await should_restore(rule_dict, "firewall_policy")
+            
+            if should_restore_rule:
+                # Check if this rule already exists in the system
+                rule_exists = False
+                if "firewall_policies" in coordinator.data:
+                    rule_exists = rule_exists_in_collection(rule_dict, coordinator.data["firewall_policies"])
+                
+                try:
+                    if rule_exists and force_restore:
+                        # Use update method when the rule exists and we're forcing an update
+                        LOGGER.debug("Rule %s exists and force_restore is True, updating existing rule", rule_id)
+                        # Convert to typed object for update
+                        rule_obj = FirewallPolicy(rule_dict)
+                        await api.queue_api_operation(api.update_firewall_policy, rule_obj)
+                    elif rule_exists:
+                        # Rule exists but force_restore is False, so skip it
+                        LOGGER.debug("Rule %s already exists, skipping (use force_restore=True to update existing rules)", rule_id)
+                        skip_counts["firewall_policies"] += 1
+                    else:
+                        # Use add method when the rule doesn't exist
+                        LOGGER.debug("Creating new firewall policy based on %s", rule_id)
+                        # For adding new rules, create a copy without the _id field
+                        # to let the API assign a new ID
+                        add_rule_dict = rule_dict.copy()
+                        if '_id' in add_rule_dict:
+                            del add_rule_dict['_id']  # Remove ID to avoid InvalidObject errors
+                        
+                        await api.queue_api_operation(api.add_firewall_policy, add_rule_dict)
+                    
+                    restore_counts["firewall_policies"] += 1
+                except Exception as err:
+                    LOGGER.error("Error restoring firewall policy %s: %s", rule_id, err)
+            else:
+                skip_counts["firewall_policies"] += 1
+        
+        LOGGER.info("Processed %d firewall policies (restored: %d, skipped: %d)", 
+                  restore_counts["firewall_policies"] + skip_counts["firewall_policies"],
+                  restore_counts["firewall_policies"], 
+                  skip_counts["firewall_policies"])
 
     # Restore traffic rules
     if "traffic_rules" in backup_entry and hasattr(api, "update_traffic_rule"):
-        for rule in backup_entry["traffic_rules"]:
-            if should_restore(rule, "traffic_rule"):
-                await api.update_traffic_rule(rule["_id"], rule)
+        restore_counts["traffic_rules"] = 0
+        skip_counts["traffic_rules"] = 0
+        LOGGER.info("Restoring traffic rules...")
+        for rule_dict in backup_entry["traffic_rules"]:
+            rule_id = rule_dict.get("_id", "")
+            
+            # Apply filters first
+            should_restore_rule = await should_restore(rule_dict, "traffic_rule")
+            
+            if should_restore_rule:
+                # Check if this rule already exists in the system
+                rule_exists = False
+                if "traffic_rules" in coordinator.data:
+                    rule_exists = rule_exists_in_collection(rule_dict, coordinator.data["traffic_rules"])
+                
+                try:
+                    if rule_exists and force_restore:
+                        # Use update method when the rule exists and we're forcing an update
+                        LOGGER.debug("Rule %s exists and force_restore is True, updating existing rule", rule_id)
+                        # Convert to typed object for update
+                        rule_obj = TrafficRule(rule_dict)
+                        await api.queue_api_operation(api.update_traffic_rule, rule_obj)
+                    elif rule_exists:
+                        # Rule exists but force_restore is False, so skip it
+                        LOGGER.debug("Rule %s already exists, skipping (use force_restore=True to update existing rules)", rule_id)
+                        skip_counts["traffic_rules"] += 1
+                    else:
+                        # Use add method when the rule doesn't exist
+                        LOGGER.debug("Creating new traffic rule based on %s", rule_id)
+                        # For adding new rules, create a copy without the _id field
+                        # to let the API assign a new ID
+                        add_rule_dict = rule_dict.copy()
+                        if '_id' in add_rule_dict:
+                            del add_rule_dict['_id']  # Remove ID to avoid InvalidObject errors
+                        
+                        await api.queue_api_operation(api.add_traffic_rule, add_rule_dict)
+                    
+                    restore_counts["traffic_rules"] += 1
+                except Exception as err:
+                    LOGGER.error("Error restoring traffic rule %s: %s", rule_id, err)
+            else:
+                skip_counts["traffic_rules"] += 1
+        
+        LOGGER.info("Processed %d traffic rules (restored: %d, skipped: %d)", 
+                  restore_counts["traffic_rules"] + skip_counts["traffic_rules"],
+                  restore_counts["traffic_rules"], 
+                  skip_counts["traffic_rules"])
 
     # Restore port forwards
     if "port_forwards" in backup_entry and hasattr(api, "update_port_forward"):
-        for rule in backup_entry["port_forwards"]:
-            if should_restore(rule, "port_forward"):
-                await api.update_port_forward(rule["_id"], rule)
+        restore_counts["port_forwards"] = 0
+        skip_counts["port_forwards"] = 0
+        LOGGER.info("Restoring port forwards...")
+        for rule_dict in backup_entry["port_forwards"]:
+            rule_id = rule_dict.get("_id", "")
+            
+            # Apply filters first
+            should_restore_rule = await should_restore(rule_dict, "port_forward")
+            
+            if should_restore_rule:
+                # Check if this rule already exists in the system
+                rule_exists = False
+                if "port_forwards" in coordinator.data:
+                    rule_exists = rule_exists_in_collection(rule_dict, coordinator.data["port_forwards"])
+                
+                try:
+                    if rule_exists and force_restore:
+                        # Use update method when the rule exists and we're forcing an update
+                        LOGGER.debug("Rule %s exists and force_restore is True, updating existing rule", rule_id)
+                        # Convert to typed object for update
+                        rule_obj = PortForward(rule_dict)
+                        await api.queue_api_operation(api.update_port_forward, rule_obj)
+                    elif rule_exists:
+                        # Rule exists but force_restore is False, so skip it
+                        LOGGER.debug("Rule %s already exists, skipping (use force_restore=True to update existing rules)", rule_id)
+                        skip_counts["port_forwards"] += 1
+                    else:
+                        # Use add method when the rule doesn't exist
+                        LOGGER.debug("Creating new port forward rule based on %s", rule_id)
+                        # For adding new rules, create a copy without the _id field
+                        # to let the API assign a new ID
+                        add_rule_dict = rule_dict.copy()
+                        if '_id' in add_rule_dict:
+                            del add_rule_dict['_id']  # Remove ID to avoid InvalidObject errors
+                        
+                        # Let the UniFi API handle validation itself
+                        await api.queue_api_operation(api.add_port_forward, add_rule_dict)
+                    
+                    restore_counts["port_forwards"] += 1
+                except Exception as err:
+                    LOGGER.error("Error restoring port forward %s: %s", rule_id, err)
+            else:
+                skip_counts["port_forwards"] += 1
+        
+        LOGGER.info("Processed %d port forwards (restored: %d, skipped: %d)", 
+                  restore_counts["port_forwards"] + skip_counts["port_forwards"],
+                  restore_counts["port_forwards"], 
+                  skip_counts["port_forwards"])
 
     # Restore legacy firewall rules
     if "legacy_firewall_rules" in backup_entry and api.capabilities.legacy_firewall:
-        for rule in backup_entry["legacy_firewall_rules"]:
-            if should_restore(rule, "legacy_firewall"):
-                # Rule is already in dictionary format from the backup
-                # No need to convert FirewallRule to dictionary here
-                await api.update_legacy_firewall_rule(rule["_id"], rule)
+        restore_counts["legacy_firewall_rules"] = 0
+        skip_counts["legacy_firewall_rules"] = 0
+        LOGGER.info("Restoring legacy firewall rules...")
+        for rule_dict in backup_entry["legacy_firewall_rules"]:
+            rule_id = rule_dict.get("_id", "")
+            
+            # Apply filters first
+            should_restore_rule = await should_restore(rule_dict, "legacy_firewall")
+            
+            if should_restore_rule:
+                # Check if this rule already exists in the system
+                rule_exists = False
+                if "legacy_firewall_rules" in coordinator.data:
+                    rule_exists = rule_exists_in_collection(rule_dict, coordinator.data["legacy_firewall_rules"])
+                
+                try:
+                    if rule_exists and force_restore:
+                        # Use update method when the rule exists and we're forcing an update
+                        LOGGER.debug("Rule %s exists and force_restore is True, updating existing rule", rule_id)
+                        # Convert to typed object for update
+                        rule_obj = FirewallRule(rule_dict)
+                        await api.queue_api_operation(api.update_legacy_firewall_rule, rule_obj)
+                    elif rule_exists:
+                        # Rule exists but force_restore is False, so skip it
+                        LOGGER.debug("Rule %s already exists, skipping (use force_restore=True to update existing rules)", rule_id)
+                        skip_counts["legacy_firewall_rules"] += 1
+                    else:
+                        # Use add method when the rule doesn't exist
+                        LOGGER.debug("Creating new firewall rule based on %s", rule_id)
+                        # For adding new rules, create a copy without the _id field
+                        # to let the API assign a new ID
+                        add_rule_dict = rule_dict.copy()
+                        if '_id' in add_rule_dict:
+                            del add_rule_dict['_id']  # Remove ID to avoid InvalidObject errors
+                        
+                        await api.queue_api_operation(api.add_legacy_firewall_rule, add_rule_dict)
+                    
+                    restore_counts["legacy_firewall_rules"] += 1
+                except Exception as err:
+                    LOGGER.error("Error restoring legacy firewall rule %s: %s", rule_id, err)
+            else:
+                skip_counts["legacy_firewall_rules"] += 1
+        
+        LOGGER.info("Processed %d legacy firewall rules (restored: %d, skipped: %d)", 
+                  restore_counts["legacy_firewall_rules"] + skip_counts["legacy_firewall_rules"],
+                  restore_counts["legacy_firewall_rules"], 
+                  skip_counts["legacy_firewall_rules"])
 
     # Restore legacy traffic rules
     if "legacy_traffic_rules" in backup_entry and api.capabilities.legacy_traffic:
-        for rule in backup_entry["legacy_traffic_rules"]:
-            if should_restore(rule, "legacy_traffic"):
-                await api.update_legacy_traffic_rule(rule["_id"], rule)
+        restore_counts["legacy_traffic_rules"] = 0
+        skip_counts["legacy_traffic_rules"] = 0
+        LOGGER.info("Restoring legacy traffic rules...")
+        for rule_dict in backup_entry["legacy_traffic_rules"]:
+            rule_id = rule_dict.get("_id", "")
+            
+            # Apply filters first
+            should_restore_rule = await should_restore(rule_dict, "legacy_traffic")
+            
+            if should_restore_rule:
+                # Check if this rule already exists in the system
+                rule_exists = False
+                if "legacy_traffic_rules" in coordinator.data:
+                    rule_exists = rule_exists_in_collection(rule_dict, coordinator.data["legacy_traffic_rules"])
+                
+                try:
+                    if rule_exists and force_restore:
+                        # Use update method when the rule exists and we're forcing an update
+                        LOGGER.debug("Rule %s exists and force_restore is True, updating existing rule", rule_id)
+                        # Convert to typed object for update
+                        rule_obj = TrafficRule(rule_dict)
+                        await api.queue_api_operation(api.update_legacy_traffic_rule, rule_obj)
+                    else:
+                        # Use add method when the rule doesn't exist
+                        LOGGER.debug("Creating new legacy traffic rule based on %s", rule_id)
+                        # For adding new rules, create a copy without the _id field
+                        # to let the API assign a new ID
+                        add_rule_dict = rule_dict.copy()
+                        if '_id' in add_rule_dict:
+                            del add_rule_dict['_id']  # Remove ID to avoid InvalidObject errors
+                        
+                        await api.queue_api_operation(api.add_legacy_traffic_rule, add_rule_dict)
+                    
+                    restore_counts["legacy_traffic_rules"] += 1
+                except Exception as err:
+                    LOGGER.error("Error restoring legacy traffic rule %s: %s", rule_id, err)
+            else:
+                skip_counts["legacy_traffic_rules"] += 1
+        
+        LOGGER.info("Processed %d legacy traffic rules (restored: %d, skipped: %d)", 
+                  restore_counts["legacy_traffic_rules"] + skip_counts["legacy_traffic_rules"],
+                  restore_counts["legacy_traffic_rules"], 
+                  skip_counts["legacy_traffic_rules"])
 
     # Restore traffic routes
     if "traffic_routes" in backup_entry and hasattr(api, "update_traffic_route"):
-        for rule in backup_entry["traffic_routes"]:
-            if should_restore(rule, "traffic_route"):
-                await api.update_traffic_route(rule["_id"], rule)
+        restore_counts["traffic_routes"] = 0
+        skip_counts["traffic_routes"] = 0
+        LOGGER.info("Restoring traffic routes...")
+        for rule_dict in backup_entry["traffic_routes"]:
+            rule_id = rule_dict.get("_id", "")
+            
+            # Apply filters first
+            should_restore_rule = await should_restore(rule_dict, "traffic_route")
+            
+            if should_restore_rule:
+                # Check if this rule already exists in the system
+                rule_exists = False
+                if "traffic_routes" in coordinator.data:
+                    rule_exists = rule_exists_in_collection(rule_dict, coordinator.data["traffic_routes"])
+                
+                try:
+                    if rule_exists and force_restore:
+                        # Use update method when the rule exists and we're forcing an update
+                        LOGGER.debug("Rule %s exists and force_restore is True, updating existing rule", rule_id)
+                        # Convert to typed object for update
+                        rule_obj = TrafficRoute(rule_dict)
+                        await api.queue_api_operation(api.update_traffic_route, rule_obj)
+                    elif rule_exists:
+                        # Rule exists but force_restore is False, so skip it
+                        LOGGER.debug("Rule %s already exists, skipping (use force_restore=True to update existing rules)", rule_id)
+                        skip_counts["traffic_routes"] += 1
+                    else:
+                        # Use add method when the rule doesn't exist
+                        LOGGER.debug("Creating new traffic route based on %s", rule_id)
+                        # For adding new rules, create a copy without the _id field
+                        # to let the API assign a new ID
+                        add_rule_dict = rule_dict.copy()
+                        if '_id' in add_rule_dict:
+                            del add_rule_dict['_id']  # Remove ID to avoid InvalidObject errors
+                        
+                        # Let the UniFi API handle validation itself
+                        await api.queue_api_operation(api.add_traffic_route, add_rule_dict)
+                    
+                    restore_counts["traffic_routes"] += 1
+                except Exception as err:
+                    LOGGER.error("Error restoring traffic route %s: %s", rule_id, err)
+            else:
+                skip_counts["traffic_routes"] += 1
+        
+        LOGGER.info("Processed %d traffic routes (restored: %d, skipped: %d)", 
+                  restore_counts["traffic_routes"] + skip_counts["traffic_routes"],
+                  restore_counts["traffic_routes"], 
+                  skip_counts["traffic_routes"])
 
     # Refresh data after restore
     await coordinator.async_refresh()
+    
+    total_restored = sum(restore_counts.values())
+    total_skipped = sum(skip_counts.values())
+    total_processed = total_restored + total_skipped
+    LOGGER.info("Completed restoring rules from %s (processed: %d, restored: %d, skipped: %d)", 
+               backup_path, total_processed, total_restored, total_skipped)
 
-    return {"status": "success", "filename": filename}
+    return {
+        "status": "success", 
+        "filename": filename,
+        "path": backup_path,
+        "rule_types_restored": list(backup_data["rules"].keys()),
+        "restore_counts": restore_counts,
+        "skip_counts": skip_counts,
+        "total_restored": total_restored,
+        "total_skipped": total_skipped,
+        "mode": "force" if force_restore else "selective",
+        "automatic_backup": {
+            "filename": auto_backup_filename,
+            "path": auto_backup_path,
+            "rule_types": auto_backup_rule_types,
+            "rule_count": sum(len(auto_backup_data["rules"].get(rule_type, [])) for rule_type in auto_backup_rule_types)
+        }
+    }
 
 async def async_setup_backup_services(hass: HomeAssistant, coordinators: Dict) -> None:
     """Set up backup services."""
@@ -219,7 +656,7 @@ async def async_setup_backup_services(hass: HomeAssistant, coordinators: Dict) -
         SERVICE_BACKUP,
         handle_backup_rules,
         schema=vol.Schema({
-            vol.Required("config_entry_id"): cv.string,
+            vol.Optional("config_entry_id"): cv.string,
             vol.Optional("filename"): cv.string,
         })
     )
@@ -229,8 +666,12 @@ async def async_setup_backup_services(hass: HomeAssistant, coordinators: Dict) -
         SERVICE_RESTORE,
         handle_restore_rules,
         schema=vol.Schema({
-            vol.Required("config_entry_id"): cv.string,
+            vol.Optional("config_entry_id"): cv.string,
             vol.Required("filename"): cv.string,
+            vol.Optional("force_restore"): cv.boolean,
+            vol.Optional("rule_ids"): vol.All(cv.ensure_list, [cv.string]),
+            vol.Optional("name_filter"): cv.string,
+            vol.Optional("rule_types"): vol.All(cv.ensure_list, [cv.string]),
         })
     )
 

@@ -87,8 +87,11 @@ class FirewallMixin:
             policy_id = policy.id
             LOGGER.debug("Updating firewall policy %s", policy_id)
                 
+            # Get the raw dictionary from the policy
+            policy_dict = policy.raw.copy()
+            
             # Using FirewallPolicyUpdateRequest.create() for proper instantiation
-            request = FirewallPolicyUpdateRequest.create(policy)
+            request = FirewallPolicyUpdateRequest.create(policy_dict)
             
             # Execute with retry if needed
             await self.controller.request(request)

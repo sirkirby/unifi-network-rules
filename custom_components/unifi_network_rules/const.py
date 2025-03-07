@@ -102,8 +102,8 @@ SERVICE_APPLY_TEMPLATE = "apply_template"
 SERVICE_SAVE_TEMPLATE = "save_template"
 
 # Backup and Restore
-BACKUP_FILE_PREFIX = "unr_backup"
-BACKUP_LOCATION = "/"
+BACKUP_FILE_PREFIX = "backup"
+BACKUP_LOCATION = "unr/backups"  # Subdirectory in HA config directory
 CONF_FILENAME = "network_rules.json"
 CONF_RULE_IDS = ""
 CONF_NAME_FILTER = ""

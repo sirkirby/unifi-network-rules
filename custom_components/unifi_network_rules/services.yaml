@@ -33,7 +33,9 @@ toggle_rule:
         boolean:
     rule_type:
       name: Rule Type
-      description: Type of rule (optional, will try to auto-detect if not provided)
+      description: >-
+        Type of rule (optional, will try to auto-detect if not provided).
+        Note: Both "legacy_firewall" and "legacy_traffic" are older versions of "policy".
       required: false
       example: "policy"
       selector:
@@ -49,6 +51,13 @@ backup_rules:
   name: Backup rules
   description: Backup rules to a file
   fields:
+    config_entry_id:
+      name: Config Entry ID
+      description: Optional specific configuration entry ID to use (will use first available if not specified)
+      required: false
+      example: "1234567890abcdef"
+      selector:
+        text:
     filename:
       name: Filename
       description: Name of the backup file
@@ -61,6 +70,13 @@ restore_rules:
   name: Restore rules
   description: Restore rules from a backup file
   fields:
+    config_entry_id:
+      name: Config Entry ID
+      description: Optional specific configuration entry ID to use (will use first available if not specified)
+      required: false
+      example: "1234567890abcdef"
+      selector:
+        text:
     filename:
       name: Filename
       description: Name of the backup file to restore from
@@ -68,6 +84,14 @@ restore_rules:
       example: "unifi_rules_backup.json"
       selector:
         text:
+    force_restore:
+      name: Force Restore
+      description: If true, restore all rules even if they already exist (default is false - only restore missing rules)
+      required: false
+      default: false
+      example: false
+      selector:
+        boolean:
     rule_ids:
       name: Rule IDs
       description: List of specific rule IDs to restore (optional)
@@ -84,7 +108,11 @@ restore_rules:
         text:
     rule_types:
       name: Rule types
-      description: Only restore specific types of rules (optional)
+      description: >-
+        Only restore specific types of rules (optional). Options:
+        "policy" (firewall policies, legacy firewall rules, traffic rules),
+        "route" (traffic routes only),
+        "port_forward" (port forwarding rules)
       required: false
       example: '["policy", "route"]'
       selector:
@@ -126,14 +154,16 @@ delete_rule:
         text:
     rule_type:
       name: Rule Type
-      description: Type of rule (optional, will try to auto-detect if not provided)
+      description: >-
+        Type of rule (optional, will try to auto-detect if not provided).
+        Note: Both "legacy_firewall" and "legacy_traffic" are older versions of "policy".
       required: false
       example: "policy"
       selector:
         select:
           options:
             - "policy"
-            - "route" 
+            - "route"
             - "port_forward"
             - "legacy_firewall"
             - "legacy_traffic"

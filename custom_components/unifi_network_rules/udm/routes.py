@@ -68,8 +68,11 @@ class RoutesMixin:
         route_id = route.id
         LOGGER.debug("Updating traffic route %s", route_id)
         try:
+            # Convert the TrafficRoute object to a dictionary that TrafficRouteSaveRequest can use
+            route_dict = route.raw.copy()
+            
             # Using TrafficRouteSaveRequest for proper instantiation
-            request = TrafficRouteSaveRequest.create(route)
+            request = TrafficRouteSaveRequest.create(route_dict)
             
             # Execute the API call
             await self.controller.request(request)

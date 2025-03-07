@@ -55,6 +55,12 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     # Store shared data
     hass.data[DOMAIN].setdefault("shared", {})
     
+    # Initialize services
+    await async_setup_services(hass)
+    
+    # Create a semaphore for entity creation
+    hass.data[DOMAIN]["_entity_creation_semaphore"] = asyncio.Semaphore(1)
+    
     return True
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -138,6 +144,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception as ws_err:  # pylint: disable=broad-except
             LOGGER.error("Error setting up WebSocket: %s", ws_err)
             # Continue even if WebSocket fails - we can still use polling
+        
+        # Register the coordinator with the services registry
+        if "services" in hass.data[DOMAIN] and "register_coordinator" in hass.data[DOMAIN]["services"]:
+            register_func = hass.data[DOMAIN]["services"]["register_coordinator"]
+            register_func(entry.entry_id, coordinator)
+            LOGGER.debug("Registered coordinator with services for entry_id: %s", entry.entry_id)
+        else:
+            LOGGER.warning("Could not register coordinator with services - services registry not initialized")
         
         # Capture platforms directly without using async_create_task
         def capture_platforms(*args):

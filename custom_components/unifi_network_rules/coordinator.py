@@ -753,8 +753,22 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             # General CRUD operations that might indicate rule changes
             elif any(op in msg_type.lower() for op in ["add", "delete", "update", "remove"]):
                 # Check if the operation relates to any rule types
+                message_str = str(message).lower()
+                
+                # Special handling for port forwards vs device port tables
+                if "port" in message_str:
+                    # Check if this is a device port_table update (which is distinct from port forwards)
+                    if "port_table" in message_str and not any(kw in message_str for kw in ["port_forward", "portforward", "nat"]):
+                        # Skip false positive port_table updates that aren't related to port forwarding
+                        log_websocket("Skipping CRUD operation for port_table (not related to port forwards)")
+                        return
+                
                 for rule_type, keywords in rule_type_keywords.items():
-                    if any(keyword in str(message).lower() for keyword in keywords):
+                    if any(keyword in message_str for keyword in keywords):
+                        # For port_forwards, require more specific keywords to avoid false positives
+                        if rule_type == "port_forwards" and not any(kw in message_str for kw in ["port_forward", "portforward", "nat"]):
+                            continue
+                            
                         should_refresh = True
                         rule_type_affected = rule_type
                         refresh_reason = f"CRUD operation detected for {rule_type}"
@@ -765,6 +779,12 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 # Only refresh for specific configuration changes
                 message_str = str(message).lower()
                 config_keywords = ["config", "firewall", "rule", "policy"]
+                
+                # Check if this is specifically a port_table update (which is not related to port forwards)
+                if "port_table" in message_str and not any(kw in message_str for kw in ["port_forward", "portforward", "nat"]):
+                    # Skip device updates that only contain port_table information without port forwarding references
+                    log_websocket("Skipping refresh for device update with port_table (not related to port forwards)")
+                    return
                 
                 if any(keyword in message_str for keyword in config_keywords):
                     should_refresh = True
@@ -826,7 +846,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             # Clear the API cache to ensure we get fresh data
             LOGGER.debug("Clearing API cache")
             if hasattr(self.api, "clear_cache"):
-                self.api.clear_cache()
+                await self.api.clear_cache()
             else:
                 LOGGER.warning("API object does not have clear_cache method")
             LOGGER.debug("API cache cleared")
