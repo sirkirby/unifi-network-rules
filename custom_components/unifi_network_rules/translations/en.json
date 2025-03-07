@@ -3,22 +3,22 @@
     "step": {
       "user": {
         "title": "UniFi Network Rules",
-        "description": "Set up UniFi Network Rules to manage firewall policies and traffic routes.",
+        "description": "Set up UniFi Network Rules to manage your UniFi Dream Machine.",
         "data": {
           "host": "Host",
           "username": "Username",
           "password": "Password",
-          "update_interval": "Update Interval (minutes)"
+          "site": "Site name (defaults to 'default')",
+          "update_interval": "Update interval (minutes)",
+          "verify_ssl": "Verify SSL certificate (disable for self-signed certificates)"
         }
       }
     },
     "error": {
-      "auth": "Authentication failed. Please check your credentials.",
-      "connect": "Cannot connect to the UniFi device. Please check your network and device status.",
-      "no_capabilities": "No supported capabilities detected. Please ensure your UniFi device is properly initialized and your account has the necessary permissions.",
-      "invalid_host": "Invalid host address provided.",
-      "invalid_update_interval": "Update interval must be between 1 and 1440 minutes.",
-      "unknown": "An unexpected error occurred. Please check the logs for more details."
+      "cannot_connect": "Failed to connect",
+      "invalid_auth": "Invalid authentication",
+      "no_capabilities": "No supported firewall capabilities detected on this device.",
+      "unknown": "Unexpected error"
     },
     "abort": {
       "already_configured": "Device is already configured"

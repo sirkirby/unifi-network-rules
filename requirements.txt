@@ -1,3 +1,8 @@
 homeassistant
 asyncio
 aiohttp
+aiounifi>=82.0.0
+pytest
+pytest-asyncio
+pytest-aiohttp
+freezegun==1.1.0

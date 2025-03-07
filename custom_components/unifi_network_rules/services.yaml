@@ -1,87 +1,241 @@
 refresh:
-  name: Refresh Rules
-  description: Refresh the state of all network rules.
-  
-backup_rules:
-  name: Backup Rules
-  description: Backup all firewall policies, traffic routes, and legacy rules to a file.
+  name: Refresh
+  description: Refresh UniFi Network data
+
+refresh_data:
+  name: Refresh Data
+  description: Alternative refresh command to update UniFi Network data
   fields:
-    filename:
-      name: Filename
-      description: Name of the backup file (will be stored in Home Assistant's config directory)
+    entry_id:
+      name: Entry ID
+      description: Optional specific configuration entry ID to refresh
+      required: false
+      example: "1234567890abcdef"
+      selector:
+        text:
+
+toggle_rule:
+  name: Toggle Rule
+  description: Enable or disable a specific rule
+  fields:
+    rule_id:
+      name: Rule ID
+      description: ID of the rule to toggle
+      required: true
+      example: "123456789"
+      selector:
+        text:
+    enabled:
+      name: Enabled
+      description: Whether the rule should be enabled (true) or disabled (false)
       required: true
       selector:
-        text:
-          
-restore_rules:
-  name: Restore Rules
-  description: Restore firewall policies, traffic routes, and legacy rules from a backup file.
-  fields:
-    filename:
-      name: Filename
-      description: Name of the backup file to restore from (must exist in Home Assistant's config directory)
-      required: true
-      selector:
-        text:
-    rule_ids:
-      name: Rule IDs
-      description: Optional list of specific rule IDs to restore
+        boolean:
+    rule_type:
+      name: Rule Type
+      description: >-
+        Type of rule (optional, will try to auto-detect if not provided).
+        Note: Both "legacy_firewall" and "legacy_traffic" are older versions of "policy".
       required: false
-      selector:
-        object:
-    name_filter:
-      name: Name Filter
-      description: Optional filter - only restore rules containing this text in their name
-      required: false
-      selector:
-        text:
-    rule_types:
-      name: Rule Types
-      description: Optional list of rule types to restore (policy, route, firewall, traffic, port_forward)
-      required: false
+      example: "policy"
       selector:
         select:
           options:
             - "policy"
             - "route"
-            - "firewall"
-            - "traffic"
+            - "port_forward"
+            - "legacy_firewall"
+            - "legacy_traffic"
+
+backup_rules:
+  name: Backup rules
+  description: Backup rules to a file
+  fields:
+    config_entry_id:
+      name: Config Entry ID
+      description: Optional specific configuration entry ID to use (will use first available if not specified)
+      required: false
+      example: "1234567890abcdef"
+      selector:
+        text:
+    filename:
+      name: Filename
+      description: Name of the backup file
+      required: true
+      example: "unifi_rules_backup.json"
+      selector:
+        text:
+
+restore_rules:
+  name: Restore rules
+  description: Restore rules from a backup file
+  fields:
+    config_entry_id:
+      name: Config Entry ID
+      description: Optional specific configuration entry ID to use (will use first available if not specified)
+      required: false
+      example: "1234567890abcdef"
+      selector:
+        text:
+    filename:
+      name: Filename
+      description: Name of the backup file to restore from
+      required: true
+      example: "unifi_rules_backup.json"
+      selector:
+        text:
+    force_restore:
+      name: Force Restore
+      description: If true, restore all rules even if they already exist (default is false - only restore missing rules)
+      required: false
+      default: false
+      example: false
+      selector:
+        boolean:
+    rule_ids:
+      name: Rule IDs
+      description: List of specific rule IDs to restore (optional)
+      required: false
+      example: '["123456789", "987654321"]'
+      selector:
+        object:
+    name_filter:
+      name: Name filter
+      description: Only restore rules whose names contain this text (optional)
+      required: false
+      example: "guest"
+      selector:
+        text:
+    rule_types:
+      name: Rule types
+      description: >-
+        Only restore specific types of rules (optional). Options:
+        "policy" (firewall policies, legacy firewall rules, traffic rules),
+        "route" (traffic routes only),
+        "port_forward" (port forwarding rules)
+      required: false
+      example: '["policy", "route"]'
+      selector:
+        select:
+          options:
+            - "policy"
+            - "route"
             - "port_forward"
           multiple: true
 
 bulk_update_rules:
-  name: Bulk Update Rules
-  description: Enable or disable multiple policies and routes based on matching names.
+  name: Bulk update rules
+  description: Enable or disable multiple rules based on name matching
   fields:
     name_filter:
-      name: Name Filter
-      description: Text to match against rule names
+      name: Name filter
+      description: Update rules whose names contain this text
       required: true
+      example: "guest"
       selector:
         text:
     state:
       name: State
-      description: True to enable matched rules, False to disable them
+      description: The desired state for the rules (true for enabled, false for disabled)
       required: true
       selector:
         boolean:
 
 delete_rule:
   name: Delete Rule
-  description: Delete a zone-based firewall policy.
+  description: Delete a specific rule by ID
   fields:
     rule_id:
       name: Rule ID
-      description: The ID of the rule to delete.
+      description: ID of the rule to delete
       required: true
-      example: "674f3052cdbf2c191e0a01b7"
+      example: "123456789"
       selector:
         text:
     rule_type:
       name: Rule Type
-      description: The type of rule to delete. Currently only supports 'policy' for zone-based firewall policies.
-      required: true
+      description: >-
+        Type of rule (optional, will try to auto-detect if not provided).
+        Note: Both "legacy_firewall" and "legacy_traffic" are older versions of "policy".
+      required: false
+      example: "policy"
       selector:
         select:
           options:
             - "policy"
+            - "route"
+            - "port_forward"
+            - "legacy_firewall"
+            - "legacy_traffic"
+
+apply_template:
+  name: Apply template
+  description: Apply a rule template
+  fields:
+    template_id:
+      name: Template ID
+      description: ID of the template to apply
+      required: true
+      example: "guest_network"
+      selector:
+        text:
+    variables:
+      name: Variables
+      description: Variables to use when applying the template
+      required: false
+      example: '{"network_id": "123456789"}'
+      selector:
+        object:
+
+save_template:
+  name: Save template
+  description: Save a rule template
+  fields:
+    template_id:
+      name: Template ID
+      description: ID for the template
+      required: true
+      example: "guest_network"
+      selector:
+        text:
+    rule_type:
+      name: Rule type
+      description: Type of rule this template creates
+      required: true
+      selector:
+        select:
+          options:
+            - "firewall_policy"
+            - "traffic_route"
+            - "port_forward"
+    template:
+      name: Template
+      description: The template definition
+      required: true
+      example: '{"name": "Guest Network {network_id}", "enabled": true}'
+      selector:
+        object:
+
+force_cleanup:
+  name: Force Cleanup
+  description: Force cleanup of stale entities that might be left in the entity registry
+
+force_remove_stale:
+  name: Force Remove Stale
+  description: Forcibly remove unavailable entities from the Home Assistant entity registry
+  fields:
+    remove_all:
+      name: Remove All
+      description: If true, removes all entities from this integration, not just unavailable ones
+      required: false
+      default: false
+      selector:
+        boolean:
+
+reset_rate_limit:
+  name: Reset Rate Limit
+  description: Reset the rate limiter for the UniFi API connection
+
+websocket_diagnostics:
+  name: WebSocket Diagnostics
+  description: Run diagnostics on the WebSocket connection and attempt to repair if needed
