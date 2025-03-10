@@ -166,7 +166,8 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         _CREATED_UNIQUE_IDS.add(self._rule_id)
         
         # Get rule name using helper function - rely entirely on rule.py for naming
-        self._attr_name = get_rule_name(rule_data) or f"Rule {self._rule_id}"
+        # Pass coordinator to get_rule_name to enable zone name lookups for FirewallPolicy objects
+        self._attr_name = get_rule_name(rule_data, coordinator) or f"Rule {self._rule_id}"
         
         # Set unique_id to the rule ID directly - this is what the helper provides
         # This ensures consistency with how rules are identified throughout the integration

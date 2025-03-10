@@ -16,6 +16,16 @@ from ..models.firewall_rule import FirewallRule
 
 LOGGER = logging.getLogger(__name__)
 
+# Define redundant terms as a module-level constant
+ACTION_TERMS = ["Allow", "Block", "Drop", "Deny"]
+
+def remove_action_terms(name, action_terms):
+    cleaned_name = name
+    for term in action_terms:
+        # re.IGNORECASE ensures case-insensitive matching
+        cleaned_name = re.sub(re.escape(term), "", cleaned_name, flags=re.IGNORECASE).strip()
+    return cleaned_name
+
 def get_rule_id(rule: Any) -> str | None:
     """Get the consistent technical ID from a rule object with type prefix.
     
@@ -99,11 +109,11 @@ def get_rule_prefix(rule_type: str) -> str:
         rule_type: The type of the rule (e.g., 'firewall_policies')
         
     Returns:
-        The standard prefix for the rule type (e.g., 'Network Allow Policy')
+        The standard prefix for the rule type (e.g., 'Network Policy')
     """
     # Map rule types to their standard prefixes
     prefix_map = {
-        "firewall_policies": "Network Allow Policy",
+        "firewall_policies": "Network Policy",
         "traffic_rules": "Traffic Rule",
         "port_forwards": "Port Forward",
         "traffic_routes": "Network Route",
@@ -115,7 +125,26 @@ def get_rule_prefix(rule_type: str) -> str:
     # Return the prefix if found, or a capitalized version of the type
     return prefix_map.get(rule_type, rule_type.replace("_", " ").title())
 
-def extract_descriptive_name(rule: Any) -> str | None:
+def get_zone_name_by_id(coordinator, zone_id: str) -> str | None:
+    """Get a zone name based on its ID.
+    
+    Args:
+        coordinator: The UnifiRuleUpdateCoordinator instance
+        zone_id: The zone ID to look up
+        
+    Returns:
+        The zone name or None if not found
+    """
+    if not coordinator or not hasattr(coordinator, "firewall_zones"):
+        return None
+        
+    for zone in coordinator.firewall_zones:
+        if zone.id == zone_id:
+            return zone.name
+            
+    return None
+
+def extract_descriptive_name(rule: Any, coordinator=None) -> str | None:
     """Extract a descriptive name from a rule object based on its type.
     
     This function handles different rule types and extracts the most appropriate
@@ -123,29 +152,75 @@ def extract_descriptive_name(rule: Any) -> str | None:
     
     Args:
         rule: The rule object
+        coordinator: Optional coordinator for additional context (zone lookups)
         
     Returns:
         The descriptive name, or None if no name could be extracted
     """
     if isinstance(rule, FirewallPolicy):
-        # For FirewallPolicy, use the name or description
-        return getattr(rule, "name", None) or getattr(rule, "description", None)
+        # Get base name
+        name = getattr(rule, "name", None) or getattr(rule, "description", None)
+        
+        # Try to enhance with source and destination zone information
+        if coordinator is not None:
+            try:
+                source_zone_id = rule.source["zone_id"] if "zone_id" in rule.source else None
+                dest_zone_id = rule.destination["zone_id"] if "zone_id" in rule.destination else None
+                
+                LOGGER.debug("Attempting to lookup zones - Source ID: %s, Dest ID: %s", 
+                             source_zone_id, dest_zone_id)
+                
+                source_zone_name = get_zone_name_by_id(coordinator, source_zone_id)
+                dest_zone_name = get_zone_name_by_id(coordinator, dest_zone_id)
+                
+                LOGGER.debug("Zone names - Source: %s, Dest: %s", 
+                             source_zone_name, dest_zone_name)
+                
+                # Include zone information in name if both are available
+                if source_zone_name and dest_zone_name:
+                    action = rule.action.capitalize()
+                    
+                    # Helps us avoid redundant action terms in the name
+                    cleaned_name = remove_action_terms(name, ACTION_TERMS)
+
+                    if cleaned_name:
+                        return f"{source_zone_name}->{dest_zone_name} {action} {cleaned_name}".strip()
+                    else:
+                        # failsafe in case we messed up the name extraction
+                        return f"{source_zone_name}->{dest_zone_name} {action} {getattr(rule, "id", None)}".strip()
+            except (AttributeError, KeyError) as err:
+                # Log but continue with normal name extraction
+                LOGGER.debug("Error extracting zone info for policy: %s", err)
+        
+        return name
         
     elif isinstance(rule, PortForward):
         # For port forwards, use the name directly
-        return getattr(rule, "name", None)
+        name = getattr(rule, "name", None)
+        if name:
+            return name
+        return None
         
     elif isinstance(rule, TrafficRoute):
         # For routes, use the description/name
-        return getattr(rule, "description", None) or getattr(rule, "name", None)
+        name = getattr(rule, "description", None) or getattr(rule, "name", None)
+        if name:
+            return name
+        return None
         
     elif isinstance(rule, FirewallZone):
         # For firewall zones, use the name
-        return getattr(rule, "name", None)
+        name = getattr(rule, "name", None)
+        if name:
+            return name
+        return None
         
     elif isinstance(rule, Wlan):
         # For wireless networks, use the name
-        return getattr(rule, "name", None)
+        name = getattr(rule, "name", None)
+        if name:
+            return name
+        return None
         
     elif isinstance(rule, dict):
         # For dictionaries, try common name attributes
@@ -159,7 +234,7 @@ def extract_descriptive_name(rule: Any) -> str | None:
         
     return None
 
-def get_rule_name(rule: Any) -> str | None:
+def get_rule_name(rule: Any, coordinator=None) -> str | None:
     """Get the descriptive name from a rule object."""
     # Try to determine the rule type
     rule_type = None
@@ -182,8 +257,8 @@ def get_rule_name(rule: Any) -> str | None:
     if rule_type:
         prefix = get_rule_prefix(rule_type)
     
-    # Extract the descriptive name
-    name = extract_descriptive_name(rule)
+    # Extract the descriptive name, passing the coordinator if available
+    name = extract_descriptive_name(rule, coordinator)
     
     if name:
         # Return the full name with prefix
@@ -359,4 +434,4 @@ def is_our_entity_id(entity_id: str) -> bool:
         if pattern in entity_id:
             return True
             
-    return False 
+    return False
