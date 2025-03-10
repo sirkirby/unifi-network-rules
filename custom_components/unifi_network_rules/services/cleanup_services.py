@@ -16,6 +16,7 @@ from ..helpers.rule import is_our_entity_id
 from .constants import (
     SERVICE_FORCE_CLEANUP,
     SERVICE_FORCE_REMOVE_STALE,
+    SIGNAL_ENTITIES_CLEANUP,
 )
 
 # Schema for force_remove_stale service
@@ -28,7 +29,8 @@ FORCE_REMOVE_STALE_SCHEMA = vol.Schema(
 async def async_force_cleanup(hass: HomeAssistant, coordinators: Dict, call: ServiceCall) -> None:
     """Handle force cleanup service call."""
     # Clean up all entities
-    async_dispatcher_send(hass, f"{DOMAIN}_force_entity_cleanup", None)
+    LOGGER.debug("Sending %s signal for all entities", SIGNAL_ENTITIES_CLEANUP)
+    async_dispatcher_send(hass, SIGNAL_ENTITIES_CLEANUP, None)
     LOGGER.info("Force cleanup signal sent to all entities")
 
 async def async_force_remove_stale(hass: HomeAssistant, coordinators: Dict, call: ServiceCall) -> None:
@@ -78,4 +80,4 @@ async def async_setup_cleanup_services(hass: HomeAssistant, coordinators: Dict) 
     
     hass.services.async_register(
         DOMAIN, SERVICE_FORCE_REMOVE_STALE, handle_force_remove_stale, schema=FORCE_REMOVE_STALE_SCHEMA
-    ) 
+    )

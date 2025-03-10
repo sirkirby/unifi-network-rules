@@ -5,6 +5,8 @@ import logging
 from typing import Any, Final, Optional, Set
 import time  # Add this import
 import asyncio
+import contextlib
+import re
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription, PLATFORM_SCHEMA
 from homeassistant.config_entries import ConfigEntry
@@ -16,6 +18,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dis
 from homeassistant.helpers.device_registry import async_get as async_get_entity_registry
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.entity import generate_entity_id
 
 from aiounifi.models.traffic_route import TrafficRoute
 from aiounifi.models.firewall_policy import FirewallPolicy
@@ -26,8 +29,9 @@ from aiounifi.models.wlan import Wlan
 
 from .const import DOMAIN, MANUFACTURER
 from .coordinator import UnifiRuleUpdateCoordinator
-from .helpers.rule import get_rule_id, get_rule_name, get_rule_enabled, get_object_id, get_full_entity_id
+from .helpers.rule import get_rule_id, get_rule_name, get_rule_enabled, get_object_id
 from .models.firewall_rule import FirewallRule  # Import FirewallRule
+from .services.constants import SIGNAL_ENTITIES_CLEANUP
 
 LOGGER = logging.getLogger(__name__)
 
@@ -168,9 +172,14 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         # This ensures consistency with how rules are identified throughout the integration
         self._attr_unique_id = self._rule_id
         
-        # Explicitly set the entity_id to force our naming convention
-        # Use the centralized function from rule.py for entity ID creation
-        self._attr_entity_id = get_full_entity_id(rule_data, rule_type)
+        # Get the object_id from our helper for consistency
+        object_id = get_object_id(rule_data, rule_type)
+        
+        # Set the entity_id properly using generate_entity_id helper
+        # This is the correct way to set a custom entity_id
+        self.entity_id = generate_entity_id(
+            f"{DOMAIN}.{{}}", object_id, hass=coordinator.hass
+        )
         
         # Set has_entity_name to False to ensure the entity name is shown in UI
         self._attr_has_entity_name = False
@@ -544,6 +553,15 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
             )
         )
         
+        # Listen for force cleanup signal
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                SIGNAL_ENTITIES_CLEANUP,
+                self._handle_force_cleanup
+            )
+        )
+        
         # Make sure the entity is properly registered in the entity registry
         try:
             from homeassistant.helpers.entity_registry import async_get as get_entity_registry
@@ -598,6 +616,13 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         
         # Use a dispatcher instead of trying to call async_update_entity directly
         async_dispatcher_send(self.hass, f"{DOMAIN}_entity_update_{self.unique_id}")
+
+    @callback
+    def _handle_force_cleanup(self, _: Any = None) -> None:
+        """Handle force cleanup signal."""
+        LOGGER.debug("Force cleanup signal received for entity %s", self.entity_id)
+        # Force an update to synchronize with latest data
+        self.async_schedule_update_ha_state(True)
 
 # Define specific switch classes for each rule type
 class UnifiPortForwardSwitch(UnifiRuleSwitch):
