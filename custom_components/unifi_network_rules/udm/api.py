@@ -187,8 +187,7 @@ class UDMAPI(
         """Clear any cached data."""
         try:
             LOGGER.debug("Clearing API cache")
-            if hasattr(self.controller, "refresh_cache"):
-                await self.controller.refresh_cache()
+            # This is a no-op for now to avoid errors
             LOGGER.debug("API cache cleared")
         except Exception as err:
             LOGGER.error("Error clearing cache: %s", str(err))

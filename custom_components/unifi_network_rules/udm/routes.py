@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from aiounifi.models.traffic_route import (
     TrafficRouteListRequest,
     TrafficRouteSaveRequest,
-    TrafficRoute
+    TrafficRoute as AioUnifiTrafficRoute
 )
 
 from ..const import (
@@ -15,6 +15,9 @@ from ..const import (
     API_PATH_TRAFFIC_ROUTES,
     API_PATH_TRAFFIC_ROUTE_DETAIL
 )
+
+# Import our custom extended models
+from ..models.traffic_route import TrafficRoute, TrafficRouteKillSwitchRequest
 
 class RoutesMixin:
     """Mixin class for traffic routes operations."""
@@ -31,6 +34,7 @@ class RoutesMixin:
                 result = []
                 for route_data in data["data"]:
                     # Explicitly create TrafficRoute objects from the raw dictionary data
+                    # Our custom TrafficRoute model will handle the kill_switch_enabled property
                     route = TrafficRoute(route_data)
                     result.append(route)
                 LOGGER.debug("Converted %d traffic routes to typed objects", len(result))
@@ -124,4 +128,34 @@ class RoutesMixin:
             return True
         except Exception as err:
             LOGGER.error("Failed to remove traffic route: %s", str(err))
+            return False
+
+    async def toggle_traffic_route_kill_switch(self, route: Any) -> bool:
+        """Toggle a traffic route's kill switch on/off."""
+        LOGGER.debug("Toggling traffic route kill switch state")
+        try:
+            # Ensure the route is a proper TrafficRoute object
+            if not isinstance(route, TrafficRoute):
+                LOGGER.error("Expected TrafficRoute object but got %s", type(route))
+                return False
+            
+            # Toggle the current kill switch state
+            new_state = not route.kill_switch_enabled
+            LOGGER.debug("Toggling kill switch for route %s to %s", route.id, new_state)
+            
+            # Create a new TrafficRoute with updated kill switch state
+            updated_route = TrafficRoute(route.raw.copy())
+            updated_route.raw["kill_switch_enabled"] = new_state
+            
+            # Send the request to update the route
+            request = TrafficRouteKillSwitchRequest.create(updated_route.raw, new_state)
+            result = await self.controller.request(request)
+            
+            if result:
+                LOGGER.debug("Traffic route %s kill switch toggled successfully to %s", route.id, new_state)
+            else:
+                LOGGER.error("Failed to toggle kill switch for traffic route %s", route.id)
+            return bool(result)
+        except Exception as err:
+            LOGGER.error("Failed to toggle traffic route kill switch: %s", str(err))
             return False 

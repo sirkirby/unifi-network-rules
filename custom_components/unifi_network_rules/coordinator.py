@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import timedelta
 import asyncio
 from typing import Any, Dict, Callable, List
+import time
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -19,7 +20,7 @@ from aiounifi.models.wlan import Wlan
 from .const import DOMAIN, LOGGER, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DEBUG_WEBSOCKET
 from .udm import UDMAPI
 from .websocket import SIGNAL_WEBSOCKET_MESSAGE, UnifiRuleWebsocket
-from .helpers.rule import get_rule_id, get_rule_name, get_rule_enabled
+from .helpers.rule import get_rule_id, get_rule_name, get_rule_enabled, get_child_unique_id
 from .utils.logger import log_data, log_websocket
 from .models.firewall_rule import FirewallRule  # Import the FirewallRule type
 
@@ -79,6 +80,13 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         self._last_successful_data = None
         self._consecutive_errors = 0
         self._in_error_state = False
+        
+        # WebSocket refresh control variables
+        self._last_ws_refresh = 0
+        self._min_ws_refresh_interval = 3.0  # 3 seconds minimum between refreshes
+        self._pending_ws_refresh = False
+        self._ws_refresh_task = None
+        self._refresh_semaphore = asyncio.Semaphore(1)
         
         # Add a lock to prevent concurrent updates during authentication
         self._update_lock = asyncio.Lock()
@@ -778,7 +786,15 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             elif "device" in msg_type.lower() and "update" in msg_type.lower():
                 # Only refresh for specific configuration changes
                 message_str = str(message).lower()
-                config_keywords = ["config", "firewall", "rule", "policy"]
+                config_keywords = ["config", "firewall", "rule", "policy", "route"]
+                
+                # Skip updating for commonly noisy device state update patterns
+                if isinstance(msg_data, list) and len(msg_data) == 1:
+                    # Skip purely device state updates - these don't affect configurations
+                    if set(msg_data[0].keys()).issubset({"state", "upgrade_state", "provisioned_at"}):
+                        log_websocket("Skipping refresh for routine device state update: %s", 
+                                      set(msg_data[0].keys()))
+                        return
                 
                 # Check if this is specifically a port_table update (which is not related to port forwards)
                 if "port_table" in message_str and not any(kw in message_str for kw in ["port_forward", "portforward", "nat"]):
@@ -786,11 +802,17 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                     log_websocket("Skipping refresh for device update with port_table (not related to port forwards)")
                     return
                 
-                if any(keyword in message_str for keyword in config_keywords):
+                # Check if this contains configuration version changes (accept these)
+                if "cfgversion" in message_str:
+                    should_refresh = True
+                    refresh_reason = "Device update with configuration version change"
+                # Otherwise, be more selective about what triggers refreshes
+                elif any(keyword in message_str for keyword in config_keywords):
                     should_refresh = True
                     refresh_reason = "Device update with potential rule changes"
                 else:
                     # Not all device updates need a refresh - skip ones without config changes
+                    log_websocket("Skipping refresh for device update without rule-related changes")
                     return
             
             if should_refresh:
@@ -803,19 +825,42 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                     log_websocket("Skipping refresh as one is already in progress")
                     return
                 
+                # Should prevent rapid-fire refreshes during switch operations
+                self._min_ws_refresh_interval = 3.0
+                
+                current_time = time.time()
+                if current_time - self._last_ws_refresh < self._min_ws_refresh_interval:
+                    log_websocket(
+                        "Debouncing refresh request (last refresh was %0.1f seconds ago)",
+                        current_time - self._last_ws_refresh
+                    )
+                    
+                    # Cancel any pending refresh task
+                    if self._ws_refresh_task and not self._ws_refresh_task.done():
+                        self._ws_refresh_task.cancel()
+                    
+                    # Schedule a delayed refresh if one isn't already pending
+                    if not self._pending_ws_refresh:
+                        self._pending_ws_refresh = True
+                        delay = self._min_ws_refresh_interval - (current_time - self._last_ws_refresh)
+                        
+                        async def delayed_refresh():
+                            await asyncio.sleep(delay)
+                            self._pending_ws_refresh = False
+                            log_websocket("Executing delayed refresh after debounce period")
+                            await self._controlled_refresh_wrapper()
+                        
+                        self._ws_refresh_task = self.hass.async_create_task(delayed_refresh())
+                    return
+                
+                # Update last refresh timestamp
+                self._last_ws_refresh = current_time
+                
                 log_websocket("Refreshing data due to: %s (rule type: %s)", 
                              refresh_reason, rule_type_affected or "unknown")
                 
-                # Acquire semaphore before starting refresh
-                async def controlled_refresh():
-                    async with self._refresh_semaphore:
-                        await self._force_refresh_with_cache_clear()
-                        # Wait a moment before refreshing entities to let states settle
-                        await asyncio.sleep(0.5)
-                        await self._schedule_entity_refresh()
-                
-                # Start the controlled refresh task
-                self.hass.async_create_task(controlled_refresh())
+                # Start the controlled refresh task properly
+                self.hass.async_create_task(self._controlled_refresh_wrapper())
             elif DEBUG_WEBSOCKET:
                 # Only log non-refreshing messages when debug is enabled
                 log_websocket("No refresh triggered for message type: %s", msg_type)
@@ -823,12 +868,25 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         except Exception as err:
             LOGGER.error("Error handling websocket message: %s", err)
     
+    async def _controlled_refresh_wrapper(self):
+        """Wrapper for the controlled refresh process to ensure proper semaphore handling."""
+        # Acquire semaphore before starting refresh
+        async def controlled_refresh():
+            async with self._refresh_semaphore:
+                await self._force_refresh_with_cache_clear()
+                # Wait a moment before refreshing entities to let states settle
+                await asyncio.sleep(0.5)
+                await self._schedule_entity_refresh()
+        
+        # Start the controlled refresh task and await it
+        await controlled_refresh()
+
     async def _force_refresh_with_cache_clear(self) -> None:
         """Force a refresh with cache clearing to ensure fresh data.
         
         This method is triggered by WebSocket events and follows the same core refresh
         and entity management logic as the regular polling updates:
-        1. Clear API cache
+        1. Clear API cache (but preserve authentication)
         2. Call async_refresh() which updates rule collections
         3. Process new entities through the same entity creation path
         4. Check for deleted rules to maintain consistency with polling
@@ -844,9 +902,10 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             previous_data = self.data.copy() if self.data else {}
             
             # Clear the API cache to ensure we get fresh data
+            # But do so without disrupting authentication
             LOGGER.debug("Clearing API cache")
             if hasattr(self.api, "clear_cache"):
-                await self.api.clear_cache()
+                await self.api.clear_cache()  # Modified in API to preserve auth
             else:
                 LOGGER.warning("API object does not have clear_cache method")
             LOGGER.debug("API cache cleared")
@@ -933,6 +992,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
     async def async_refresh(self) -> bool:
         """Refresh data from the UniFi API."""
         try:
+            # Only attempt connection if not already connected
+            # The modified async_connect method will reuse the session if valid
             if not await self.api.async_connect():
                 LOGGER.warning("Failed to connect to UniFi Network API")
                 return False
@@ -1103,7 +1164,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                         continue
                         
                     # Get rule ID for tracking
-                    from .helpers.rule import get_rule_id
                     rule_id = get_rule_id(rule)
                     
                     if not rule_id:
