@@ -46,7 +46,6 @@ class AuthenticationMixin:
         self.host = base_host
         
         # Create Configuration object for controller
-        controller_initialized = False
         try:
             # Try to create a Configuration object directly
             self._config = self._create_controller_configuration(base_host, port)
@@ -57,29 +56,6 @@ class AuthenticationMixin:
             # Now create the Controller with the Configuration object
             self.controller = self._create_controller(self._config)
             LOGGER.debug("Successfully created Controller with Configuration object")
-            controller_initialized = True
-            
-        except (TypeError, ValueError) as config_err:
-            LOGGER.warning("Could not create Controller with Configuration object: %s", config_err)
-            LOGGER.debug("Falling back to direct Controller initialization")
-            
-            # Try direct Controller initialization
-            try:
-                self.controller = self._create_controller_direct(base_host, port)
-                LOGGER.debug("Initialized Controller directly with host %s and port %d", base_host, port)
-                controller_initialized = True
-                
-                # Store config for reference
-                self._config = {
-                    "host": base_host,
-                    "port": port,
-                    "username": self.username,
-                    "password": self.password,
-                    "site": self.site,
-                    "verify_ssl": self.verify_ssl
-                }
-            except Exception as controller_err:
-                LOGGER.error("Failed to directly initialize Controller: %s", controller_err)
         except Exception as unknown_err:
             LOGGER.error("Unexpected error creating Configuration object: %s", unknown_err)
         
@@ -107,6 +83,11 @@ class AuthenticationMixin:
         
         # Initial refresh of all data
         await self.refresh_all()
+
+        # Authentication lock to prevent parallel login attempts
+        self._login_lock = None
+        self._last_successful_login = 0
+        self._min_login_interval = 30  # seconds - increased from 15 to 30
 
     def _force_unifi_os_detection(self) -> None:
         """Force the UniFi OS detection flag if needed."""
@@ -222,16 +203,41 @@ class AuthenticationMixin:
             # Check if we need to login again
             need_login = False
             
-            # Detect if session is expired or missing
-            if hasattr(self.controller, "session") and not self.controller.session:
+            # Check if controller exists
+            if not self.controller:
+                LOGGER.debug("No controller exists, need login")
                 need_login = True
+            else:
+                # Check if the controller can make requests by making a test request
+                try:
+                    # Make a lightweight API call that doesn't require much processing
+                    from aiounifi.models.site import SiteListRequest
+                    request = SiteListRequest.create()
+                    result = await self.controller.request(request)
+                    if result:
+                        LOGGER.debug("Controller connection verified with lightweight API call")
+                        return True
+                    else:
+                        LOGGER.debug("Controller validation failed, need login")
+                        need_login = True
+                except Exception as session_err:
+                    # If the request fails due to authentication, we need to login again
+                    err_str = str(session_err).lower()
+                    if any(auth_term in err_str for auth_term in ["auth", "unauthorized", "forbidden", "401", "403"]):
+                        LOGGER.debug("Session expired - authentication error: %s", session_err)
+                        need_login = True
+                    else:
+                        # For other errors, might be connectivity, not auth failure
+                        LOGGER.warning("Error checking controller validity: %s", session_err)
+                        # For non-auth errors, we'll still attempt to use the existing controller
+                        return True
             
             # If login is needed, try it
             if need_login:
                 LOGGER.info("Refreshing expired session...")
                 return await self._try_login()
             
-            # Session looks valid
+            # Controller looks valid
             return True
         except Exception as err:
             LOGGER.error("Error refreshing session: %s", err)
@@ -243,6 +249,14 @@ class AuthenticationMixin:
         This is a wrapper around _try_login to enable reconnection in async_refresh.
         """
         try:
+            # First check if we already have a valid controller before attempting login
+            if self.controller:
+                # Use a passive validation via refresh_session
+                if await self.refresh_session():
+                    LOGGER.debug("Reusing existing controller - no login required")
+                    return True
+            
+            # No valid controller or session, so try to login
             return await self._try_login()
         except Exception as err:
             LOGGER.error("Error connecting to UniFi controller: %s", err)
@@ -254,6 +268,13 @@ class AuthenticationMixin:
         Note: This is a stub that would be replaced by the actual implementation.
         """
         from aiounifi.models.configuration import Configuration
+        
+        # Ensure we have a valid session
+        if not hasattr(self, "_session") or self._session is None:
+            import aiohttp
+            self._session = aiohttp.ClientSession()
+            LOGGER.debug("Created new aiohttp ClientSession for controller configuration")
+            
         return Configuration(
             session=self._session,
             host=base_host, 
@@ -270,18 +291,3 @@ class AuthenticationMixin:
         """
         from aiounifi.controller import Controller
         return Controller(config)
-    
-    def _create_controller_direct(self, base_host, port):
-        """Create controller directly.
-        Note: This is a stub that would be replaced by the actual implementation.
-        """
-        from aiounifi.controller import Controller
-        return Controller(
-            session=self._session,
-            host=base_host,
-            port=port,
-            username=self.username, 
-            password=self.password,
-            site=self.site,
-            verify_ssl=self.verify_ssl
-        ) 

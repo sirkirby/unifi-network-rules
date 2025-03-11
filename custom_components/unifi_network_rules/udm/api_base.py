@@ -73,7 +73,7 @@ class UDMAPI:
         # Authentication lock to prevent parallel login attempts
         self._login_lock = None
         self._last_successful_login = 0
-        self._min_login_interval = 15  # seconds
+        self._min_login_interval = 30  # seconds - increased from 15 to reduce rate limiting
     
     # Import the necessary methods here to maintain interface compatibility
     # These will be overridden by mixin classes

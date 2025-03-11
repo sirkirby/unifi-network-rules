@@ -18,6 +18,8 @@ alwaysApply: true
 ## Notes
 
 - If a reference to the aiounifi library is needed or required, check for a local copy in the root /aiounifi
+- Changes preserving backwards compatibility may not be required, ask before assuming.
+- Avoid excessive code comments
 - Keep a rolling log of each change you make in a file called changelog.md
 
 ## Purpose
