@@ -19,6 +19,30 @@ LOGGER = logging.getLogger(__name__)
 # Define redundant terms as a module-level constant
 ACTION_TERMS = ["Allow", "Block", "Drop", "Deny"]
 
+def get_rule_enabled(rule: Any) -> bool:
+    """Get the enabled status from a rule object.
+    
+    Args:
+        rule: The rule object to check
+        
+    Returns:
+        True if the rule is enabled, False otherwise
+    """
+    # Check different rule types and return appropriate enabled status
+    if isinstance(rule, (PortForward, TrafficRoute, FirewallPolicy, TrafficRule, Wlan)):
+        return getattr(rule, "enabled", False)
+    
+    # For dictionaries, try common enabled attributes
+    if isinstance(rule, dict):
+        return rule.get("enabled", False)
+    
+    # For other types, try common attributes
+    if hasattr(rule, "enabled"):
+        return rule.enabled
+    
+    # Default to False if we can't determine
+    return False
+
 def remove_action_terms(name, action_terms):
     cleaned_name = name
     for term in action_terms:
@@ -198,6 +222,19 @@ def extract_descriptive_name(rule: Any, coordinator=None) -> str | None:
         # For port forwards, use the name directly
         name = getattr(rule, "name", None)
         if name:
+            # Add source port (destination_port) and destination port (forward_port) information
+            try:
+                # Get the port information
+                source_port = rule.destination_port
+                dest_port = rule.forward_port
+                
+                # Include port information in the name
+                if source_port and dest_port:
+                    return f"{name} {source_port}->{dest_port}"
+            except (AttributeError, KeyError) as err:
+                # Log but continue with normal name extraction
+                LOGGER.debug("Error extracting port info for port forward: %s", err)
+            
             return name
         return None
         
@@ -269,23 +306,6 @@ def get_rule_name(rule: Any, coordinator=None) -> str | None:
     else:
         # No identifiable information available
         return None
-
-def get_rule_enabled(rule: Any) -> bool:
-    """Get the enabled state from a rule object."""
-    # For properly typed objects
-    if hasattr(rule, "enabled"):
-        return rule.enabled
-        
-    # Dictionary fallback - this should not happen with properly typed data
-    if isinstance(rule, dict):
-        LOGGER.warning(
-            "Encountered dictionary instead of typed object when checking enabled state: %s", 
-            {k: v for k, v in rule.items() if k in ["_id", "type", "name"]}
-        )
-        return rule.get("enabled", False)
-        
-    LOGGER.error("Rule object has no enabled attribute or is not a recognized type: %s", type(rule))
-    return False
 
 def sanitize_entity_id(text: str) -> str:
     """Sanitize a string to be used as part of an entity ID.
@@ -435,3 +455,57 @@ def is_our_entity_id(entity_id: str) -> bool:
             return True
             
     return False
+
+def get_child_entity_name(parent_name: str, child_type: str) -> str:
+    """Generate a standardized name for a child entity.
+    
+    Args:
+        parent_name: The name of the parent entity
+        child_type: The type of child entity (e.g., 'kill_switch')
+        
+    Returns:
+        The standardized name for the child entity
+    """
+    # Map child types to their display names
+    child_display_names = {
+        "kill_switch": "Kill Switch",
+        # Add more child types as they are implemented
+    }
+    
+    # Get the display name for the child type
+    child_display = child_display_names.get(child_type, child_type.replace("_", " ").title())
+    
+    # Return the combined name
+    return f"{parent_name} {child_display}"
+
+def get_child_entity_id(parent_id: str, child_type: str) -> str:
+    """Generate a standardized entity ID suffix for a child entity.
+    
+    Args:
+        parent_id: The entity ID of the parent entity
+        child_type: The type of child entity (e.g., 'kill_switch')
+        
+    Returns:
+        The standardized entity ID suffix for the child entity
+    """
+    # Sanitize the child type to be safe in entity IDs
+    sanitized_child_type = sanitize_entity_id(child_type)
+    
+    # Return the combined ID
+    return f"{parent_id}_{sanitized_child_type}"
+
+def get_child_unique_id(parent_unique_id: str, child_type: str) -> str:
+    """Generate a standardized unique ID for a child entity.
+    
+    Args:
+        parent_unique_id: The unique ID of the parent entity
+        child_type: The type of child entity (e.g., 'kill_switch')
+        
+    Returns:
+        The standardized unique ID for the child entity
+    """
+    # Sanitize the child type to be safe in unique IDs
+    sanitized_child_type = sanitize_entity_id(child_type)
+    
+    # Return the combined ID
+    return f"{parent_unique_id}_{sanitized_child_type}"
