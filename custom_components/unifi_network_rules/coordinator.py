@@ -83,7 +83,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         
         # WebSocket refresh control variables
         self._last_ws_refresh = 0
-        self._min_ws_refresh_interval = 3.0  # 3 seconds minimum between refreshes
+        self._min_ws_refresh_interval = 1.5  # Reduced from 3.0 to 1.5 seconds minimum between refreshes
         self._pending_ws_refresh = False
         self._ws_refresh_task = None
         self._refresh_semaphore = asyncio.Semaphore(1)
@@ -826,7 +826,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                     return
                 
                 # Should prevent rapid-fire refreshes during switch operations
-                self._min_ws_refresh_interval = 3.0
+                self._min_ws_refresh_interval = 1.5
                 
                 current_time = time.time()
                 if current_time - self._last_ws_refresh < self._min_ws_refresh_interval:
