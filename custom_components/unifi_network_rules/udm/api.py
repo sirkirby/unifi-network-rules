@@ -66,7 +66,11 @@ class UDMAPI(
         Returns:
             Future containing the result of the operation
         """
-        LOGGER.debug("Queueing API operation: %s", operation_func.__name__)
+        # Check if this is a toggle operation for priority handling
+        operation_name = operation_func.__name__
+        is_toggle = 'toggle' in operation_name.lower()
+        
+        LOGGER.debug("Queueing API operation: %s (priority: %s)", operation_name, is_toggle)
         # Create a future that will be completed when the operation completes
         loop = asyncio.get_event_loop()
         future = loop.create_future()
@@ -82,8 +86,12 @@ class UDMAPI(
                 future.set_exception(err)
                 raise
                 
-        # Add the wrapper to the queue without awaiting
-        asyncio.create_task(self.api_queue.add_operation(wrapper_operation))
+        # Add the wrapper to the queue with priority flag for toggle operations
+        # This will make toggle operations get processed faster for better responsiveness
+        asyncio.create_task(self.api_queue.add_operation(
+            wrapper_operation, 
+            is_priority=is_toggle  # Pass the priority flag
+        ))
         
         # Return the future immediately
         return future

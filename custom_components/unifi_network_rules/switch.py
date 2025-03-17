@@ -390,12 +390,12 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                            self._rule_id, target_state)
                 self._optimistic_state = target_state
                 self._optimistic_timestamp = time.time()  # Refresh timestamp
-            # Only clear optimistic state if no pending operations and it's been more than 10 seconds
+            # Only clear optimistic state if no pending operations and it's been more than 5 seconds
             # This prevents rapid authentication cycles from clearing optimistic state
             elif self._optimistic_state is not None:
                 current_time = time.time()
-                if current_time - self._optimistic_timestamp > 10:
-                    LOGGER.debug("Clearing optimistic state after 10 seconds")
+                if current_time - self._optimistic_timestamp > 5:  # Reduced from 10 to 5 seconds
+                    LOGGER.debug("Clearing optimistic state after 5 seconds")
                     # Before clearing optimistic state, verify the rule's current state from coordinator data
                     if hasattr(new_rule, "enabled"):
                         current_state = new_rule.enabled
@@ -531,6 +531,8 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         # Set optimistic state first for immediate UI feedback with timestamp
         self._optimistic_state = enable
         self._optimistic_timestamp = time.time()
+        
+        # Write state and force an update to ensure all clients receive it immediately
         self.async_write_ha_state()
         
         # Get the current rule object
@@ -576,14 +578,19 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                 # Request refresh to update state from backend
                 await self.coordinator.async_request_refresh()
                 
-                # Extra verification: If operation succeeded, schedule a delayed verification refresh
-                # to ensure state is consistent after UI navigation
+                # Improve rapid toggling experience by reducing delay and adding direct updates
                 if success:
                     async def delayed_verify():
-                        # Wait a bit to allow navigation events to complete
-                        await asyncio.sleep(2)
+                        # Reduced wait time for faster feedback
+                        await asyncio.sleep(1)  # Reduced from 2 seconds
+                        # Request refresh first
                         await self.coordinator.async_request_refresh()
-                        LOGGER.debug("Performed delayed verification refresh for rule %s", self._rule_id)
+                        # Force a state update immediately after refresh
+                        self.async_write_ha_state()
+                        # Also notify on a dispatcher channel for anyone listening
+                        from homeassistant.helpers.dispatcher import async_dispatcher_send
+                        async_dispatcher_send(self.hass, f"{DOMAIN}_entity_update_{self._rule_id}")
+                        LOGGER.debug("Performed verification refresh for rule %s", self._rule_id)
                     
                     asyncio.create_task(delayed_verify())
                 
@@ -1140,8 +1147,8 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
             # Check if we have an optimistic state
             if self._optimistic_state is not None:
                 current_time = time.time()
-                if current_time - self._optimistic_timestamp > 10:
-                    LOGGER.debug("Clearing optimistic state after 10 seconds")
+                if current_time - self._optimistic_timestamp > 5:  # Reduced from 10 to 5 seconds
+                    LOGGER.debug("Clearing optimistic state after 5 seconds")
                     
                     # For kill switches, we need to check kill_switch_enabled, not enabled
                     kill_switch_state = False
