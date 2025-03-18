@@ -131,6 +131,9 @@ API_ENDPOINT_WLAN_DETAIL = "/proxy/network/api/s/{site}/rest/wlanconf/{wlan_id}"
 API_ENDPOINT_FIREWALL_ZONE_MATRIX = "/proxy/network/v2/api/site/{site}/firewall/zone-matrix"
 API_ENDPOINT_PORT_FORWARD = "/proxy/network/api/s/{site}/rest/portforward"
 API_ENDPOINT_PORT_FORWARD_DETAIL = "/proxy/network/api/s/{site}/rest/portforward/{forward_id}"
+API_ENDPOINT_QOS_RULES = "/proxy/network/v2/api/site/{site}/qos-rules"
+API_ENDPOINT_QOS_RULE_DETAIL = "/proxy/network/v2/api/site/{site}/qos-rules/{rule_id}"
+API_ENDPOINT_QOS_RULES_BATCH = "/proxy/network/v2/api/site/{site}/qos-rules/batch"
 
 # API Paths used for aiounifi API Requests
 API_PATH_FIREWALL_POLICIES = "/firewall-policies"
@@ -149,6 +152,9 @@ API_PATH_FIREWALL_ZONE_MATRIX = "/firewall/zone-matrix"
 API_PATH_WLANS = "/wlanconf"
 API_PATH_WLAN_DETAIL = "/wlanconf/{wlan_id}"
 API_PATH_SITE_FEATURE_MIGRATION = "/site-feature-migration"
+API_PATH_QOS_RULES = "/qos-rules"
+API_PATH_QOS_RULE_DETAIL = "/qos-rules/{rule_id}"
+API_PATH_QOS_RULES_BATCH = "/qos-rules/batch"
 
 # Detection endpoints
 API_ENDPOINT_SDN_STATUS = "/proxy/network/api/s/{site}/stat/sdn"
