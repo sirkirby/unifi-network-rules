@@ -46,6 +46,7 @@ toggle_rule:
             - "port_forward"
             - "legacy_firewall"
             - "legacy_traffic"
+            - "qos_rule"
 
 backup_rules:
   name: Backup rules
@@ -112,15 +113,17 @@ restore_rules:
         Only restore specific types of rules (optional). Options:
         "policy" (firewall policies, legacy firewall rules, traffic rules),
         "route" (traffic routes only),
-        "port_forward" (port forwarding rules)
+        "port_forward" (port forwarding rules),
+        "qos_rule" (QoS quality of service rules)
       required: false
-      example: '["policy", "route"]'
+      example: '["policy", "route", "qos_rule"]'
       selector:
         select:
           options:
             - "policy"
             - "route"
             - "port_forward"
+            - "qos_rule"
           multiple: true
 
 bulk_update_rules:
@@ -167,6 +170,7 @@ delete_rule:
             - "port_forward"
             - "legacy_firewall"
             - "legacy_traffic"
+            - "qos_rule"
 
 apply_template:
   name: Apply template

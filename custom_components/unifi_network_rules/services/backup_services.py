@@ -32,6 +32,7 @@ from aiounifi.models.port_forward import PortForward
 from aiounifi.models.firewall_policy import FirewallPolicy
 from aiounifi.models.traffic_rule import TrafficRule
 from ..models.firewall_rule import FirewallRule
+from ..models.qos_rule import QoSRule
 
 # Schema for backup_rules service
 BACKUP_RULES_SCHEMA = vol.Schema(
@@ -46,7 +47,11 @@ RESTORE_RULES_SCHEMA = vol.Schema(
         vol.Required(CONF_FILENAME): cv.string,
         vol.Optional(CONF_RULE_IDS): vol.All(cv.ensure_list, [cv.string]),
         vol.Optional(CONF_NAME_FILTER): cv.string,
-        vol.Optional(CONF_RULE_TYPES): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional(CONF_RULE_TYPES): vol.All(
+            cv.ensure_list, 
+            [vol.In(["policy", "port_forward", "route", "qos_rule"])],
+            description="Types of rules to restore: policy (firewall), port_forward, route (traffic routes), qos_rule (QoS rules)"
+        ),
     }
 )
 
@@ -293,7 +298,8 @@ async def async_restore_rules_service(hass: HomeAssistant, coordinators: Dict, c
                 # Legacy types - older controllers will have these instead of firewall_policy
                 "legacy_firewall": "policy",   # Maps to policy as it's the older version
                 "traffic_rule": "policy",      # Maps to policy as it's the older version of firewall rules
-                "legacy_traffic": "policy"     # Maps to policy as it's the older version of firewall rules
+                "legacy_traffic": "policy",     # Maps to policy as it's the older version of firewall rules
+                "qos_rule": "qos_rule"         # Maps to qos_rule as it's the newer version of QoS rules
             }
             mapped_type = rule_type_map.get(rule_type)
             
@@ -612,6 +618,57 @@ async def async_restore_rules_service(hass: HomeAssistant, coordinators: Dict, c
                   restore_counts["traffic_routes"], 
                   skip_counts["traffic_routes"])
 
+    # Restore QoS rules
+    if "qos_rules" in backup_entry and hasattr(api, "update_qos_rule"):
+        restore_counts["qos_rules"] = 0
+        skip_counts["qos_rules"] = 0
+        LOGGER.info("Restoring QoS rules...")
+        for rule_dict in backup_entry["qos_rules"]:
+            rule_id = rule_dict.get("_id", "")
+            
+            # Apply filters first
+            should_restore_rule = await should_restore(rule_dict, "qos_rule")
+            
+            if should_restore_rule:
+                # Check if this rule already exists in the system
+                rule_exists = False
+                if "qos_rules" in coordinator.data:
+                    rule_exists = rule_exists_in_collection(rule_dict, coordinator.data["qos_rules"])
+                
+                try:
+                    if rule_exists and force_restore:
+                        # Use update method when the rule exists and we're forcing an update
+                        LOGGER.debug("Rule %s exists and force_restore is True, updating existing rule", rule_id)
+                        # Convert to typed object for update
+                        rule_obj = QoSRule(rule_dict)
+                        await api.queue_api_operation(api.update_qos_rule, rule_obj)
+                    elif rule_exists:
+                        # Rule exists but force_restore is False, so skip it
+                        LOGGER.debug("Rule %s already exists, skipping (use force_restore=True to update existing rules)", rule_id)
+                        skip_counts["qos_rules"] += 1
+                    else:
+                        # Use add method when the rule doesn't exist
+                        LOGGER.debug("Creating new QoS rule based on %s", rule_id)
+                        # For adding new rules, create a copy without the _id field
+                        # to let the API assign a new ID
+                        add_rule_dict = rule_dict.copy()
+                        if '_id' in add_rule_dict:
+                            del add_rule_dict['_id']  # Remove ID to avoid InvalidObject errors
+                        
+                        # Let the UniFi API handle validation itself
+                        await api.queue_api_operation(api.add_qos_rule, add_rule_dict)
+                    
+                    restore_counts["qos_rules"] += 1
+                except Exception as err:
+                    LOGGER.error("Error restoring QoS rule %s: %s", rule_id, err)
+            else:
+                skip_counts["qos_rules"] += 1
+        
+        LOGGER.info("Processed %d QoS rules (restored: %d, skipped: %d)", 
+                  restore_counts["qos_rules"] + skip_counts["qos_rules"],
+                  restore_counts["qos_rules"], 
+                  skip_counts["qos_rules"])
+
     # Refresh data after restore
     await coordinator.async_refresh()
     
@@ -650,7 +707,7 @@ async def async_setup_backup_services(hass: HomeAssistant, coordinators: Dict) -
         """Handle restore rules service call."""
         return await async_restore_rules_service(hass, coordinators, call)
     
-    # Register services
+    # Register services with the improved schema
     hass.services.async_register(
         DOMAIN,
         SERVICE_BACKUP,
@@ -671,7 +728,11 @@ async def async_setup_backup_services(hass: HomeAssistant, coordinators: Dict) -
             vol.Optional("force_restore"): cv.boolean,
             vol.Optional("rule_ids"): vol.All(cv.ensure_list, [cv.string]),
             vol.Optional("name_filter"): cv.string,
-            vol.Optional("rule_types"): vol.All(cv.ensure_list, [cv.string]),
+            vol.Optional("rule_types"): vol.All(
+                cv.ensure_list, 
+                [vol.In(["policy", "port_forward", "route", "qos_rule"])],
+                description="Types of rules to restore: policy (firewall), port_forward, route (traffic routes), qos_rule (QoS rules)"
+            ),
         })
     )
 
