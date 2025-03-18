@@ -11,8 +11,9 @@ from aiounifi.models.port_forward import PortForward
 from aiounifi.models.firewall_zone import FirewallZone
 from aiounifi.models.wlan import Wlan
 
-# Import our custom FirewallRule model
+# Import our custom models
 from ..models.firewall_rule import FirewallRule
+from ..models.qos_rule import QoSRule
 
 LOGGER = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ def get_rule_enabled(rule: Any) -> bool:
         True if the rule is enabled, False otherwise
     """
     # Check different rule types and return appropriate enabled status
-    if isinstance(rule, (PortForward, TrafficRoute, FirewallPolicy, TrafficRule, Wlan)):
+    if isinstance(rule, (PortForward, TrafficRoute, FirewallPolicy, TrafficRule, Wlan, QoSRule)):
         return getattr(rule, "enabled", False)
     
     # For dictionaries, try common enabled attributes
@@ -96,6 +97,13 @@ def get_rule_id(rule: Any) -> str | None:
         else:
             LOGGER.warning("FirewallRule without id attribute: %s", rule)
             return None
+            
+    if isinstance(rule, QoSRule):
+        if hasattr(rule, 'id') and rule.id:
+            return f"unr_qos_{rule.id}"
+        else:
+            LOGGER.warning("QoSRule without id attribute: %s", rule)
+            return None
 
     if isinstance(rule, FirewallZone):
         if hasattr(rule, 'id') and rule.id:
@@ -127,27 +135,25 @@ def get_rule_id(rule: Any) -> str | None:
     return None
 
 def get_rule_prefix(rule_type: str) -> str:
-    """Get the standard prefix for a rule type.
+    """Get the prefix for a given rule type.
     
     Args:
-        rule_type: The type of the rule (e.g., 'firewall_policies')
+        rule_type: The type of rule
         
     Returns:
-        The standard prefix for the rule type (e.g., 'Network Policy')
+        A prefix string for the rule type
     """
-    # Map rule types to their standard prefixes
-    prefix_map = {
-        "firewall_policies": "Network Policy",
-        "traffic_rules": "Traffic Rule",
+    rule_types = {
         "port_forwards": "Port Forward",
-        "traffic_routes": "Network Route",
-        "firewall_zones": "Firewall Zone",
-        "wlans": "Wireless Network",
-        "legacy_firewall_rules": "Firewall Rule"
+        "traffic_routes": "Traffic Route",
+        "firewall_policies": "Policy",
+        "traffic_rules": "Traffic Rule",
+        "legacy_firewall_rules": "Legacy Rule",
+        "qos_rules": "QoS",
+        "wlans": "WLAN"
     }
     
-    # Return the prefix if found, or a capitalized version of the type
-    return prefix_map.get(rule_type, rule_type.replace("_", " ").title())
+    return rule_types.get(rule_type, "Rule")
 
 def get_zone_name_by_id(coordinator, zone_id: str) -> str | None:
     """Get a zone name based on its ID.
@@ -169,7 +175,7 @@ def get_zone_name_by_id(coordinator, zone_id: str) -> str | None:
     return None
 
 def extract_descriptive_name(rule: Any, coordinator=None) -> str | None:
-    """Extract a descriptive name from a rule object based on its type.
+    """Extract a descriptive name from the rule object.
     
     This function handles different rule types and extracts the most appropriate
     descriptive name from each.
@@ -245,6 +251,14 @@ def extract_descriptive_name(rule: Any, coordinator=None) -> str | None:
             return name
         return None
         
+    elif isinstance(rule, QoSRule):
+        objective = rule.objective if hasattr(rule, "objective") else ""
+        if rule.name:
+            if objective and objective != "PRIORITIZE":
+                return f"{rule.name} ({objective})"
+            return rule.name
+        return f"QoS Rule {rule.id}"
+        
     elif isinstance(rule, FirewallZone):
         # For firewall zones, use the name
         name = getattr(rule, "name", None)
@@ -286,6 +300,8 @@ def get_rule_name(rule: Any, coordinator=None) -> str | None:
         rule_type = "firewall_zones"
     elif isinstance(rule, Wlan):
         rule_type = "wlans"
+    elif isinstance(rule, QoSRule):
+        rule_type = "qos_rules"
     elif isinstance(rule, dict) and "type" in rule:
         rule_type = rule.get("type")
     

@@ -22,7 +22,8 @@ from .udm import UDMAPI
 from .websocket import SIGNAL_WEBSOCKET_MESSAGE, UnifiRuleWebsocket
 from .helpers.rule import get_rule_id, get_rule_name, get_rule_enabled, get_child_unique_id
 from .utils.logger import log_data, log_websocket
-from .models.firewall_rule import FirewallRule  # Import the FirewallRule type
+from .models.firewall_rule import FirewallRule
+from .models.qos_rule import QoSRule
 
 # This is a fallback if no update_interval is specified
 SCAN_INTERVAL = timedelta(seconds=60)
@@ -132,6 +133,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         self.legacy_firewall_rules: List[FirewallRule] = []
         self.firewall_zones: List[FirewallZone] = []
         self.wlans: List[Wlan] = []
+        self.qos_rules: List[QoSRule] = []
         
         # Sets to track what rules we have seen for deletion detection
         self._tracked_port_forwards = set()
@@ -140,6 +142,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         self._tracked_traffic_rules = set()
         self._tracked_firewall_rules = set()  
         self._tracked_wlans = set()
+        self._tracked_qos_rules = set()
         
         # Entity removal callback
         self._entity_removal_callback = None
@@ -214,7 +217,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                     "traffic_routes": [],
                     "firewall_zones": [],
                     "wlans": [],
-                    "legacy_firewall_rules": []
+                    "legacy_firewall_rules": [],
+                    "qos_rules": [],
                 }
                 
                 # Store the previous data to detect deletions and protect against API failures
@@ -287,8 +291,12 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 await self._update_traffic_rules_in_dict(rules_data)
                 await asyncio.sleep(api_call_delay)
                 
-                # Finally legacy firewall rules
+                # Then legacy firewall rules
                 await self._update_legacy_firewall_rules_in_dict(rules_data)
+                await asyncio.sleep(api_call_delay)
+                
+                # Then QoS rules
+                await self._update_qos_rules_in_dict(rules_data)
                 
                 # Log detailed info for traffic routes
                 LOGGER.debug("Traffic routes received: %d items", len(rules_data["traffic_routes"]))
@@ -379,18 +387,20 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                     self.legacy_firewall_rules = rules_data.get("legacy_firewall_rules", [])
                     self.wlans = rules_data.get("wlans", [])
                     self.firewall_zones = rules_data.get("firewall_zones", [])
+                    self.qos_rules = rules_data.get("qos_rules", [])
                     
                     # Update tracking collections with current rule IDs
                     self._update_tracked_rules()
                     
-                    # Log the populated rule counts
-                    LOGGER.info("Rule collections after update: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d", 
+                    # Log the updated rule counts
+                    LOGGER.info("Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d, QoS Rules=%d", 
                                len(self.port_forwards),
                                len(self.traffic_routes),
                                len(self.firewall_policies),
                                len(self.traffic_rules),
                                len(self.legacy_firewall_rules),
-                               len(self.wlans))
+                               len(self.wlans),
+                               len(self.qos_rules))
                     
                 return rules_data
                 
@@ -432,7 +442,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             "traffic_rules", 
             "port_forwards", 
             "traffic_routes",
-            "legacy_firewall_rules"
+            "legacy_firewall_rules",
+            "qos_rules"
         ]
         
         LOGGER.debug("Starting deletion check between previous and new data sets")
@@ -503,6 +514,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         current_wlans = {
             get_rule_id(rule): rule for rule in self.wlans
         }
+        current_qos_rules = {
+            get_rule_id(rule): rule for rule in getattr(self, "qos_rules", [])
+        }
         
         # Update tracked rules to current state
         self._tracked_port_forwards = set(current_port_forwards.keys())
@@ -511,15 +525,18 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         self._tracked_traffic_rules = set(current_traffic_rules.keys())
         self._tracked_firewall_rules = set(current_firewall_rules.keys())
         self._tracked_wlans = set(current_wlans.keys())
+        # Add QoS rules tracking
+        self._tracked_qos_rules = set(current_qos_rules.keys())
         
         LOGGER.debug("Tracked rule counts: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, "
-                     "Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d",
+                     "Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d, QoS Rules=%d",
                      len(self._tracked_port_forwards),
                      len(self._tracked_routes),
                      len(self._tracked_policies),
                      len(self._tracked_traffic_rules),
                      len(self._tracked_firewall_rules),
-                     len(self._tracked_wlans))
+                     len(self._tracked_wlans),
+                     len(self._tracked_qos_rules))
 
     def _process_deleted_rules(self, rule_type: str, deleted_ids: set, total_previous_count: int) -> None:
         """Process detected rule deletions and dispatch removal events.
@@ -558,10 +575,10 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         for rule_id in deleted_ids:
             LOGGER.debug("Rule deletion detected - type: %s, id: %s", rule_type, rule_id)
             
-            # Remove entity from Home Assistant
+            # Use _remove_entity which handles both callback and dispatching signals
             self._remove_entity(rule_id)
             
-            # Also remove from our tracking collections to keep them in sync
+            # Update tracking collections to keep them in sync
             if rule_type == "port_forwards" and hasattr(self, "_tracked_port_forwards"):
                 self._tracked_port_forwards.discard(rule_id)
             elif rule_type == "traffic_routes" and hasattr(self, "_tracked_routes"):
@@ -574,26 +591,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 self._tracked_firewall_rules.discard(rule_id)
             elif rule_type == "wlans" and hasattr(self, "_tracked_wlans"):
                 self._tracked_wlans.discard(rule_id)
-            
-            # The registry in switch.py uses the format: rule_type_rule_id (e.g., firewall_policies_unr_policy_123)
-            # Use this exact format for the signal to ensure match with the registry
-            entity_id = rule_id
-            LOGGER.info("Dispatching entity removal for: %s", entity_id)
-            
-            # Debug log the signal we're sending
-            LOGGER.debug("Sending signal: %s with payload: %s", f"{DOMAIN}_entity_removed", entity_id)
-            
-            # Use try-except to catch any dispatching errors
-            try:
-                # Explicitly use async_dispatcher_send directly
-                async_dispatcher_send(
-                    self.hass,
-                    f"{DOMAIN}_entity_removed",
-                    entity_id
-                )
-                LOGGER.debug("Entity removal signal dispatched successfully")
-            except Exception as err:
-                LOGGER.error("Error dispatching entity removal: %s", err)
+            elif rule_type == "qos_rules" and hasattr(self, "_tracked_qos_rules"):
+                self._tracked_qos_rules.discard(rule_id)
 
     async def _update_firewall_policies_in_dict(self, data: Dict[str, List[Any]]) -> None:
         """Update firewall policies in the provided dictionary."""
@@ -628,6 +627,10 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         """Update legacy firewall rules in the provided dictionary."""
         await self._update_rule_type_in_dict(data, "legacy_firewall_rules", self.api.get_legacy_firewall_rules)
 
+    async def _update_qos_rules_in_dict(self, data: Dict[str, List[Any]]) -> None:
+        """Update QoS rules in the given data dictionary."""
+        await self._update_rule_type_in_dict(data, "qos_rules", self.api.get_qos_rules)
+
     async def _update_rule_type(self, rule_type: str, fetch_method: Callable) -> None:
         """Update a specific rule type in self.data.
         
@@ -637,7 +640,11 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         """
         LOGGER.debug("Updating %s rules", rule_type)
         try:
-            rules = await fetch_method()
+            # Use queue_api_operation and properly await the future
+            future = await self.api.queue_api_operation(fetch_method)
+            # Ensure we have the actual result, not the future itself
+            rules = await future if hasattr(future, "__await__") else future
+            
             self.data[rule_type] = rules
             LOGGER.debug("Updated %s rules: %d items", rule_type, len(rules))
         except Exception as err:  # pylint: disable=broad-except
@@ -659,7 +666,10 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             # Log method being called
             LOGGER.info("Calling API method for %s: %s", rule_type, fetch_method.__name__)
             
-            rules = await fetch_method()
+            # Use queue_api_operation and properly await the future
+            future = await self.api.queue_api_operation(fetch_method)
+            # Ensure we have the actual result, not the future itself
+            rules = await future if hasattr(future, "__await__") else future
             
             # Validate that we received properly typed objects
             if rules:
@@ -734,7 +744,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 "traffic_rules": ["traffic", "rule"],
                 "port_forwards": ["port", "forward", "nat"],
                 "traffic_routes": ["route", "traffic"],
-                "legacy_firewall_rules": ["firewall", "rule", "allow", "deny"]
+                "legacy_firewall_rules": ["firewall", "rule", "allow", "deny"],
+                "qos_rules": ["qos", "quality", "service"]  # Keep QoS rule keywords
             }
             
             # Check if this message might relate to rule changes
@@ -748,7 +759,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 refresh_reason = "Configuration version change detected"
             
             # Direct rule-related events
-            elif any(word in msg_type.lower() for word in ["firewall", "rule", "policy", "route", "forward"]):
+            elif any(word in msg_type.lower() for word in ["firewall", "rule", "policy", "route", "forward", "qos"]):  # Keep qos keyword
                 should_refresh = True
                 refresh_reason = f"Rule-related event type: {msg_type}"
                 
@@ -786,7 +797,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             elif "device" in msg_type.lower() and "update" in msg_type.lower():
                 # Only refresh for specific configuration changes
                 message_str = str(message).lower()
-                config_keywords = ["config", "firewall", "rule", "policy", "route"]
+                config_keywords = ["config", "firewall", "rule", "policy", "route", "qos"]  # Keep qos keyword
                 
                 # Skip updating for commonly noisy device state update patterns
                 if isinstance(msg_data, list) and len(msg_data) == 1:
@@ -814,6 +825,13 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                     # Not all device updates need a refresh - skip ones without config changes
                     log_websocket("Skipping refresh for device update without rule-related changes")
                     return
+            
+            # Check for QoS-specific event patterns that might not be caught by other checks
+            if not should_refresh and "qos" in str(message).lower():
+                should_refresh = True
+                rule_type_affected = "qos_rules"
+                refresh_reason = "QoS-related event detected"
+                log_websocket("QoS-specific event detected: %s", msg_type)
             
             if should_refresh:
                 # Use a semaphore to prevent multiple concurrent refreshes
@@ -848,6 +866,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                             await asyncio.sleep(delay)
                             self._pending_ws_refresh = False
                             log_websocket("Executing delayed refresh after debounce period")
+                            # Use the standard refresh workflow for all rule types
                             await self._controlled_refresh_wrapper()
                         
                         self._ws_refresh_task = self.hass.async_create_task(delayed_refresh())
@@ -859,7 +878,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 log_websocket("Refreshing data due to: %s (rule type: %s)", 
                              refresh_reason, rule_type_affected or "unknown")
                 
-                # Start the controlled refresh task properly
+                # Use the standard refresh workflow for all rule types
                 self.hass.async_create_task(self._controlled_refresh_wrapper())
             elif DEBUG_WEBSOCKET:
                 # Only log non-refreshing messages when debug is enabled
@@ -970,22 +989,21 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         else:
             LOGGER.warning("No entity removal callback registered")
             
-        # In any case, also dispatch the entity removed event
+        # In any case, dispatch the entity removed event just once
         # Entities listen for this event to handle their own removal
         LOGGER.info("Dispatching entity removal for: %s", rule_id)
         
-        # Debug log the signal we're sending
-        LOGGER.debug("Sending signal: %s with payload: %s", f"{DOMAIN}_entity_removed", rule_id)
+        # Use a specific event format with the rule_id to allow targeted listening
+        signal = f"{DOMAIN}_entity_removed_{rule_id}"
+        LOGGER.debug("Sending targeted signal: %s", signal)
         
-        # Use try-except to catch any dispatching errors
         try:
-            # Explicitly use async_dispatcher_send directly
-            async_dispatcher_send(
-                self.hass,
-                f"{DOMAIN}_entity_removed",
-                rule_id
-            )
-            LOGGER.debug("Entity removal signal dispatched successfully")
+            # Dispatch a targeted event that only the specific entity will receive
+            async_dispatcher_send(self.hass, signal, rule_id)
+            
+            # Also send the general event for backward compatibility
+            async_dispatcher_send(self.hass, f"{DOMAIN}_entity_removed", rule_id)
+            LOGGER.debug("Entity removal signal dispatched")
         except Exception as err:
             LOGGER.error("Error dispatching entity removal: %s", err)
 
@@ -1011,6 +1029,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             await self._update_traffic_rules()
             await self._update_firewall_zones()
             await self._update_wlans()
+            # Add QoS rules update
+            await self._update_qos_rules()
             
             # Process new entities
             await self.process_new_entities()
@@ -1031,18 +1051,20 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             self.legacy_firewall_rules = self.data.get("legacy_firewall_rules", [])
             self.wlans = self.data.get("wlans", [])
             self.firewall_zones = self.data.get("firewall_zones", [])
+            self.qos_rules = self.data.get("qos_rules", [])
             
             # Update tracking collections with current rule IDs
             self._update_tracked_rules()
             
             # Log the updated rule counts
-            LOGGER.info("Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d", 
+            LOGGER.info("Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d, QoS Rules=%d", 
                        len(self.port_forwards),
                        len(self.traffic_routes),
                        len(self.firewall_policies),
                        len(self.traffic_rules),
                        len(self.legacy_firewall_rules),
-                       len(self.wlans))
+                       len(self.wlans),
+                       len(self.qos_rules))
             
             return True
             
@@ -1084,6 +1106,11 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         """Update WLANs."""
         await self._update_rule_type("wlans", self.api.get_wlans)
         self.wlans = self.data.get("wlans", [])
+        
+    async def _update_qos_rules(self) -> None:
+        """Update QoS rules."""
+        await self._update_rule_type("qos_rules", self.api.get_qos_rules)
+        self.qos_rules = self.data.get("qos_rules", [])
         
     async def _process_entity_queue(self) -> None:
         """Process any queued entity creation tasks."""
@@ -1268,14 +1295,21 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             if get_rule_id(rule) not in self._tracked_wlans and get_rule_id(rule) is not None
         }
         
+        # Add set for QoS rules
+        qos_rules_to_add = {
+            get_rule_id(rule) for rule in self.qos_rules
+            if get_rule_id(rule) not in self._tracked_qos_rules and get_rule_id(rule) is not None
+        }
+        
         # Log counts of new rules detected
         if (port_forwards_to_add or routes_to_add or policies_to_add or 
-            traffic_rules_to_add or firewall_rules_to_add or wlans_to_add):
+            traffic_rules_to_add or firewall_rules_to_add or wlans_to_add or qos_rules_to_add):
             LOGGER.debug(
                 "Detected new rules - Port Forwards: %d, Traffic Routes: %d, "
-                "Firewall Policies: %d, Traffic Rules: %d, Legacy Firewall Rules: %d, WLANs: %d",
+                "Firewall Policies: %d, Traffic Rules: %d, Legacy Firewall Rules: %d, WLANs: %d, QoS Rules: %d",
                 len(port_forwards_to_add), len(routes_to_add), len(policies_to_add),
-                len(traffic_rules_to_add), len(firewall_rules_to_add), len(wlans_to_add)
+                len(traffic_rules_to_add), len(firewall_rules_to_add), len(wlans_to_add),
+                len(qos_rules_to_add)
             )
         
         # Queue new entities for creation
@@ -1374,6 +1408,30 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                     self._tracked_wlans.add(rule_id)
                 else:
                     LOGGER.error("Cannot queue WLAN rule without id attribute")
+                    
+        # Add section for QoS rules
+        for rule in self.qos_rules:
+            rule_id = get_rule_id(rule)
+            LOGGER.debug("Processing QoS rule with ID: %s, tracked: %s, in add set: %s", 
+                       rule_id, 
+                       rule_id in self._tracked_qos_rules,
+                       rule_id in qos_rules_to_add)
+            if rule_id in qos_rules_to_add:
+                LOGGER.debug(
+                    "Queueing new QoS rule for creation: %s (class: %s)",
+                    rule_id, 
+                    type(rule).__name__
+                )
+                # Ensure rule is valid before queueing
+                if hasattr(rule, 'id'):
+                    LOGGER.info("Adding QoS rule to entity creation queue: %s", rule_id)
+                    self._entity_creation_queue.append({
+                        "rule_type": "qos_rules",
+                        "rule": rule
+                    })
+                    self._tracked_qos_rules.add(rule_id)
+                else:
+                    LOGGER.error("Cannot queue QoS rule without id attribute")
 
     def set_entity_removal_callback(self, callback):
         """Set callback for entity removal.

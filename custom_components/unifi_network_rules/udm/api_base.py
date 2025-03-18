@@ -121,4 +121,36 @@ class UDMAPI:
             return ApiRequestV2(method=method, path=path, data=data)
         else:
             from aiounifi.models.api import ApiRequest
-            return ApiRequest(method=method, path=path, data=data) 
+            return ApiRequest(method=method, path=path, data=data)
+
+    async def delete_rule(self, rule_type: str, rule_id: str) -> bool:
+        """Delete a rule based on its type.
+        
+        Args:
+            rule_type: The type of rule to delete
+            rule_id: The ID of the rule to delete
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        LOGGER.debug("Deleting rule: type=%s, id=%s", rule_type, rule_id)
+        
+        try:
+            if rule_type == "firewall_policies":
+                return await self.remove_firewall_policy(rule_id)
+            elif rule_type == "traffic_rules":
+                return await self.remove_traffic_rule(rule_id)
+            elif rule_type == "port_forwards":
+                return await self.remove_port_forward(rule_id)
+            elif rule_type == "traffic_routes":
+                return await self.remove_traffic_route(rule_id)
+            elif rule_type == "legacy_firewall_rules":
+                return await self.remove_legacy_firewall_rule(rule_id)
+            elif rule_type == "qos_rules":
+                return await self.remove_qos_rule(rule_id)
+            else:
+                LOGGER.error("Unknown rule type: %s", rule_type)
+                return False
+        except Exception as err:
+            LOGGER.error("Error deleting rule: %s", str(err))
+            return False 

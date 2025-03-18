@@ -42,6 +42,7 @@ from .helpers.rule import (
 )
 from .models.firewall_rule import FirewallRule  # Import FirewallRule
 from .models.traffic_route import TrafficRoute  # Import TrafficRoute
+from .models.qos_rule import QoSRule  # Import QoSRule
 from .services.constants import SIGNAL_ENTITIES_CLEANUP
 
 LOGGER = logging.getLogger(__name__)
@@ -52,7 +53,8 @@ RULE_TYPES: Final = {
     "traffic_rules": "Traffic Rule",
     "port_forwards": "Port Forward",
     "traffic_routes": "Traffic Route",
-    "legacy_firewall_rules": "Legacy Firewall Rule"
+    "legacy_firewall_rules": "Legacy Firewall Rule",
+    "qos_rules": "QoS Rule"
 }
 
 # Track entities across the platform
@@ -91,6 +93,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         ("firewall_policies", coordinator.firewall_policies),
         ("traffic_rules", coordinator.traffic_rules),
         ("legacy_firewall_rules", coordinator.legacy_firewall_rules),
+        ("qos_rules", coordinator.data.get("qos_rules", [])),
         ("wlans", coordinator.wlans)
     ]:
         for rule in rules:
@@ -125,6 +128,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
                     entity_class = UnifiTrafficRuleSwitch
                 elif rule_type == "legacy_firewall_rules":
                     entity_class = UnifiLegacyFirewallRuleSwitch
+                elif rule_type == "qos_rules":
+                    entity_class = UnifiQoSRuleSwitch
                 elif rule_type == "wlans":
                     entity_class = UnifiWlanSwitch
                 
@@ -624,6 +629,8 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                 toggle_func = self.coordinator.api.toggle_legacy_firewall_rule
             elif self._rule_type == "wlans":
                 toggle_func = self.coordinator.api.toggle_wlan
+            elif self._rule_type == "qos_rules":
+                toggle_func = self.coordinator.api.toggle_qos_rule
             else:
                 raise ValueError(f"Unknown rule type: {self._rule_type}")
             
@@ -686,46 +693,47 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
     @callback
     def _handle_entity_removal(self, removed_entity_id: str) -> None:
         """Handle the removal of an entity."""
-        LOGGER.debug("Entity removal notification received: %s, my id: %s", 
-                   removed_entity_id, self._rule_id)
-        
-        # Check if this is our entity that's being removed
-        if removed_entity_id == self._rule_id:
-            LOGGER.info("Removing entity %s", self.entity_id)
+        # Skip unnecessary processing if this isn't for us
+        if removed_entity_id != self._rule_id:
+            LOGGER.debug("Ignoring removal event for %s (not matching %s)", removed_entity_id, self._rule_id)
+            return
             
-            # Explicitly remove from entity registry first
-            try:
-                from homeassistant.helpers.entity_registry import async_get as get_entity_registry
-                registry = get_entity_registry(self.hass)
-                entity_id = self.entity_id
-                
-                # Schedule the removal for after current execution
-                async def remove_entity():
+        LOGGER.debug("Entity removal for %s being processed", self._rule_id)
+        LOGGER.info("Removing entity %s", self.entity_id)
+        
+        # Explicitly remove from entity registry first
+        try:
+            from homeassistant.helpers.entity_registry import async_get as get_entity_registry
+            registry = get_entity_registry(self.hass)
+            entity_id = self.entity_id
+            
+            # Schedule the removal for after current execution
+            async def remove_entity():
+                try:
+                    # First remove from the entity registry
+                    if registry and registry.async_get(entity_id):
+                        registry.async_remove(entity_id)
+                        LOGGER.debug("Entity %s removed from registry", entity_id)
+                    
+                    # Force removal from Home Assistant through HA's API
                     try:
-                        # First remove from the entity registry
-                        if registry and registry.async_get(entity_id):
-                            registry.async_remove(entity_id)
-                            LOGGER.debug("Entity %s removed from registry", entity_id)
+                        # Set the entity as unavailable first
+                        self._attr_available = False
+                        self.async_write_ha_state()
                         
-                        # Force removal from Home Assistant through HA's API
-                        try:
-                            # Set the entity as unavailable first
-                            self._attr_available = False
-                            self.async_write_ha_state()
-                            
-                            # Use the async_remove method from Entity
-                            await self.async_remove(force_remove=True)
-                            LOGGER.info("Force-removed entity %s", entity_id)
-                        except Exception as force_err:
-                            LOGGER.error("Error during force-removal: %s", force_err)
-                            
-                    except Exception as err:
-                        LOGGER.error("Error during entity removal: %s", err)
+                        # Use the async_remove method from Entity
+                        await self.async_remove(force_remove=True)
+                        LOGGER.info("Force-removed entity %s", entity_id)
+                    except Exception as force_err:
+                        LOGGER.error("Error during force-removal: %s", force_err)
                         
-                # Create task to run asynchronously
-                self.hass.async_create_task(remove_entity())
-            except Exception as err:
-                LOGGER.error("Error during entity removal: %s", err)
+                except Exception as err:
+                    LOGGER.error("Error during entity removal: %s", err)
+                    
+            # Create task to run asynchronously
+            self.hass.async_create_task(remove_entity())
+        except Exception as err:
+            LOGGER.error("Error during entity removal: %s", err)
 
     async def async_added_to_hass(self) -> None:
         """When entity is added to hass."""
@@ -745,7 +753,16 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
             )
         )
         
-        # Listen for entity removal signals
+        # Listen for entity removal signals - use targeted signal first
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                f"{DOMAIN}_entity_removed_{self._rule_id}",
+                lambda _: self._handle_entity_removal(self._rule_id)
+            )
+        )
+        
+        # Also listen for general removal signal for backward compatibility
         self.async_on_remove(
             async_dispatcher_connect(
                 self.hass,
@@ -1181,3 +1198,19 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
         
         # Write state regardless of update
         self.async_write_ha_state()
+
+class UnifiQoSRuleSwitch(UnifiRuleSwitch):
+    """Switch to enable/disable a UniFi QoS rule."""
+    
+    def __init__(
+        self,
+        coordinator: UnifiRuleUpdateCoordinator,
+        rule_data: Any,
+        rule_type: str,
+        entry_id: str = None,
+    ) -> None:
+        """Initialize QoS rule switch."""
+        LOGGER.info("Initializing QoS rule switch with data: %s (type: %s)", 
+                  getattr(rule_data, "id", "unknown"), type(rule_data).__name__)
+        super().__init__(coordinator, rule_data, rule_type, entry_id)
+        # Add any QoS-rule specific functionality here

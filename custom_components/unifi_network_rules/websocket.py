@@ -277,7 +277,8 @@ class UnifiRuleWebsocket:
         # Define keywords for rule-related messages
         rule_keywords = [
             "firewall", "rule", "policy", "network", "port", "route", "forward",
-            "nat", "security", "update", "change", "cfgversion", "provision"
+            "nat", "security", "update", "change", "cfgversion", "provision",
+            "qos", "quality", "service"  # Add QoS-related keywords
         ]
         
         # Extract message type for filtering

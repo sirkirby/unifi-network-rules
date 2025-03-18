@@ -91,6 +91,9 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
         elif rule_type == "legacy_firewall_rules":
             rules = await api.get_legacy_firewall_rules()
             return next((r for r in rules if r.id == rule_id), None)
+        elif rule_type == "qos_rules":
+            rules = await api.get_qos_rules()
+            return next((r for r in rules if r.id == rule_id), None)
         elif rule_type == "wlans":
             wlans = await api.get_wlans()
             return next((w for w in wlans if w.id == rule_id), None)
@@ -108,6 +111,8 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
             return await api.queue_api_operation(api.toggle_traffic_route, rule_obj)
         elif rule_type == "legacy_firewall_rules":
             return await api.queue_api_operation(api.toggle_legacy_firewall_rule, rule_obj)
+        elif rule_type == "qos_rules":
+            return await api.queue_api_operation(api.toggle_qos_rule, rule_obj)
         elif rule_type == "wlans":
             return await api.queue_api_operation(api.toggle_wlan, rule_obj)
         return False
@@ -124,7 +129,7 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
                         break
             else:
                 # If rule_type is not specified, try all types
-                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules", "wlans"]:
+                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules", "qos_rules", "wlans"]:
                     try:
                         rule_obj = await get_rule_by_id(api, type_name, rule_id)
                         if rule_obj:
@@ -186,7 +191,7 @@ async def async_delete_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
                     break
             else:
                 # Try all rule types
-                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules"]:
+                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules", "qos_rules"]:
                     try:
                         if await api.delete_rule(type_name, rule_id):
                             success = True
@@ -239,6 +244,8 @@ async def async_bulk_update_rules(hass: HomeAssistant, coordinators: Dict, call:
                 return await api.queue_toggle_traffic_route(rule_obj)
             elif rule_type == "legacy_firewall_rules":
                 return await api.queue_toggle_legacy_firewall_rule(rule_obj)
+            elif rule_type == "qos_rules":
+                return await api.queue_toggle_qos_rule(rule_obj)
             elif rule_type == "wlans":
                 return await api.queue_toggle_wlan(rule_obj)
         return True  # Already in desired state

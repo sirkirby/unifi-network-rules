@@ -14,6 +14,7 @@ from .traffic import TrafficMixin
 from .port_forward import PortForwardMixin
 from .routes import RoutesMixin
 from .network import NetworkMixin
+from .qos import QoSMixin
 
 from ..const import LOGGER
 from ..queue import ApiOperationQueue
@@ -28,6 +29,7 @@ class UDMAPI(
     AuthenticationMixin,
     ApiHandlerMixin,
     CapabilitiesMixin,
+    QoSMixin,
     BaseAPI
 ):
     def __init__(self, *args, **kwargs):
@@ -181,6 +183,9 @@ class UDMAPI(
             # Get traffic routes
             await self.get_traffic_routes()
             
+            # Get QoS rules
+            await self.get_qos_rules()
+            
             # Get network-related info
             await self.get_firewall_zones()
             await self.get_wlans()
@@ -251,6 +256,11 @@ class UDMAPI(
                 rule = next((r for r in rules if str(r.get("_id")) == actual_id), None)
                 if rule:
                     return {"found": True, "enabled": rule.get("enabled", False), "data": rule}
+            elif rule_type == "qos_rules":
+                rules = await self.get_qos_rules()
+                rule = next((r for r in rules if str(r.id) == actual_id), None)
+                if rule:
+                    return {"found": True, "enabled": rule.enabled, "data": rule.raw}
                     
             # If we get here, rule was not found
             return {"found": False, "error": f"Rule {rule_id} not found"}
