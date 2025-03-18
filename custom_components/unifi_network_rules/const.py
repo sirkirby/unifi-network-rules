@@ -155,6 +155,7 @@ API_PATH_SITE_FEATURE_MIGRATION = "/site-feature-migration"
 API_PATH_QOS_RULES = "/qos-rules"
 API_PATH_QOS_RULE_DETAIL = "/qos-rules/{rule_id}"
 API_PATH_QOS_RULES_BATCH = "/qos-rules/batch"
+API_PATH_QOS_RULES_BATCH_DELETE = "/qos-rules/batch-delete"
 
 # Detection endpoints
 API_ENDPOINT_SDN_STATUS = "/proxy/network/api/s/{site}/stat/sdn"
