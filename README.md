@@ -165,7 +165,7 @@ triggers:
     hours: "2"
 conditions: []
 actions:
-  - action: UniFi_network_rules.backup_rules
+  - action: unifi_network_rules.backup_rules
     metadata: {}
     data:
       filename: unr_daily_backup.json
@@ -225,7 +225,7 @@ triggers:
     hours: "23"
 conditions: []
 actions:
-  - action: UniFi_network_rules.bulk_update_rules
+  - action: unifi_network_rules.bulk_update_rules
     metadata: {}
     data:
       state: true
@@ -279,7 +279,7 @@ This automation uses a helper to toggle port forwarding access to a game server.
 2. **Selective Restore**: When restoring rules, use filters to target specific rules:
 
    ```yaml
-   action: UniFi_network_rules.restore_rules
+   action: unifi_network_rules.restore_rules
    data:
      filename: "backup.json"
      name_filter: "Guest"  # Only restore guest-related rules
@@ -295,6 +295,22 @@ This automation uses a helper to toggle port forwarding access to a game server.
    - Use the Folder Watcher integration to monitor backup file changes
    - Combine with the Google Drive Backup integration for offsite copies
    - Set up notifications when rule states change
+
+## Understanding Rule Types
+
+The UniFi Network Rules integration supports several types of rules:
+
+1. **Firewall Policies (policy)**: Zone-based firewall rules that control traffic between different security zones (WAN, LAN, Guest, etc.). These form the backbone of your network security.
+
+2. **Port Forwarding Rules (port_forward)**: Allow external traffic to reach specific internal devices and services by forwarding specific ports from your WAN to internal IP addresses.
+
+3. **Traffic Routes (route)**: Control how traffic is routed through your network, typically used for VPN routing or specific network destinations. Each traffic route has two components:
+   - The main switch that enables/disables the route
+   - A child "kill switch" that blocks all traffic if the route is down (prevents data leakage if your VPN disconnects)
+
+4. **QoS Rules (qos_rule)**: Quality of Service rules that prioritize certain types of traffic on your network. These rules can ensure critical applications (like video conferencing) get bandwidth priority over less time-sensitive applications.
+
+5. **Legacy Rules**: For older UniFi OS versions, there are also legacy_firewall and legacy_traffic rule types, which are mapped to "policy" when using the service.
 
 ## Local Development
 
