@@ -452,5 +452,5 @@ Contributions are welcome! Please read our [Contributing Guidelines](CONTRIBUTIN
 [issues-shield]: https://img.shields.io/github/issues/sirkirby/unifi-network-rules?style=flat
 [issues-link]: https://github.com/sirkirby/unifi-network-rules/issues
 
-[validate-badge]: https://github.com/sirkirby/unifi-network-rules/actions/workflows/python-tests.yml/badge.svg
-[validate-workflow]: https://github.com/sirkirby/unifi-network-rules/actions/workflows/python-tests.yml
+[validate-badge]: https://github.com/sirkirby/unifi-network-rules/actions/workflows/test-suite.yml/badge.svg
+[validate-workflow]: https://github.com/sirkirby/unifi-network-rules/actions/workflows/test-suite.yml
