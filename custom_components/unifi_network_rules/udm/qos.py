@@ -9,6 +9,7 @@ from ..const import (
     API_PATH_QOS_RULES,
     API_PATH_QOS_RULE_DETAIL,
     API_PATH_QOS_RULES_BATCH,
+    API_PATH_QOS_RULES_BATCH_DELETE,
 )
 from ..models.qos_rule import QoSRule, QoSRuleBatchToggleRequest
 
@@ -205,4 +206,38 @@ class QoSMixin:
             return True
         except Exception as err:
             LOGGER.error("Failed to remove QoS rule: %s", str(err))
+            return False
+
+    async def batch_delete_qos_rules(self, rule_ids: List[str]) -> bool:
+        """Delete multiple QoS rules at once.
+        
+        Args:
+            rule_ids: List of QoS rule IDs to delete
+            
+        Returns:
+            bool: True if the batch deletion was successful, False otherwise
+        """
+        if not rule_ids:
+            LOGGER.debug("No QoS rules to delete in batch operation")
+            return True
+            
+        LOGGER.debug("Batch deleting %d QoS rules: %s", len(rule_ids), rule_ids)
+        try:
+            # Path for batch delete
+            path = API_PATH_QOS_RULES_BATCH_DELETE
+            
+            # Using is_v2=True because this is a v2 API endpoint
+            request = self.create_api_request(
+                "POST", 
+                path, 
+                data=rule_ids, 
+                is_v2=True
+            )
+            
+            # Execute the API call
+            await self.controller.request(request)
+            LOGGER.debug("Successfully batch deleted %d QoS rules", len(rule_ids))
+            return True
+        except Exception as err:
+            LOGGER.error("Failed to batch delete QoS rules: %s", str(err))
             return False 

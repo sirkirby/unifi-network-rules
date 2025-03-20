@@ -1,6 +1,8 @@
 homeassistant
 asyncio
+aiofiles
 aiohttp
+argparse
 aiounifi>=82.0.0
 pytest
 pytest-asyncio
