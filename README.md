@@ -1,4 +1,4 @@
-# UniFi Network Rules Custom Integration
+# UniFi Network Rules
 
 [![License][license-shield]](LICENSE)
 ![Project Maintenance][maintenance-shield]
@@ -10,13 +10,22 @@
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/sirkirby)
 
-Pulls user-defined firewall policies and traffic routes from your UniFi Dream Machine/Router and allows you to enable/disable them and build more sophisticated automations in Home Assistant.
+UniFi Network Rules is a custom integration for Home Assistant that integrates with your UniFi Dream Machine/Router to both provide and help you create useful interactions and automations for your Home Lab. The goal of this integration is to simplify policy and rule management for real world use cases. I built this because I wanted to enable things like screen time controls for my kids, game server access controls, and more with the push of a button in Home Assistant. Functionality that can be shared with anyone in your home.
+
+## Features
+
+- Switch entities for all rules, including firewall policies (zone-based firewall), traffic/firewall rules (non-zone-based firewall), forwarding rules, traffic routes.
+- Service actions for full backup and restore of all rules that are managed by this integration.
+- Service actions for batch enabling and disabling rules by pattern matching rule names or IDs.
+- Service actions for deleting rules by ID.
+
+Request a feature [here](https://github.com/sirkirby/unifi-network-rules/issues).
 
 ## Requirements
 
-A UniFi device running network application 9.0.92 or later.
-
-A local account with Admin privileges to the network application. Must not be a UniFi Cloud account.
+- A UniFi device running network application 9.0.92 or later.
+- A local account with Admin privileges to the network application. Must not be a UniFi Cloud account.
+- Home Assistant 2025.2 or later with network access to the UniFi device.
 
 ## Installation
 
@@ -40,27 +49,21 @@ THEN
 
 ## Configuration
 
-**Host**: The IP address of your UniFi Device. Avoid using the hostname as it may not work.
+**Host**: The IP address or hostname of your UniFi Device.
 
 **Username**: The local admin account on the UDM.
 
 **Password**: The password for the UDM account.
 
-**Updated Interval**: The automatic refresh interval in minutes.
+**Site**: The UniFi site name to connect to (defaults to "default" if not specified).
+
+**Update Interval**: The automatic refresh interval in minutes. Can be longer since updates real-time.
+
+**Verify SSL**: Enable SSL certificate verification (defaults to disabled for self-signed certificates).
 
 ## Usage
 
-Once you have configured the integration, you will be able to see the firewall policies and traffic routes configured on your UniFi Network as switches in Home Assistant. Add the switch to a custom dashboard or use it in automations just like any other Home Assistant switch.
-
-## Network Mode Detection
-
-The integration automatically detects the UniFi network configuration mode:
-
-- If a zone-based firewall is detected (available in UniFi Network 9.0.92+ systems that have migrated), the integration will manage firewall policies using the new API.
-- If legacy mode is detected (on UniFi Network 8+ systems that either lack the zone-based option or have opted not to migrate), the integration will manage legacy firewall and traffic rules.
-- Traffic routes are managed the same way in both modes.
-
-Migration from legacy mode to zone-based firewall is handled by UniFi OS. After migration, legacy rules become policies and the integration will automatically switch to managing them as policies.
+Once you have configured the integration, you will be able to see the policies, rules, and routes configured on your UniFi Network as switches in Home Assistant. Add the switch to a custom dashboard or use it in automations just like any other Home Assistant switch.
 
 ## Services
 
@@ -76,6 +79,7 @@ This is the simplest method:
 4. Use the service in the automation's action
 
 Example automation for refresh:
+
 ```yaml
 alias: Backup UniFi Network Rules
 description: >-
@@ -87,12 +91,13 @@ triggers:
       - input_button.backup_unr
 conditions: []
 actions:
-  - action: UniFi_network_rules.backup_rules
+  - action: unifi_network_rules.backup_rules
     metadata: {}
     data:
       filename: unr_daily_backup.json
 mode: single
 ```
+
 <img src="./assets/backup_unr_button.png" alt="Backup UNR Button" width="200" />
 
 ### Method 2: Using Scripts with a Lovelace Button Card (More Customizable)
@@ -102,7 +107,7 @@ First, create a script in your Settings → Automations & Scenes → Scripts:
 ```yaml
 sequence:
   - sequence:
-      - action: UniFi_network_rules.backup_rules
+      - action: unifi_network_rules.backup_rules
         metadata: {}
         data:
           filename: my_custom_unr_backup.json
@@ -111,13 +116,14 @@ description: Custom script that will backup all rules and routes imported from y
 ```
 
 Then add a button card to your dashboard that references the script:
+
 ```yaml
 show_name: true
 show_icon: true
 type: button
 tap_action:
   action: perform-action
-  perform_action: script.backup_my_UniFi_rules
+  perform_action: script.backup_my_unifi_rules
   target: {}
 name: Backup my Network Rules
 icon: mdi:cloud-upload
@@ -126,23 +132,29 @@ icon: mdi:cloud-upload
 ### Available Services
 
 #### Refresh Rules
+
 Manually refresh the state of all network rules. Useful if you've made changes directly in the UniFi interface.
 
 #### Backup Rules
+
 Create a backup of all your firewall policies and traffic routes. The backup will be stored in your Home Assistant config directory.
 
 #### Restore Rules
+
 Restore rules from a previously created backup file. You can selectively restore specific rules by their IDs, names, or rule types.
 
 #### Bulk Update Rules
+
 Enable or disable multiple rules at once by matching their names. This is useful for automating rule management based on conditions or schedules.
 
 #### Delete Rule
+
 Delete an existing zone-based firewall policy by its ID. Only available for UniFi OS 9.0.92+ with zone-based firewall enabled.
 
 ## Automation Examples
 
 ### Automated Daily Backup
+
 ```yaml
 alias: Backup UniFi Network Rules
 description: >-
@@ -153,7 +165,7 @@ triggers:
     hours: "2"
 conditions: []
 actions:
-  - action: UniFi_network_rules.backup_rules
+  - action: unifi_network_rules.backup_rules
     metadata: {}
     data:
       filename: unr_daily_backup.json
@@ -161,7 +173,9 @@ mode: single
 ```
 
 ### Full and Selective restore
-**Fully restore the state of all policies**
+
+Fully restore the state of all policies
+
 ```yaml
 alias: Restore all policies from last backup
 description: Restores the backed-up state of all policies, including zones, devices, objects, etc.
@@ -178,7 +192,8 @@ actions:
 mode: single
 ```
 
-**Selectively restore rules based on name and type**
+Selectively restore rules based on name and type
+
 ```yaml
 alias: Restore Kid Downtime Policies
 description: Restores the backed-up state of the policies that contain the name `Block Kid`
@@ -199,7 +214,9 @@ mode: single
 ```
 
 ### Block Kid's devices at bedtime
+
 Every night at 11PM, Policies or Rules that contain the name "Block Kid Internet" will `enable` and send a notification to Chris's iPhone
+
 ```yaml
 alias: Daily Device Downtime
 description: Block kid devices at bedtime daily
@@ -208,7 +225,7 @@ triggers:
     hours: "23"
 conditions: []
 actions:
-  - action: UniFi_network_rules.bulk_update_rules
+  - action: unifi_network_rules.bulk_update_rules
     metadata: {}
     data:
       state: true
@@ -222,6 +239,7 @@ mode: single
 ```
 
 ### Temporarily Enable Game Server Access
+
 ```yaml
 alias: Turn Off Minecraft Server Port after 2 hours
 description: >-
@@ -253,13 +271,15 @@ This automation uses a helper to toggle port forwarding access to a game server.
 ## Tips for Using Services
 
 1. **Backup Organization**: Use descriptive filenames with timestamps:
+
    ```yaml
    filename: "UniFi_rules_{{now().strftime('%Y%m%d_%H%M')}}.json"
    ```
 
 2. **Selective Restore**: When restoring rules, use filters to target specific rules:
+
    ```yaml
-   action: UniFi_network_rules.restore_rules
+   action: unifi_network_rules.restore_rules
    data:
      filename: "backup.json"
      name_filter: "Guest"  # Only restore guest-related rules
@@ -276,16 +296,32 @@ This automation uses a helper to toggle port forwarding access to a game server.
    - Combine with the Google Drive Backup integration for offsite copies
    - Set up notifications when rule states change
 
+## Understanding Rule Types
+
+The UniFi Network Rules integration supports several types of rules:
+
+1. **Firewall Policies (policy)**: Zone-based firewall rules that control traffic between different security zones (WAN, LAN, Guest, etc.). These form the backbone of your network security.
+
+2. **Port Forwarding Rules (port_forward)**: Allow external traffic to reach specific internal devices and services by forwarding specific ports from your WAN to internal IP addresses.
+
+3. **Traffic Routes (route)**: Control how traffic is routed through your network, typically used for VPN routing or specific network destinations. Each traffic route has two components:
+   - The main switch that enables/disables the route
+   - A child "kill switch" that blocks all traffic if the route is down (prevents data leakage if your VPN disconnects)
+
+4. **QoS Rules (qos_rule)**: Quality of Service rules that prioritize certain types of traffic on your network. These rules can ensure critical applications (like video conferencing) get bandwidth priority over less time-sensitive applications.
+
+5. **Legacy Rules**: For older UniFi OS versions, there are also legacy_firewall and legacy_traffic rule types, which are mapped to "policy" when using the service.
+
 ## Local Development
 
 ### Testing
 
-To run the tests, you need to install the dependencies in the `requirements_test.txt` file.
+To run the tests, you need to install the dependencies in the `requirements.txt` file.
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements_test.txt
+pip install -r requirements.txt
 ```
 
 Then run the tests:
@@ -298,7 +334,60 @@ pytest tests
 
 We've created a [Bruno](https://github.com/sirkirby/bruno-udm-api) collection to manually test the API requests. These are the same requests that the integration makes. This is a great way to verify your credentials are valid and to verify device connectivity and compatibility.
 
-## Troubleshooting
+## Diagnostics and Debugging
+
+The integration includes targeted diagnostics and debugging capabilities to help troubleshoot issues while minimizing resource usage.
+
+### Standard Logging
+
+To enable debug logging for the entire integration, add the following to your `configuration.yaml`:
+
+```yaml
+logger:
+  logs:
+    custom_components.unifi_network_rules: debug
+    aiounifi: debug  # Also log the underlying UniFi library
+```
+
+### Targeted Debugging
+
+For more focused debugging of specific subsystems, you can enable only what you need by editing the constants in `custom_components/unifi_network_rules/const.py`:
+
+- `LOG_WEBSOCKET`: Enable detailed WebSocket connection and message logs
+- `LOG_API_CALLS`: Log API requests and responses
+- `LOG_DATA_UPDATES`: Log data refresh and update cycles
+- `LOG_ENTITY_CHANGES`: Log entity addition, removal, and state changes
+
+These targeted flags help reduce log noise when troubleshooting specific issues.
+
+### Home Assistant Diagnostics
+
+This integration supports Home Assistant's built-in diagnostics. To access:
+
+1. Go to Settings → Devices & Services → Integrations
+2. Find the UniFi Network Rules integration
+3. Click on Configure → Download Diagnostics
+4. Share the generated file when reporting issues
+
+The diagnostics provide essential information about your system configuration without exposing sensitive data.
+
+### Temporary Websocket Health Monitor
+
+For advanced troubleshooting of connectivity issues, the integration includes a WebSocket health monitor that can help identify connection problems with the UniFi controller.
+
+### Temporary Enable API Call Tracing [Advanced]
+
+To temporarily enable API call tracing for a session:
+
+1. SSH into your Home Assistant instance
+2. Enter the `/config/custom_components/unifi_network_rules` directory
+3. Edit the file: `const.py`
+4. Change `LOG_API_CALLS = False` to `LOG_API_CALLS = True`
+5. Restart Home Assistant
+
+*Remember to revert this change after troubleshooting to prevent excessive logging.*
+
+## General Troubleshooting
 
 If you are having trouble getting the integration to work, please check the following:
 
@@ -335,25 +424,9 @@ To get the debug log, navigate Devices and Services -> UniFi Network Rules -> En
 
 ## Limitations
 
-The integration supports:
-- Zone-based firewall policies with full CRUD operations (create, read, update, delete) on UniFi OS 9.0.92+
-- OR Legacy firewall rules (read and update) on pre-9.0.92 systems
-- Traffic routes (read and update) on all systems
-- Port forwarding rules (read and update) on all systems
+This integration uses the same core library that Home Assistant Unifi integration uses, so there can be version incompatibility issues at time. We may ship with a higher version causing conflicts if you use multiple UniFi integrations. Sometimes restarting Home Assistant can help.
 
-Note: The new service operations (create/delete) are only available for zone-based firewall policies. Legacy rule support will be used automatically on older systems.
-
-## Port Forwarding Rules
-
-The integration now supports managing port forwarding rules from your UniFi Dream Machine/Router. Each port forwarding rule is represented as a switch entity that lets you enable or disable it. The rule name includes:
-- The name you assigned in UniFi
-- The protocol (TCP, UDP, or both)
-- The port configuration (e.g., "port 80->80" or "port 80->8080")
-- The destination IP address
-
-Example entity name: `Port Forward: Minecraft (tcp_udp port 25565 to 10.29.13.235)`
-
-Note: Creating new port forwarding rules through the integration is only supported for backup/restore purposes. Configure new rules through the UniFi interface.
+This will not support all the features of the UniFi controller, for that, leverage the core integration. The focus of this integration will be home and home lab use cases to extend and differentiate from the core integration.
 
 ## Contributions
 

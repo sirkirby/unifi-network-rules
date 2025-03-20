@@ -210,3 +210,8 @@ nosetests.xml
 coverage.xml
 *.cover
 .hypothesis/
+
+unifi/
+aiounifi/
+
+changelog.md

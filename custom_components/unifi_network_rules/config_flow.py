@@ -1,148 +1,116 @@
+"""Config flow for UniFi Network Rules."""
+from __future__ import annotations
+
+from typing import Any
+
 import voluptuous as vol
-from homeassistant import config_entries, core, exceptions
-from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
-import homeassistant.helpers.config_validation as cv
-from .const import DOMAIN, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
-from .udm_api import UDMAPI
-import logging
-from homeassistant.helpers.entity import EntityDescription
-from ipaddress import ip_address
-import re
+import asyncio
 
-_LOGGER = logging.getLogger(__name__)
+from homeassistant import config_entries
+from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL
+from homeassistant.data_entry_flow import FlowResult
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import HomeAssistant
 
-# Define entity descriptions for entities used in this integration
-ENTITY_DESCRIPTIONS = {
-    "update_interval": EntityDescription(
-        key="update_interval",
-        name="Update Interval",
-        icon="mdi:update",
-        entity_category="config",
-    )
-}
+from .const import (
+    DOMAIN,
+    CONF_UPDATE_INTERVAL,
+    DEFAULT_UPDATE_INTERVAL,
+    CONF_SITE,
+    DEFAULT_SITE,
+    LOGGER
+)
+from .udm import CannotConnect, InvalidAuth, UDMAPI
 
-# Define a schema for configuration, adding basic validation
-DATA_SCHEMA = vol.Schema({
-    vol.Required(CONF_HOST): cv.string,
-    vol.Required(CONF_USERNAME): cv.string,
-    vol.Required(CONF_PASSWORD): cv.string,
-    vol.Optional(CONF_UPDATE_INTERVAL, default=DEFAULT_UPDATE_INTERVAL): vol.All(vol.Coerce(int), vol.Range(min=1, max=1440)),
-})
+from aiounifi.errors import (
+    AiounifiException,
+    LoginRequired,
+    RequestError,
+    ResponseError,
+    Unauthorized,
+)
 
-async def validate_input(hass: core.HomeAssistant, data: dict):
-    """
-    Validate the user input allows us to connect.
+# Display the update interval in minutes for better UX
+DEFAULT_UPDATE_INTERVAL_MINUTES = DEFAULT_UPDATE_INTERVAL // 60
 
-    Data has the keys from DATA_SCHEMA with values provided by the user.
-    """
+STEP_USER_DATA_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_HOST): str,
+        vol.Required(CONF_USERNAME): str,
+        vol.Required(CONF_PASSWORD): str,
+        vol.Optional(
+            CONF_SITE, 
+            default=DEFAULT_SITE
+        ): str,
+        vol.Optional(
+            CONF_UPDATE_INTERVAL, 
+            default=DEFAULT_UPDATE_INTERVAL_MINUTES,
+            description="Update interval in minutes"
+        ): int,
+        vol.Optional(
+            CONF_VERIFY_SSL,
+            default=False,
+            description="Enable SSL certificate verification"
+        ): bool,
+    }
+)
+
+async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> None:
+    """Validate the user input allows us to connect."""
     api = UDMAPI(
-        host=data[CONF_HOST],
-        username=data[CONF_USERNAME],
-        password=data[CONF_PASSWORD]
+        data[CONF_HOST],
+        data[CONF_USERNAME],
+        data[CONF_PASSWORD],
+        site=data.get(CONF_SITE, DEFAULT_SITE),
+        verify_ssl=data.get(CONF_VERIFY_SSL, False)
     )
 
-    # Try to authenticate first
-    auth_success, auth_error = await api.ensure_authenticated()
-    if not auth_success:
-        _LOGGER.error("Authentication failed: %s", auth_error)
-        raise InvalidAuth
+    try:
+        async with asyncio.timeout(10):
+            await api.async_init(hass)
+    except (ResponseError, RequestError) as err:
+        raise CannotConnect from err
+    except (LoginRequired, Unauthorized) as err:
+        raise InvalidAuth from err
+    except Exception as err:
+        LOGGER.exception("Unexpected exception: %s", str(err))
+        raise
+    finally:
+        await api.cleanup()
 
-    # If authentication succeeds, try to detect capabilities
-    capabilities_success = await api.detect_capabilities()
-    if not capabilities_success:
-        _LOGGER.error(
-            "Failed to detect any capabilities. Check device status and permissions."
-        )
-        raise NoCapabilities
 
-    # Ensure at least one capability was detected
-    if not any([
-        api.capabilities.traffic_routes,
-        api.capabilities.zone_based_firewall,
-        api.capabilities.legacy_firewall
-    ]):
-        _LOGGER.error("No supported capabilities found on the device")
-        raise NoCapabilities
+class UnifiNetworkRulesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle a config flow for UniFi Network Rules."""
 
-    _LOGGER.info(
-        "Validated device with capabilities - Traffic Routes: %s, Zone-based Firewall: %s, Legacy Firewall: %s",
-        api.capabilities.traffic_routes,
-        api.capabilities.zone_based_firewall,
-        api.capabilities.legacy_firewall
-    )
-
-    await api.cleanup()
-
-    # Return info that you want to store in the config entry.
-    return {"title": f"UniFi Rules ({data[CONF_HOST]})"}
-
-class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """
-    Handle a config flow for Unifi Network Rule Manager.
-    """
     VERSION = 1
-    CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_POLL
 
-    async def async_step_user(self, user_input=None):
-        """
-        Handle the initial step of the config flow.
-        """
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Handle the initial step."""
         errors = {}
+
         if user_input is not None:
             try:
+                # Convert update interval from minutes to seconds
                 if CONF_UPDATE_INTERVAL in user_input:
-                    update_interval = user_input[CONF_UPDATE_INTERVAL]
-                    if not isinstance(update_interval, int) or update_interval < 1 or update_interval > 1440:
-                        raise InvalidUpdateInterval
-                info = await validate_input(self.hass, user_input)
-                return self.async_create_entry(title=info["title"], data=user_input)
-            except InvalidAuth:
-                errors["base"] = "auth"
-            except NoCapabilities:
-                errors["base"] = "no_capabilities"
+                    user_input[CONF_UPDATE_INTERVAL] = user_input[CONF_UPDATE_INTERVAL] * 60
+                
+                await validate_input(self.hass, user_input)
+                
+                await self.async_set_unique_id(f"unifi_rules_{user_input[CONF_HOST]}")
+                self._abort_if_unique_id_configured()
+
+                return self.async_create_entry(
+                    title=f"UniFi Network Rules ({user_input[CONF_HOST]})",
+                    data=user_input,
+                )
             except CannotConnect:
-                errors["base"] = "connect"
-            except InvalidUpdateInterval:
-                errors["base"] = "invalid_update_interval"
-            except InvalidHost:
-                errors["base"] = "invalid_host"
-            except vol.Invalid as vol_error:
-                _LOGGER.error("Validation error: %s", vol_error)
-                errors["base"] = "invalid_format"
-            except Exception: 
-                _LOGGER.exception("Unexpected exception")
+                errors["base"] = "cannot_connect"
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
+            except Exception:
+                LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
 
         return self.async_show_form(
-            step_id="user", data_schema=DATA_SCHEMA, errors=errors
+            step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
         )
-
-class CannotConnect(exceptions.HomeAssistantError):
-    """
-    Error to indicate we cannot connect.
-    """
-    pass
-
-class InvalidAuth(exceptions.HomeAssistantError):
-    """
-    Error to indicate there is invalid auth.
-    """
-    pass
-
-class InvalidHost(exceptions.HomeAssistantError):
-    """
-    Error to indicate there is invalid host address.
-    """
-    pass
-
-class InvalidUpdateInterval(exceptions.HomeAssistantError):
-    """
-    Error to indicate the update interval is invalid.
-    """
-    pass
-
-class NoCapabilities(exceptions.HomeAssistantError):
-    """
-    Error to indicate no supported capabilities were found.
-    """
-    pass
