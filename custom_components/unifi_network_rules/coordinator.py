@@ -259,20 +259,32 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 # Track authentication failures during the update
                 auth_failure_during_update = False
                 
-                # First get firewall policies
-                await self._update_firewall_policies_in_dict(rules_data)
+                # Try a core API call first to detect auth issues early
+                try:
+                    # First get port forwards - CRITICAL to check auth early but also preserve during auth failures
+                    port_forwards_success = await self._update_port_forwards_in_dict(rules_data)
+                    if not port_forwards_success:
+                        error_msg = getattr(self.api, "_last_error_message", "")
+                        if error_msg and ("401 Unauthorized" in error_msg or "403 Forbidden" in error_msg):
+                            auth_failure_during_update = True
+                            LOGGER.warning("Authentication failure detected during initial fetch: %s", error_msg)
+                            # Trigger auth recovery but continue trying other endpoints
+                            if hasattr(self.api, "handle_auth_failure"):
+                                recovery_task = asyncio.create_task(self.api.handle_auth_failure(error_msg))
+                                # Don't await so we can continue with other endpoints
+                                
+                            # Preserve previous port forwards data if available
+                            if previous_data and "port_forwards" in previous_data and previous_data["port_forwards"]:
+                                LOGGER.info("Preserving previous port forwards data during authentication failure")
+                                rules_data["port_forwards"] = previous_data["port_forwards"]
+                except Exception as err:
+                    LOGGER.error("Error in initial API call: %s", str(err))
+                    # Continue with other calls
+                    
                 await asyncio.sleep(api_call_delay)
                 
-                # Then port forwards - CRITICAL to preserve during auth failures
-                port_forwards_success = await self._update_port_forwards_in_dict(rules_data)
-                if not port_forwards_success and "401 Unauthorized" in str(self.api._last_error_message):
-                    auth_failure_during_update = True
-                    LOGGER.warning("Authentication failure detected during port forwards fetch")
-                    # Preserve previous port forwards data if available
-                    if previous_data and "port_forwards" in previous_data and previous_data["port_forwards"]:
-                        LOGGER.info("Preserving previous port forwards data during authentication failure")
-                        rules_data["port_forwards"] = previous_data["port_forwards"]
-                
+                # Then firewall policies
+                await self._update_firewall_policies_in_dict(rules_data)
                 await asyncio.sleep(api_call_delay)
                 
                 # Then traffic routes
@@ -298,21 +310,18 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 # Then QoS rules
                 await self._update_qos_rules_in_dict(rules_data)
                 
-                # Log detailed info for traffic routes
-                LOGGER.debug("Traffic routes received: %d items", len(rules_data["traffic_routes"]))
-                for route in rules_data["traffic_routes"]:
-                    _log_rule_info(route)
-                
                 # Verify the data is valid - check if we have at least some data in key categories
                 # This helps prevent entity removal during temporary API errors
                 data_valid = (
                     len(rules_data["firewall_policies"]) > 0 or 
                     len(rules_data["traffic_rules"]) > 0 or
                     len(rules_data["port_forwards"]) > 0 or
-                    len(rules_data["traffic_routes"]) > 0
+                    len(rules_data["qos_rules"]) > 0 or
+                    len(rules_data["traffic_routes"]) > 0 or
+                    len(rules_data["legacy_firewall_rules"]) > 0
                 )
                 
-                # Special handling for authentication failures
+                # Special handling for authentication failures detected during update
                 if auth_failure_during_update:
                     LOGGER.warning("Authentication issues detected during update - preserving existing data")
                     # If authentication failures occurred, preserve previous data for key categories
@@ -320,6 +329,15 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                         if not rules_data[key] and previous_data and key in previous_data and previous_data[key]:
                             LOGGER.info(f"Preserving previous {key} data due to authentication issues")
                             rules_data[key] = previous_data[key]
+                
+                # Check any API responses for auth errors
+                api_error_message = getattr(self.api, "_last_error_message", "")
+                if api_error_message and ("401 Unauthorized" in api_error_message or "403 Forbidden" in api_error_message):
+                    LOGGER.warning("Authentication error in API response: %s", api_error_message)
+                    auth_failure_during_update = True
+                    
+                    # Notify entities about auth failure
+                    async_dispatcher_send(self.hass, f"{DOMAIN}_auth_failure")
                 
                 # If we get no data but had data before, likely a temporary API issue
                 if not data_valid and previous_data and any(
@@ -352,7 +370,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                     self._authentication_in_progress = True
                     try:
                         LOGGER.info("Forcing session refresh due to API data issue")
-                        await self.api.refresh_session()
+                        await self.api.refresh_session(force=True)
                     except Exception as session_err:
                         LOGGER.error("Failed to refresh session during error recovery: %s", session_err)
                     finally:
@@ -373,6 +391,11 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                     self._consecutive_errors = 0
                     self._in_error_state = False
                     self._last_successful_data = rules_data.copy()
+                    
+                    # If we previously had auth issues but now have valid data, signal recovery
+                    if auth_failure_during_update:
+                        LOGGER.info("Successfully recovered from authentication issues")
+                        async_dispatcher_send(self.hass, f"{DOMAIN}_auth_restored")
                     
                     # Check for deleted rules in latest update
                     if previous_data:
@@ -408,18 +431,26 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 LOGGER.error("Error updating coordinator data: %s", err)
                 
                 # Check if this is an authentication error
-                if "401 Unauthorized" in str(err) or "403 Forbidden" in str(err):
+                auth_error = False
+                error_str = str(err).lower()
+                if "401 unauthorized" in error_str or "403 forbidden" in error_str:
+                    auth_error = True
                     self._auth_failures += 1
                     self._authentication_in_progress = True
                     try:
                         LOGGER.warning("Authentication failure #%d during data update", self._auth_failures)
                         
+                        # Signal auth failure to entities
+                        async_dispatcher_send(self.hass, f"{DOMAIN}_auth_failure")
+                        
                         # Try to refresh the session if we haven't exceeded max failures
                         if self._auth_failures < self._max_auth_failures:
                             LOGGER.info("Attempting to refresh authentication session")
                             try:
-                                await self.api.refresh_session()
-                                # If we succeeded in refreshing, return the previous data
+                                await self.api.refresh_session(force=True)
+                                # If we succeeded in refreshing, notify components
+                                async_dispatcher_send(self.hass, f"{DOMAIN}_auth_restored")
+                                # Return the previous data
                                 if self.data:
                                     return self.data
                             except Exception as refresh_err:
@@ -706,6 +737,31 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 # Initialize with empty list if no rules returned
                 target_data[rule_type] = []
         except Exception as err:  # pylint: disable=broad-except
+            error_str = str(err).lower()
+            
+            # Special handling for 404 errors - may indicate path structure issue
+            if "404 not found" in error_str:
+                LOGGER.error("404 error when fetching %s rules: %s", rule_type, str(err))
+                
+                # Try to fix the API path if needed
+                if hasattr(self.api, "_ensure_proxy_prefix_in_path"):
+                    try:
+                        LOGGER.info("Attempting to fix API path for %s rules", rule_type)
+                        self.api._ensure_proxy_prefix_in_path()
+                        
+                        # Try one more time with the fixed path
+                        LOGGER.debug("Retrying %s fetch with fixed path", rule_type)
+                        retry_future = await self.api.queue_api_operation(fetch_method)
+                        retry_rules = await retry_future if hasattr(retry_future, "__await__") else retry_future
+                        
+                        if retry_rules:
+                            LOGGER.info("Successfully retrieved %d %s rules after path fix", 
+                                      len(retry_rules), rule_type)
+                            target_data[rule_type] = retry_rules
+                            return
+                    except Exception as retry_err:
+                        LOGGER.error("Error in retry attempt for %s: %s", rule_type, retry_err)
+            
             LOGGER.error("Error updating %s rules: %s", rule_type, err)
             # Keep previous data if update fails
             if rule_type not in target_data:
@@ -972,9 +1028,29 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         LOGGER.info("Authentication failure callback triggered, requesting data refresh")
         # Reset authentication flag
         self._authentication_in_progress = False
+        
+        # Reset _consecutive_errors to avoid conflating API errors with auth errors
+        self._consecutive_errors = 0
+        
+        # Notify any entities that have optimistic state to handle auth issues appropriately
+        async_dispatcher_send(self.hass, f"{DOMAIN}_auth_failure")
+        
         # Request a refresh with some delay to allow auth to stabilize
         await asyncio.sleep(2.0)
+        
+        # Ensure a fresh session before refresh
+        try:
+            if hasattr(self.api, "refresh_session"):
+                LOGGER.debug("Refreshing session before data refresh")
+                await self.api.refresh_session(force=True)
+        except Exception as err:
+            LOGGER.error("Error refreshing session during auth recovery: %s", str(err))
+            
+        # Force a full refresh
         await self.async_refresh()
+        
+        # After successful refresh, notify components to clear any error states
+        async_dispatcher_send(self.hass, f"{DOMAIN}_auth_restored")
 
     def _remove_entity(self, rule_id: str) -> None:
         """Remove entity associated with a rule.

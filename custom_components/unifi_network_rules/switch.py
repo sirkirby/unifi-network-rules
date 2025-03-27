@@ -329,6 +329,9 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         self._attr_assumed_state = True
         self._optimistic_state = None
         self._optimistic_timestamp = 0  # Add timestamp for optimistic state
+        self._optimistic_max_age = 5  # Maximum age in seconds for optimistic state
+        self._operation_pending = False
+        self._last_auth_failure_time = 0
         
         # Initialize linked entity tracking
         self._linked_parent_id = None  # Unique ID of parent entity, if any
@@ -372,6 +375,55 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         LOGGER.debug("Established parent-child relationship: %s → %s", 
                    parent.entity_id, child.entity_id)
 
+    def clear_optimistic_state(self, force: bool = False) -> None:
+        """Clear the optimistic state if it exists.
+        
+        Args:
+            force: If True, force clearing regardless of timestamp
+        """
+        if self._optimistic_state is not None:
+            if force:
+                LOGGER.debug("Forcibly clearing optimistic state for %s", self._rule_id)
+                self._optimistic_state = None
+                self._optimistic_timestamp = 0
+                self._operation_pending = False
+            else:
+                current_time = time.time()
+                age = current_time - self._optimistic_timestamp
+                if age > self._optimistic_max_age:
+                    LOGGER.debug("Clearing optimistic state for %s (age: %.1f seconds)",
+                               self._rule_id, age)
+                    self._optimistic_state = None
+                    self._optimistic_timestamp = 0
+                    self._operation_pending = False
+
+    def mark_pending_operation(self, target_state: bool) -> None:
+        """Mark that an operation is pending with a target state.
+        
+        Args:
+            target_state: The target state (True for on, False for off)
+        """
+        self._optimistic_state = target_state
+        self._optimistic_timestamp = time.time()
+        self._operation_pending = True
+        
+    def handle_auth_failure(self) -> None:
+        """Handle authentication failure by adjusting optimistic states."""
+        # Record when this auth failure happened
+        self._last_auth_failure_time = time.time()
+        
+        # Only retain optimistic state for a shorter period during auth failures
+        if self._optimistic_state is not None:
+            self._optimistic_max_age = 2  # Reduced maximum age during auth problems
+            
+        # Log that we're handling an auth failure for this entity
+        LOGGER.debug("Handling auth failure for entity %s (current optimistic state: %s)",
+                   self.entity_id, 
+                   "on" if self._optimistic_state else "off" if self._optimistic_state is not None else "None")
+        
+        # Don't immediately clear optimistic state - let it expire naturally
+        # This gives time for auth recovery to succeed
+
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
@@ -395,37 +447,59 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                            self._rule_id, target_state)
                 self._optimistic_state = target_state
                 self._optimistic_timestamp = time.time()  # Refresh timestamp
-            # Only clear optimistic state if no pending operations and it's been more than 5 seconds
-            # This prevents rapid authentication cycles from clearing optimistic state
+                self._operation_pending = True
+            # Handle optimistic state clearing or verification
             elif self._optimistic_state is not None:
+                # Check if we should verify against actual state or clear optimistic state
                 current_time = time.time()
-                if current_time - self._optimistic_timestamp > 5:  # Reduced from 10 to 5 seconds
-                    LOGGER.debug("Clearing optimistic state after 5 seconds")
+                age = current_time - self._optimistic_timestamp
+                
+                # Check for recent auth failures
+                auth_failure_recent = (self._last_auth_failure_time > 0 and 
+                                       current_time - self._last_auth_failure_time < 10)
+                
+                # Determine max age based on auth failure status
+                max_age = 2 if auth_failure_recent else self._optimistic_max_age
+                
+                if age > max_age:
                     # Before clearing optimistic state, verify the rule's current state from coordinator data
                     if hasattr(new_rule, "enabled"):
                         current_state = new_rule.enabled
                         LOGGER.debug("Actual rule state from API is %s for rule %s", 
                                    current_state, self._rule_id)
-                        # Only clear if actual state matches optimistic state
+                        
+                        # If optimistic state matches actual state, we can clear optimistic mode
                         if self._optimistic_state == current_state:
+                            LOGGER.debug("Clearing optimistic state as it now matches actual state")
                             self._optimistic_state = None
                             self._optimistic_timestamp = 0
+                            self._operation_pending = False
                         else:
+                            # State mismatch - could be auth failure or other issue
                             LOGGER.warning(
-                                "Optimistic state (%s) doesn't match actual state (%s) for rule %s, keeping optimistic", 
+                                "Optimistic state (%s) doesn't match actual state (%s) for rule %s", 
                                 self._optimistic_state, 
                                 current_state, 
                                 self._rule_id
                             )
-                            # Extend optimistic state time to give more time for state to sync
-                            self._optimistic_timestamp = time.time()
+                            
+                            # After 30 seconds, give up on optimistic state and accept reality
+                            if age > 30:
+                                LOGGER.info(
+                                    "Optimistic state expired after %d seconds - accepting actual state %s for %s",
+                                    age, current_state, self._rule_id
+                                )
+                                self._optimistic_state = None
+                                self._optimistic_timestamp = 0
+                                self._operation_pending = False
+                            else:
+                                # Extend but don't fully reset the timestamp
+                                self._optimistic_timestamp = current_time - (max_age / 2)
                     else:
                         # If no enabled attribute, default to clearing optimistic state
                         self._optimistic_state = None
                         self._optimistic_timestamp = 0
-                else:
-                    LOGGER.debug("Keeping optimistic state, only %d seconds elapsed", 
-                               current_time - self._optimistic_timestamp)
+                        self._operation_pending = False
             
             self._rule_data = new_rule
             
@@ -534,8 +608,7 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         LOGGER.debug("%s rule %s (%s)", action_type, self._rule_id, self._rule_type)
         
         # Set optimistic state first for immediate UI feedback with timestamp
-        self._optimistic_state = enable
-        self._optimistic_timestamp = time.time()
+        self.mark_pending_operation(enable)
         
         # Write state and force an update to ensure all clients receive it immediately
         self.async_write_ha_state()
@@ -545,8 +618,7 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         if current_rule is None:
             LOGGER.error("Rule not found in coordinator data: %s", self._rule_id)
             # Revert optimistic state
-            self._optimistic_state = not enable
-            self._optimistic_timestamp = time.time()
+            self.mark_pending_operation(not enable)
             self.async_write_ha_state()
             return
         
@@ -572,8 +644,7 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                     # Revert optimistic state if failed
                     LOGGER.error("Failed to %s rule %s", 
                                 "enable" if enable else "disable", self._rule_id)
-                    self._optimistic_state = not enable
-                    self._optimistic_timestamp = time.time()
+                    self.mark_pending_operation(not enable)
                     self.async_write_ha_state()
                 else:
                     # On success, refresh the optimistic state timestamp to prevent premature clearing
@@ -600,11 +671,19 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                     asyncio.create_task(delayed_verify())
                 
             except Exception as err:
-                LOGGER.error("Error in toggle operation for rule %s: %s", 
-                            self._rule_id, err)
+                # Check if this is an auth error
+                error_str = str(err).lower()
+                if "401 unauthorized" in error_str or "403 forbidden" in error_str:
+                    LOGGER.warning("Authentication error in toggle operation for rule %s: %s", 
+                                 self._rule_id, err)
+                    # Report auth failure to handle it appropriately
+                    self.handle_auth_failure()
+                else:
+                    LOGGER.error("Error in toggle operation for rule %s: %s", 
+                                self._rule_id, err)
+                
                 # Revert optimistic state on error
-                self._optimistic_state = not enable
-                self._optimistic_timestamp = time.time()
+                self.mark_pending_operation(not enable)
                 self.async_write_ha_state()
             finally:
                 # Always remove from pending operations when complete
@@ -651,8 +730,7 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                 del self.coordinator._pending_operations[self._rule_id]
             
             # Revert optimistic state
-            self._optimistic_state = not enable
-            self._optimistic_timestamp = time.time()
+            self.mark_pending_operation(not enable)
             self.async_write_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
@@ -753,6 +831,24 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
             )
         )
         
+        # Listen for authentication failure events
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                f"{DOMAIN}_auth_failure",
+                self._handle_auth_failure_event
+            )
+        )
+        
+        # Listen for authentication restored events
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                f"{DOMAIN}_auth_restored",
+                self._handle_auth_restored_event
+            )
+        )
+        
         # Listen for entity removal signals - use targeted signal first
         self.async_on_remove(
             async_dispatcher_connect(
@@ -832,6 +928,43 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
             self.async_write_ha_state()
         except Exception as err:
             LOGGER.error("Error during entity registration: %s", err)
+
+    @callback
+    def _handle_auth_failure_event(self, _: Any = None) -> None:
+        """Handle authentication failure event."""
+        LOGGER.debug("Authentication failure event received for entity %s", self.entity_id)
+        
+        # Track the auth failure time
+        self._last_auth_failure_time = time.time()
+        
+        # Notify the entity to handle auth failure appropriately
+        self.handle_auth_failure()
+        
+        # Force a state update to reflect any changes
+        self.async_write_ha_state()
+        
+    @callback
+    def _handle_auth_restored_event(self, _: Any = None) -> None:
+        """Handle authentication restored event."""
+        LOGGER.debug("Authentication restored event received for entity %s", self.entity_id)
+        
+        # Reset auth failure time
+        self._last_auth_failure_time = 0
+        
+        # Reset optimistic max age to normal
+        self._optimistic_max_age = 5
+        
+        # If we have an operation pending and optimistic state is set, keep it longer
+        # to allow time for the next refresh to verify state
+        if self._operation_pending and self._optimistic_state is not None:
+            self._optimistic_timestamp = time.time()
+            LOGGER.debug("Refreshed optimistic state timestamp due to auth restoration")
+        else:
+            # No operations pending, clear any lingering optimistic state
+            self.clear_optimistic_state()
+        
+        # Force an update
+        self.async_schedule_update_ha_state(True)
 
     @callback
     def _handle_entity_created(self) -> None:
