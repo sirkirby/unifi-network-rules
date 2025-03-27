@@ -143,6 +143,15 @@ class AuthenticationMixin:
                 self._last_login_attempt = current_time
                 self._login_attempt_count += 1
                 
+                # Ensure the base path includes proxy prefix before login
+                if hasattr(self.controller, "_base_path"):
+                    original_path = self.controller._base_path
+                    # Always set the base path to include /proxy/network/ for UDM devices
+                    if not original_path.startswith("/proxy/network/"):
+                        normalized_path = original_path.lstrip("/")
+                        self.controller._base_path = f"/proxy/network/{normalized_path}"
+                        LOGGER.debug("Updated base path before login: %s", self.controller._base_path)
+                
                 # Try to login
                 await self.controller.login()
                 
@@ -150,6 +159,9 @@ class AuthenticationMixin:
                 self._login_attempt_count = 0
                 if hasattr(self, "_last_successful_login"):
                     self._last_successful_login = current_time
+                    
+                # Ensure the proxy prefix is correct after login
+                self._ensure_proxy_prefix_in_path()
                     
                 LOGGER.info("Successfully logged in to controller")
                 return True
@@ -197,70 +209,132 @@ class AuthenticationMixin:
         """Set a callback to be called on authentication failure."""
         self._auth_failure_callback = callback
 
-    async def refresh_session(self) -> bool:
-        """Refresh the controller session."""
+    async def refresh_session(self, force: bool = False) -> bool:
+        """Refresh the authentication session to prevent expiration.
+        
+        Args:
+            force: Force refresh even if recently refreshed
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        # Skip if we've refreshed recently (less than 5 minutes ago) unless forced
+        current_time = time.time()
+        min_refresh_interval = 300  # 5 minutes
+        
+        if not force and hasattr(self, "_last_session_refresh"):
+            elapsed = current_time - self._last_session_refresh
+            if elapsed < min_refresh_interval:
+                LOGGER.debug(
+                    "Skipping session refresh as it was refreshed %d seconds ago (interval: %d)", 
+                    elapsed, min_refresh_interval
+                )
+                return True
+                
+        LOGGER.info("Refreshing authentication session")
+        
+        # Save existing path configuration before refresh
+        original_base_path = getattr(self.controller, "_base_path", "")
+        original_site_path = getattr(self.controller, "_site_path", "")
+        has_proxy_prefix = original_base_path and "/proxy/network" in original_base_path
+        
+        # Log current path configuration
+        LOGGER.debug("Current path config before refresh - base: %s, site: %s", 
+                   original_base_path, original_site_path)
+        
         try:
-            # Check if we need to login again
-            need_login = False
+            # Check for session token using a more compatible approach
+            # Instead of relying on is_logged_in attribute which doesn't exist in some versions
+            has_session = (
+                hasattr(self.controller, "session") and 
+                self.controller.session is not None and
+                getattr(self.controller, "headers", {}).get("Cookie") is not None
+            )
             
-            # Check if controller exists
-            if not self.controller:
-                LOGGER.debug("No controller exists, need login")
-                need_login = True
+            if not has_session:
+                LOGGER.warning("No valid session token, performing full login")
+                login_success = await self._try_login()
+                
+                # After login, ensure proxy prefix is in base path
+                self._ensure_proxy_prefix_in_path()
+                
+                return login_success
+                
+            # For a refresh, we'll use a special endpoint that keeps the session alive
+            LOGGER.debug("Attempting to refresh existing session")
+            
+            # Different controllers use different methods to refresh a session
+            # Check if there's a refresh endpoint available
+            refresh_endpoint = "api/auth/refresh" 
+            
+            # Create the refresh request - without payload for refresh requests
+            req = self._create_api_request("POST", refresh_endpoint, None)
+            
+            # Make the request
+            async with asyncio.timeout(10):
+                resp = await self.controller.request(req)
+                
+            if resp.status == 200:
+                LOGGER.info("Session refresh successful")
+                self._last_session_refresh = current_time
+                
+                # Ensure the proxy prefix is in base path
+                self._ensure_proxy_prefix_in_path()
+                
+                return True
             else:
-                # Check if the controller can make requests by making a test request
-                try:
-                    # Make a lightweight API call that doesn't require much processing
-                    from aiounifi.models.site import SiteListRequest
-                    request = SiteListRequest.create()
-                    result = await self.controller.request(request)
-                    if result:
-                        LOGGER.debug("Controller connection verified with lightweight API call")
-                        return True
-                    else:
-                        LOGGER.debug("Controller validation failed, need login")
-                        need_login = True
-                except Exception as session_err:
-                    # If the request fails due to authentication, we need to login again
-                    err_str = str(session_err).lower()
-                    if any(auth_term in err_str for auth_term in ["auth", "unauthorized", "forbidden", "401", "403"]):
-                        LOGGER.debug("Session expired - authentication error: %s", session_err)
-                        need_login = True
-                    else:
-                        # For other errors, might be connectivity, not auth failure
-                        LOGGER.warning("Error checking controller validity: %s", session_err)
-                        # For non-auth errors, we'll still attempt to use the existing controller
-                        return True
-            
-            # If login is needed, try it
-            if need_login:
-                LOGGER.info("Refreshing expired session...")
-                return await self._try_login()
-            
-            # Controller looks valid
-            return True
+                # If refresh fails, try a full login
+                LOGGER.warning(
+                    "Session refresh failed (status %d), falling back to full login", 
+                    resp.status
+                )
+                login_success = await self._try_login()
+                
+                # After login, ensure proxy prefix is in base path
+                self._ensure_proxy_prefix_in_path()
+                
+                return login_success
+                
         except Exception as err:
             LOGGER.error("Error refreshing session: %s", err)
-            return False
-
-    async def async_connect(self) -> bool:
-        """Connect to the UniFi controller.
-        
-        This is a wrapper around _try_login to enable reconnection in async_refresh.
-        """
-        try:
-            # First check if we already have a valid controller before attempting login
-            if self.controller:
-                # Use a passive validation via refresh_session
-                if await self.refresh_session():
-                    LOGGER.debug("Reusing existing controller - no login required")
-                    return True
             
-            # No valid controller or session, so try to login
-            return await self._try_login()
-        except Exception as err:
-            LOGGER.error("Error connecting to UniFi controller: %s", err)
-            return False
+            # Restore original paths if needed
+            if original_base_path != getattr(self.controller, "_base_path", ""):
+                LOGGER.debug("Restoring original base path: %s", original_base_path)
+                self.controller._base_path = original_base_path
+                
+            if original_site_path != getattr(self.controller, "_site_path", ""):
+                LOGGER.debug("Restoring original site path: %s", original_site_path)
+                self.controller._site_path = original_site_path
+                
+            # Try full login if refresh fails
+            try:
+                LOGGER.warning("Session refresh failed, attempting full login")
+                login_success = await self._try_login()
+                
+                # After login, ensure proxy prefix is in base path
+                self._ensure_proxy_prefix_in_path()
+                
+                return login_success
+            except Exception as login_err:
+                LOGGER.error("Full login failed after session refresh error: %s", login_err)
+                return False
+                
+    def _ensure_proxy_prefix_in_path(self) -> None:
+        """Ensure the proxy prefix is in the base path."""
+        if not hasattr(self.controller, "_base_path"):
+            return
+            
+        # Always use the proxy prefix for UDM controllers
+        current_path = self.controller._base_path
+        
+        # If proxy prefix is missing, add it
+        if not current_path.startswith("/proxy/network/"):
+            # Normalize the path by removing any leading slashes
+            normalized_path = current_path.lstrip("/")
+            # Add the prefix
+            self.controller._base_path = f"/proxy/network/{normalized_path}"
+            LOGGER.debug("Updated base path with proxy prefix: %s", self.controller._base_path)
 
     # Helper methods that would be defined in implementation
     def _create_controller_configuration(self, base_host, port):

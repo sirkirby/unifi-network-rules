@@ -14,6 +14,7 @@ alwaysApply: true
 - When designing a new feature, prefer elegant solutions using established best practices and patterns.
 - When fixing a problem or bug, avoid treating the symptop, look for the root cause.
 - Details matter, ensure to always preserve existing functionlity unless otherwise instructed.
+- KISS
 
 ## Notes
 
