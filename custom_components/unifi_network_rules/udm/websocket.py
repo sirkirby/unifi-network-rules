@@ -294,12 +294,22 @@ class CustomUnifiWebSocket:
         
     async def _handle_message(self, data: str) -> None:
         """Handle a WebSocket message."""
+        # Check for empty messages
+        if not data or not data.strip():
+            LOGGER.debug("Received empty WebSocket message, ignoring")
+            return
+        
         try:
             # Parse message using orjson if available for better performance
             if USE_ORJSON:
                 message = orjson.loads(data)
             else:
                 message = json.loads(data)
+            
+            # Verify we have a valid message
+            if not message or not isinstance(message, dict):
+                LOGGER.debug("Received invalid WebSocket message format: %s", type(message))
+                return
             
             # Record message time for connection health monitoring
             self._last_message_time = datetime.now()
@@ -368,7 +378,12 @@ class CustomUnifiWebSocket:
                 LOGGER.debug("WebSocket message received but no callback set: %s", msg_type)
                 
         except json.JSONDecodeError as err:
-            LOGGER.error("Failed to parse message: %s", err)
+            if not data or data.strip() == "":
+                LOGGER.debug("Received empty or whitespace-only WebSocket message")
+            else:
+                LOGGER.error("Failed to parse message: %s - Data: %s", err, data[:100] if len(data) > 100 else data)
+        except Exception as err:
+            LOGGER.error("Error processing WebSocket message: %s", err)
             
     async def _schedule_reconnect(self) -> None:
         """Schedule a reconnect."""
