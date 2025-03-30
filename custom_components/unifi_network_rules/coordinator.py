@@ -1086,12 +1086,17 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
     async def async_refresh(self) -> bool:
         """Refresh data from the UniFi API."""
         try:
-            # Only attempt connection if not already connected
-            # The modified async_connect method will reuse the session if valid
-            if not await self.api.async_connect():
-                LOGGER.warning("Failed to connect to UniFi Network API")
-                return False
-                
+            # Verify authentication by refreshing the session
+            # This will reuse the existing session if valid
+            if hasattr(self.api, "refresh_session"):
+                LOGGER.debug("Refreshing authentication session")
+                refresh_success = await self.api.refresh_session()
+                if not refresh_success:
+                    LOGGER.warning("Failed to refresh UniFi Network API session")
+            else:
+                # Fallback for older API versions
+                LOGGER.warning("API missing refresh_session method, skipping authentication check")
+            
             # Use a default device name
             self.device_name = "UniFi Network Controller"
             
