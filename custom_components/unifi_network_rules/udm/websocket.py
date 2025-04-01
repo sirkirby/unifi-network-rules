@@ -158,19 +158,7 @@ class CustomUnifiWebSocket:
                     LOGGER.info("WebSocket reconnecting in %d seconds (attempt #%d)...", 
                                reconnect_delay, reconnect_attempt)
                     await asyncio.sleep(reconnect_delay)
-                    
-                    # Attempt to refresh the session if we've had connection failures
-                    if reconnect_attempt % 3 == 0 and hasattr(self._session, "cookie_jar"):
-                        try:
-                            LOGGER.debug("Refreshing authentication headers after failed connections")
-                            # We're enhancing our headers with refreshed auth data
-                            new_headers = await self._get_auth_headers()
-                            if new_headers:
-                                self._headers.update(new_headers)
-                                LOGGER.debug("Successfully refreshed authentication for WebSocket connection")
-                        except Exception as auth_err:
-                            LOGGER.warning("Failed to refresh authentication: %s", auth_err)
-                    
+                
                 # Build WS URL with varying strategies based on reconnect attempt
                 if reconnect_attempt < 3:
                     ws_url = self._build_url()
