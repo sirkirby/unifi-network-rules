@@ -9,6 +9,7 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 
 from ..const import DOMAIN, LOGGER
 from .constants import (
@@ -45,6 +46,22 @@ DELETE_RULE_SCHEMA = vol.Schema(
         vol.Optional(CONF_RULE_TYPE): cv.string,
     }
 )
+
+def find_entity_by_unique_id(hass: HomeAssistant, unique_id: str) -> str | None:
+    """Find entity ID by its unique ID.
+    
+    Args:
+        hass: Home Assistant instance
+        unique_id: The unique ID to look for
+        
+    Returns:
+        The entity ID if found, None otherwise
+    """
+    entity_registry = async_get_entity_registry(hass)
+    entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, unique_id)
+    if entity_id:
+        return entity_id
+    return None
 
 async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: ServiceCall) -> None:
     """Handle toggling a rule by ID."""
@@ -235,27 +252,70 @@ async def async_bulk_update_rules(hass: HomeAssistant, coordinators: Dict, call:
         # Only toggle if the current state is different from desired state
         if current_state != desired_state:
             if rule_type == "firewall_policies":
-                return await api.queue_toggle_firewall_policy(rule_obj)
+                return await api.queue_api_operation(api.toggle_firewall_policy, rule_obj)
             elif rule_type == "traffic_rules":
-                return await api.queue_toggle_traffic_rule(rule_obj)
+                return await api.queue_api_operation(api.toggle_traffic_rule, rule_obj)
             elif rule_type == "port_forwards":
-                return await api.queue_toggle_port_forward(rule_obj)
+                return await api.queue_api_operation(api.toggle_port_forward, rule_obj)
             elif rule_type == "traffic_routes":
-                return await api.queue_toggle_traffic_route(rule_obj)
+                return await api.queue_api_operation(api.toggle_traffic_route, rule_obj)
             elif rule_type == "legacy_firewall_rules":
-                return await api.queue_toggle_legacy_firewall_rule(rule_obj)
+                return await api.queue_api_operation(api.toggle_legacy_firewall_rule, rule_obj)
             elif rule_type == "qos_rules":
-                return await api.queue_toggle_qos_rule(rule_obj)
+                return await api.queue_api_operation(api.toggle_qos_rule, rule_obj)
             elif rule_type == "wlans":
-                return await api.queue_toggle_wlan(rule_obj)
+                return await api.queue_api_operation(api.toggle_wlan, rule_obj)
         return True  # Already in desired state
 
+    entity_registry = async_get_entity_registry(hass)
+    
+    # First check entity registry for entities with matching names
+    for entity_id, entity in entity_registry.entities.items():
+        if entity.platform == DOMAIN and entity.domain == "switch":
+            # Get the entity state to access its name
+            state = hass.states.get(entity_id)
+            if state and state.name and name_filter in state.name.lower():
+                LOGGER.debug("Found matching entity: %s (%s)", state.name, entity_id)
+                # Find the corresponding rule in coordinators data
+                for coordinator in coordinators.values():
+                    api = coordinator.api
+                    if not api or not coordinator.data:
+                        continue
+                    
+                    # Get unique_id without domain prefix (entity registry format)
+                    unique_id = entity.unique_id
+                    
+                    # Look through rule collections to find matching unique_id
+                    for rule_type, rules in coordinator.data.items():
+                        if not rules:
+                            continue
+                            
+                        for rule in rules:
+                            # Check if this rule's ID matches our entity's unique_id
+                            from ..helpers.rule import get_rule_id
+                            rule_unique_id = get_rule_id(rule)
+                            
+                            if rule_unique_id == unique_id:
+                                try:
+                                    if await toggle_rule_if_needed(api, rule_type, rule, desired_state):
+                                        updated_count += 1
+                                        LOGGER.info(
+                                            "Updated rule %s (%s) to state: %s via entity %s",
+                                            state.name, rule_type, desired_state, entity_id
+                                        )
+                                except Exception as err:
+                                    LOGGER.error(
+                                        "Failed to update entity %s rule: %s", 
+                                        entity_id, err
+                                    )
+
+    # Also ensure we check directly in coordinator data for rules that might not have entities
     for coordinator in coordinators.values():
         api = coordinator.api
         if not api or not coordinator.data:
             continue
 
-        # Find and update matching rules
+        # Find and update matching rules by name
         for rule_type, rules in coordinator.data.items():
             if not rules:
                 continue
@@ -269,11 +329,20 @@ async def async_bulk_update_rules(hass: HomeAssistant, coordinators: Dict, call:
                     rule_name = rule["name"]
                     
                 if rule_name and name_filter in rule_name.lower():
+                    # Check if we already processed this via entity lookup
+                    from ..helpers.rule import get_rule_id
+                    rule_unique_id = get_rule_id(rule)
+                    entity_id = find_entity_by_unique_id(hass, rule_unique_id)
+                    
+                    # Skip if we already processed this via an entity
+                    if entity_id and hass.states.get(entity_id) is not None:
+                        continue
+                        
                     try:
                         if await toggle_rule_if_needed(api, rule_type, rule, desired_state):
                             updated_count += 1
                             LOGGER.info(
-                                "Updated rule %s (%s) to state: %s",
+                                "Updated rule %s (%s) to state: %s directly from API data",
                                 rule_name, rule_type, desired_state
                             )
                     except Exception as err:

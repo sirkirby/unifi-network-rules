@@ -355,7 +355,7 @@ async def async_create_entity(hass: HomeAssistant, rule_type: str, rule: Any) ->
             # Also create the kill switch for traffic routes using the centralized function
             from .switch import create_traffic_route_kill_switch
             await create_traffic_route_kill_switch(
-                hass, coordinator, rule, entity, config_entry_id=config_entry_id
+                hass, coordinator, rule, config_entry_id=config_entry_id
             )
         elif rule_type == "firewall_policies":
             from .switch import UnifiFirewallPolicySwitch

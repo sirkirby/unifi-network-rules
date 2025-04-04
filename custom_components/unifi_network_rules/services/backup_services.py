@@ -135,8 +135,9 @@ async def async_backup_rules_service(hass: HomeAssistant, coordinators: Dict, ca
     # Ensure the backup directory exists
     Path(os.path.dirname(backup_path)).mkdir(parents=True, exist_ok=True)
     
-    with open(backup_path, "w") as f:
-        json.dump(backup_data, f, indent=2)
+    # Use aiofiles for async file operations
+    async with aiofiles.open(backup_path, "w") as f:
+        await f.write(json.dumps(backup_data, indent=2))
     
     LOGGER.info("Backed up %d rule types to %s", len(available_rules), backup_path)
     

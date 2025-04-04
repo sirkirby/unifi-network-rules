@@ -50,7 +50,8 @@ class UnifiRuleWebsocket:
     def set_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
         """Register callback for WebSocket messages."""
         self._message_handler = callback
-        LOGGER.debug("WebSocket callback registered")
+        if DEBUG_WEBSOCKET:
+            LOGGER.debug("WebSocket callback registered")
 
     def start(self) -> None:
         """Start the websocket handler."""
@@ -68,7 +69,8 @@ class UnifiRuleWebsocket:
     async def _websocket_connect(self) -> bool:
         """Start websocket connection."""
         try:
-            log_websocket("Attempting WebSocket connection (attempt #%s)", self._ws_connection_attempts)
+            if DEBUG_WEBSOCKET:
+                 log_websocket("Attempting WebSocket connection (attempt #%s)", self._ws_connection_attempts)
             
             # Log controller diagnostics before attempting connection if websocket debugging is enabled
             if (DEBUG_WEBSOCKET and self._ws_connection_attempts == 1):
@@ -80,7 +82,8 @@ class UnifiRuleWebsocket:
             if self._ws_connection_attempts > 1:
                 # Adaptive delay based on number of attempts
                 min_delay = min(5 * self._ws_connection_attempts, 30)
-                log_websocket("Enforcing minimum %s second delay between WebSocket attempts", min_delay)
+                if DEBUG_WEBSOCKET:
+                     log_websocket("Enforcing minimum %s second delay between WebSocket attempts", min_delay)
                 await asyncio.sleep(min_delay)
             
             # Ensure we have current session cookies before starting
@@ -89,15 +92,18 @@ class UnifiRuleWebsocket:
                 try:
                     if not hasattr(self.api.controller.connectivity, "session_cookie") or \
                        not self.api.controller.connectivity.session_cookie:
-                        LOGGER.debug("Controller session appears invalid, re-authenticating")
+                        if DEBUG_WEBSOCKET:
+                             LOGGER.debug("Controller session appears invalid, re-authenticating")
                         await self.api.controller.login()
-                        LOGGER.debug("Re-authenticated controller before WebSocket connection")
+                        if DEBUG_WEBSOCKET:
+                             LOGGER.debug("Re-authenticated controller before WebSocket connection")
                 except Exception as login_err:
                     LOGGER.warning("Error refreshing authentication before WebSocket: %s", login_err)
             
             # Set callback before connecting
             if self._message_handler:
-                LOGGER.debug("Setting WebSocket callback")
+                if DEBUG_WEBSOCKET:
+                     LOGGER.debug("Setting WebSocket callback")
                 
                 # Set WebSocket callback - API will handle this through the WebSocketMixin
                 if hasattr(self.api, "set_websocket_callback"):
@@ -106,12 +112,13 @@ class UnifiRuleWebsocket:
                     if hasattr(self.api, "controller") and self.api.controller:
                         has_ws_handler = hasattr(self.api.controller, "ws_handler")
                         
-                    if not has_ws_handler:
+                    if not has_ws_handler and DEBUG_WEBSOCKET:
                         LOGGER.debug("Controller doesn't have ws_handler attribute, will use custom handler")
                     
                     # Set the callback at API level regardless - our implementation handles both
                     self.api.set_websocket_callback(self._handle_message)  # Use _handle_message as wrapper
-                    LOGGER.debug("Set WebSocket callback on API")
+                    if DEBUG_WEBSOCKET:
+                         LOGGER.debug("Set WebSocket callback on API")
                 else:
                     LOGGER.warning("API missing set_websocket_callback method, callback not set")
             
@@ -205,7 +212,8 @@ class UnifiRuleWebsocket:
             if hasattr(self.api, "stop_websocket"):
                 self.api.stop_websocket()
                 
-            LOGGER.debug("WebSocket handler stopped")
+            if DEBUG_WEBSOCKET:
+                LOGGER.debug("WebSocket handler stopped")
         except Exception as err:
             LOGGER.error("Error stopping websocket: %s", str(err))
 
@@ -228,9 +236,11 @@ class UnifiRuleWebsocket:
                 # Wait with a timeout to avoid hanging forever
                 await asyncio.wait(tasks_to_wait, timeout=2.0)
             except (asyncio.CancelledError, Exception) as err:
-                LOGGER.debug("Error waiting for WebSocket tasks to complete: %s", err)
+                if DEBUG_WEBSOCKET:
+                    LOGGER.debug("Error waiting for WebSocket tasks to complete: %s", err)
                 
-        LOGGER.debug("WebSocket handler async stop completed")
+        if DEBUG_WEBSOCKET:
+            LOGGER.debug("WebSocket handler async stop completed")
 
     def _start_monitoring(self) -> None:
         """Start monitoring the WebSocket connection."""
@@ -238,7 +248,8 @@ class UnifiRuleWebsocket:
             self._ws_monitoring_task.cancel()
             
         self._ws_monitoring_task = asyncio.create_task(self._monitor_connection())
-        LOGGER.debug("Started WebSocket connection monitoring task")
+        if DEBUG_WEBSOCKET:
+            LOGGER.debug("Started WebSocket connection monitoring task")
         
     async def _monitor_connection(self) -> None:
         """Monitor the WebSocket connection and restart if needed."""
@@ -248,7 +259,8 @@ class UnifiRuleWebsocket:
                 await asyncio.sleep(60)
                 
                 if not self._ws_connected:
-                    LOGGER.debug("WebSocket connection lost during monitoring, attempting to reconnect")
+                    if DEBUG_WEBSOCKET:
+                        LOGGER.debug("WebSocket connection lost during monitoring, attempting to reconnect")
                     # If not connected, try to reconnect
                     if not self._task or self._task.done():
                         self._ws_connection_attempts += 1
@@ -257,7 +269,8 @@ class UnifiRuleWebsocket:
                 # Check the API connection as well if available
                 if hasattr(self.api, "_custom_websocket") and self.api._custom_websocket:
                     if not self.api._custom_websocket.is_connected():
-                        LOGGER.debug("Custom WebSocket disconnected, attempting to reconnect")
+                        if DEBUG_WEBSOCKET:
+                            LOGGER.debug("Custom WebSocket disconnected, attempting to reconnect")
                         self._ws_connected = False
                         if not self._task or self._task.done():
                             self._ws_connection_attempts += 1
