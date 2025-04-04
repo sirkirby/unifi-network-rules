@@ -182,11 +182,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                     elif self._last_successful_data:
                         return self._last_successful_data
                 
-                # ADDED: Log at start of update
-                LOGGER.info("Starting data update process - current data state: %s", 
-                           {k: len(v) if isinstance(v, list) else v 
-                            for k, v in (self.data or {}).items()})
-                
                 # Proactively refresh the session to prevent 403 errors
                 # Only refresh every 5 minutes to avoid excessive API calls
                 refresh_interval = 300  # seconds
@@ -205,10 +200,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                             LOGGER.warning("Session refresh skipped or failed, continuing with update")
                     except Exception as refresh_err:
                         LOGGER.warning("Failed to refresh session: %s", str(refresh_err))
-                        # Continue with update despite refresh failure
-                
-                # Ensure we always use force_refresh to avoid stale data issues
-                LOGGER.debug("Starting data refresh cycle with force_refresh=True")
                 
                 # Initialize with empty lists for each rule type
                 rules_data: Dict[str, List[Any]] = {
@@ -242,7 +233,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 # Clear any caches before fetching to ensure we get fresh data
                 await self.api.clear_cache()
                 
-                # Log the start of the update process
                 LOGGER.debug("Beginning rule data collection with fresh cache")
                 
                 # Periodically force a cleanup of stale entities (once per hour)
@@ -251,11 +241,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 if current_time - last_cleanup > force_cleanup_interval:
                     setattr(self, "_force_cleanup", True)
                     setattr(self, "_last_entity_cleanup", current_time)
-                    LOGGER.debug("Scheduling forced entity cleanup after this update cycle")
                 
                 # Add delay between API calls to avoid rate limiting
-                # Increase the delay for more aggressive throttling
-                api_call_delay = 1.0  # seconds (increased from default)
+                api_call_delay = 1.0  # seconds
                 
                 # Track authentication failures during the update
                 auth_failure_during_update = False
@@ -272,7 +260,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                             # Trigger auth recovery but continue trying other endpoints
                             if hasattr(self.api, "handle_auth_failure"):
                                 recovery_task = asyncio.create_task(self.api.handle_auth_failure(error_msg))
-                                # Don't await so we can continue with other endpoints
                                 
                             # Preserve previous port forwards data if available
                             if previous_data and "port_forwards" in previous_data and previous_data["port_forwards"]:
@@ -280,7 +267,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                                 rules_data["port_forwards"] = previous_data["port_forwards"]
                 except Exception as err:
                     LOGGER.error("Error in initial API call: %s", str(err))
-                    # Continue with other calls
                     
                 await asyncio.sleep(api_call_delay)
                 
@@ -400,7 +386,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                     
                     # Mark initial update as done AFTER first successful processing and BEFORE checks
                     if not self._initial_update_done:
-                         LOGGER.debug("Marking initial coordinator update as done.")
                          self._initial_update_done = True
 
                     # Perform checks only AFTER the initial update is marked done
@@ -409,13 +394,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                          self._check_for_deleted_rules(rules_data)
 
                          # --- Discover and Add NEW Entities --- 
-                         # Note: _discover_and_add_new_entities updates known_unique_ids internally
                          await self._discover_and_add_new_entities(rules_data)
-                    else:
-                         LOGGER.debug("Skipping deletion/addition checks during initial coordinator update.")
 
                     # --- Update Internal Collections --- 
-                    # Update coordinator's rule lists AFTER potential deletion/addition
                     self.port_forwards = rules_data.get("port_forwards", [])
                     self.traffic_routes = rules_data.get("traffic_routes", [])
                     self.firewall_policies = rules_data.get("firewall_policies", [])
@@ -425,7 +406,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                     self.firewall_zones = rules_data.get("firewall_zones", [])
                     self.qos_rules = rules_data.get("qos_rules", [])
 
-                    # Log the final rule counts
                     LOGGER.info("Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d, QoS Rules=%d", 
                                len(self.port_forwards),
                                len(self.traffic_routes),
@@ -486,7 +466,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         LOGGER.debug("Starting deletion check against known_unique_ids (current size: %d)", len(self.known_unique_ids))
 
         current_known_ids = set(self.known_unique_ids) # Take a snapshot
-        # LOGGER.debug("Current known_unique_ids snapshot (count: %d): %s", len(current_known_ids), sorted(list(current_known_ids)))
 
         # Gather ALL unique IDs present in the new data passed to this function
         all_current_unique_ids = set()
@@ -499,45 +478,32 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             "qos_rules",
             "wlans",
         ]
-        # Add extra logging inside the loop
+        
         for rule_type in all_rule_sources_types:
              rules = new_data.get(rule_type, [])
              if rules:
-                 # LOGGER.debug("Processing %d rules for type '%s' in deletion check", len(rules), rule_type)
                  for rule in rules:
                      try:
                          rule_id = get_rule_id(rule)
                          if rule_id:
-                             # Log before adding
-                             # LOGGER.debug("Adding rule_id '%s' to all_current_unique_ids", rule_id)
                              all_current_unique_ids.add(rule_id)
                              # Add kill switch ID if applicable
                              if rule_type == "traffic_routes" and hasattr(rule, 'raw') and "kill_switch_enabled" in rule.raw:
                                  kill_switch_id = get_child_unique_id(rule_id, "kill_switch")
-                                 # Log before adding kill switch
-                                 # LOGGER.debug("Adding kill_switch_id '%s' for parent '%s'", kill_switch_id, rule_id)
                                  all_current_unique_ids.add(kill_switch_id)
-                         # else: # Log if no ID found? Might be noisy
-                             # LOGGER.debug("Rule of type '%s' skipped (no rule_id): %s", rule_type, rule)
                      except Exception as e:
                           LOGGER.warning("Error getting ID during deletion check for %s: %s", rule_type, e)
 
-        # LOGGER.debug("Calculated all_current_unique_ids (count: %d): %s", len(all_current_unique_ids), sorted(list(all_current_unique_ids)))
-
         # Find IDs that are known but NOT in the current data
-        # Perform the actual difference calculation
         deleted_unique_ids = current_known_ids - all_current_unique_ids
-        # total_known_count = len(self.known_unique_ids) # This seems redundant if we use the set directly
-        # Use the snapshot count for total known
         LOGGER.debug("Deletion Check Final: Known IDs (Snapshot): %d, Current IDs (Calculated): %d, To Delete: %d",
                      len(current_known_ids), len(all_current_unique_ids), len(deleted_unique_ids))
-        # LOGGER.debug("Deleted IDs calculated: %s", sorted(list(deleted_unique_ids))) # Log the actual IDs found
 
         if deleted_unique_ids:
             # Process deletions using the identified IDs and the snapshot count
-            self._process_deleted_rules("various_orphaned", deleted_unique_ids, len(self.known_unique_ids)) # Revert to using current length
+            self._process_deleted_rules("various_orphaned", deleted_unique_ids, len(self.known_unique_ids))
         else:
-             LOGGER.debug("Deletion check: No discrepancies found between known IDs and current data.") # Revert to original end log
+             LOGGER.debug("Deletion check: No discrepancies found between known IDs and current data.")
 
     def _process_deleted_rules(self, rule_type: str, deleted_ids: set, total_previous_count: int) -> None:
         """Process detected rule deletions and dispatch removal events.
@@ -787,7 +753,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 "port_forwards": ["port", "forward", "nat"],
                 "traffic_routes": ["route", "traffic"],
                 "legacy_firewall_rules": ["firewall", "rule", "allow", "deny"],
-                "qos_rules": ["qos", "quality", "service"]  # Keep QoS rule keywords
+                "qos_rules": ["qos", "quality", "service"]
             }
             
             # Check if this message might relate to rule changes
@@ -801,7 +767,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 refresh_reason = "Configuration version change detected"
             
             # Direct rule-related events
-            elif any(word in msg_type.lower() for word in ["firewall", "rule", "policy", "route", "forward", "qos"]):  # Keep qos keyword
+            elif any(word in msg_type.lower() for word in ["firewall", "rule", "policy", "route", "forward", "qos"]):
                 should_refresh = True
                 refresh_reason = f"Rule-related event type: {msg_type}"
                 
@@ -839,7 +805,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             elif "device" in msg_type.lower() and "update" in msg_type.lower():
                 # Only refresh for specific configuration changes
                 message_str = str(message).lower()
-                config_keywords = ["config", "firewall", "rule", "policy", "route", "qos"]  # Keep qos keyword
+                config_keywords = ["config", "firewall", "rule", "policy", "route", "qos"]
                 
                 # Skip updating for commonly noisy device state update patterns
                 if isinstance(msg_data, list) and len(msg_data) == 1:
@@ -1292,13 +1258,12 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                             }
                             LOGGER.debug("Coordinator: Discovered potential new kill switch: %s (for parent %s)", kill_switch_id, rule_id)
                 except Exception as err:
-                    LOGGER.warning("Coordinator: Error processing rule during dynamic discovery: %s", err, exc_info=True)
+                    LOGGER.warning("Coordinator: Error processing rule during dynamic discovery: %s", err)
 
         # Find IDs that are known but no longer present in the current data (should be handled by deletion logic, but double-check)
         stale_known_ids = self.known_unique_ids - all_current_unique_ids
         if stale_known_ids:
-             LOGGER.debug("Coordinator: Found %d known IDs no longer present in current data: %s. Deletion logic should handle these.",
-                          len(stale_known_ids), stale_known_ids)
+             LOGGER.debug("Coordinator: Found %d known IDs no longer present in current data.", len(stale_known_ids))
              # Optionally, force remove them from known_unique_ids here if deletion logic is unreliable?
              self.known_unique_ids -= stale_known_ids
              for stale_id in stale_known_ids:
@@ -1340,7 +1305,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 LOGGER.debug("Coordinator: Created new entity instance for %s", unique_id)
 
             except Exception as err:
-                LOGGER.error("Coordinator: Error creating new entity instance for unique_id %s: %s", unique_id, err, exc_info=True)
+                LOGGER.error("Coordinator: Error creating new entity instance for unique_id %s: %s", unique_id, err)
 
         # --- Establish Parent/Child Links for newly created entities ---
         if entity_map:
@@ -1376,8 +1341,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 LOGGER.debug("Coordinator: Added %d new IDs to known_unique_ids (Total: %d)",
                              len(added_ids_this_run), len(self.known_unique_ids))
             except Exception as add_err:
-                 LOGGER.error("Coordinator: Failed to dynamically add entities: %s", add_err, exc_info=True)
-                 # Optionally, attempt to remove the failed IDs from known_unique_ids if they were added prematurely?
-                 # self.known_unique_ids -= added_ids_this_run
+                 LOGGER.error("Coordinator: Failed to dynamically add entities: %s", add_err)
         else:
              LOGGER.debug("Coordinator: No new entities to add dynamically in this cycle.")

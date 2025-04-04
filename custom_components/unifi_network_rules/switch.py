@@ -445,7 +445,6 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        # Add entry log
         LOGGER.debug("%s(%s): Handling coordinator update.", type(self).__name__, self.entity_id or self.unique_id)
 
         if not self.coordinator or not self.coordinator.data:
@@ -489,14 +488,8 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                         LOGGER.debug("%s(%s): State mismatch: optimistic=%s, actual=%s. Keeping optimistic state briefly.",
                                   type(self).__name__, self.entity_id or self.unique_id,
                                   self._optimistic_state, actual_state)
-                        # Optionally slightly extend timestamp to give backend more time?
-                        # self._optimistic_timestamp = current_time - (max_age - 1) # e.g., give 1 more sec
-                # else: # Log commented out for brevity
-                    # LOGGER.debug("%s(%s): Keeping optimistic state, only %.1f seconds elapsed (max %d)",
-                    #           type(self).__name__, self.entity_id or self.unique_id, age, max_age)
 
             # Clear operation pending flag if not cleared by optimistic logic
-            # This should happen *after* optimistic check clears state
             if self._operation_pending and self._optimistic_state is None:
                 LOGGER.debug("%s(%s): Clearing pending operation flag as optimistic state is now None.",
                            type(self).__name__, self.entity_id or self.unique_id)
@@ -537,14 +530,8 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        # Add detailed logging for debugging
-        # entity_id_for_log = self.entity_id or self.unique_id
-        # LOGGER.debug("%s(%s): Evaluating available property...", type(self).__name__, entity_id_for_log)
-
         # If parent entity is linked, base availability on parent
         if self._linked_parent_id:
-            # LOGGER.debug("%s(%s): Linked parent ID found: %s. Checking parent availability.",
-            #              type(self).__name__, entity_id_for_log, self._linked_parent_id)
             # Find parent entity by unique ID
             parent_entity_id = None
             entity_registry = async_get_entity_registry(self.hass)
@@ -552,15 +539,9 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                 parent_entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, self._linked_parent_id)
 
             if parent_entity_id:
-                # LOGGER.debug("%s(%s): Found parent entity_id: %s", type(self).__name__, entity_id_for_log, parent_entity_id)
                 parent_state = self.hass.states.get(parent_entity_id)
                 # Check if parent state exists and is not unavailable
-                # Also check if the parent entity itself thinks it's available
                 parent_state_available = parent_state and parent_state.state != "unavailable"
-                # LOGGER.debug("%s(%s): Parent state object exists: %s, Parent state != unavailable: %s",
-                #              type(self).__name__, entity_id_for_log,
-                #              parent_state is not None,
-                #              parent_state.state != "unavailable" if parent_state else "N/A")
 
                 parent_is_available = parent_state_available
                 if parent_is_available:
@@ -570,51 +551,25 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                         try:
                             # Use a flag to prevent infinite recursion if parent also checks child
                             if getattr(self, '_checking_parent_availability', False):
-                                 # LOGGER.debug("%s(%s): Avoiding recursive availability check.", type(self).__name__, entity_id_for_log)
-                                 parent_is_truly_available = True # Assume true to break loop?
+                                 parent_is_truly_available = True # Assume true to break loop
                             else:
                                  setattr(parent_entity, '_checking_parent_availability', True)
                                  parent_is_truly_available = parent_entity.available
                                  delattr(parent_entity, '_checking_parent_availability')
-
-                            # LOGGER.debug("%s(%s): Parent entity object found. Parent parent_entity.available = %s",
-                            #              type(self).__name__, entity_id_for_log, parent_is_truly_available)
                             if not parent_is_truly_available:
-                                 # LOGGER.debug("%s(%s): Parent entity %s state is available, but parent.available property is False.",
-                                 #              type(self).__name__, entity_id_for_log, parent_entity_id)
                                  return False # If parent object says it's not available, we aren't either
                         except Exception as e:
-                             LOGGER.warning("%s(%s): Error checking parent entity availability property: %s", type(self).__name__, entity_id_for_log, e)
-                             # Fallback: rely on state only if property check fails
-                    # If we passed checks, return True
-                    # LOGGER.debug("%s(%s): Determined available based on linked parent %s.", type(self).__name__, entity_id_for_log, parent_entity_id)
+                             LOGGER.warning("%s(%s): Error checking parent entity availability property: %s", 
+                                           type(self).__name__, self.entity_id, e)
                     return True
                 else:
-                    # If parent state is unavailable or missing, we are unavailable
-                     # LOGGER.debug("%s(%s): Unavailable because linked parent %s state is unavailable or missing.",
-                     #              type(self).__name__, entity_id_for_log, parent_entity_id)
                      return False
-            # else:
-                 # LOGGER.debug("%s(%s): Could not find parent entity_id for unique_id %s. Falling back to standard check.",
-                 #              type(self).__name__, entity_id_for_log, self._linked_parent_id)
 
         # Standard availability check (if not a child or parent lookup failed)
         coord_success = self.coordinator.last_update_success
         current_rule = self._get_current_rule()
         rule_exists = current_rule is not None
         is_available = coord_success and rule_exists
-
-        # Log details of the standard check
-        # LOGGER.debug("%s(%s): Standard check: coord_success=%s, rule_exists=%s -> is_available=%s",
-        #              type(self).__name__, entity_id_for_log, coord_success, rule_exists, is_available)
-
-        # Log if availability changes based on rule existence
-        # if coord_success and not rule_exists:
-        #     LOGGER.debug("%s(%s): Determined unavailable because coordinator succeeded but rule is missing.",
-        #                type(self).__name__, entity_id_for_log)
-        # elif not coord_success:
-        #     LOGGER.debug("%s(%s): Determined unavailable due to coordinator last update failure.",
-        #                type(self).__name__, entity_id_for_log)
 
         return is_available
 
@@ -641,35 +596,23 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
 
     def _get_current_rule(self) -> Any | None:
         """Get current rule data from coordinator."""
-        # entity_id_for_log = self.entity_id or self.unique_id
-        # LOGGER.debug("%s(%s): Entering _get_current_rule. Searching for _rule_id='%s' in _rule_type='%s'",
-        #              type(self).__name__, entity_id_for_log, self._rule_id, self._rule_type)
         try:
             if not self.coordinator or not self.coordinator.data or self._rule_type not in self.coordinator.data:
-                # LOGGER.debug("%s(%s): Coordinator data missing or rule type %s not in data. Returning None.",
-                #              type(self).__name__, entity_id_for_log, self._rule_type)
                 return None
 
             rules = self.coordinator.data.get(self._rule_type, [])
-            # Log the list being searched (maybe just IDs for brevity)
-            # rule_ids_in_list = [get_rule_id(r) for r in rules if get_rule_id(r)]
-            # LOGGER.debug("%s(%s): Searching within %d rules of type '%s'. IDs: %s",
-            #              type(self).__name__, entity_id_for_log, len(rules), self._rule_type, rule_ids_in_list)
-
+            
             found_rule = None
             for rule in rules:
                 current_rule_id = get_rule_id(rule)
                 if current_rule_id == self._rule_id:
-                    # LOGGER.debug("%s(%s): Found matching rule with ID '%s'.", type(self).__name__, entity_id_for_log, self._rule_id)
                     found_rule = rule
                     break # Exit loop once found
 
-            # if found_rule is None:
-                # LOGGER.debug("%s(%s): Rule ID '%s' NOT found in the list.", type(self).__name__, entity_id_for_log, self._rule_id)
-
             return found_rule
         except Exception as err:
-            LOGGER.error("%s(%s): Error getting rule data in _get_current_rule: %s", type(self).__name__, entity_id_for_log, err)
+            LOGGER.error("%s(%s): Error getting rule data in _get_current_rule: %s", 
+                        type(self).__name__, self.entity_id or self._rule_id, err)
             return None
 
     def _to_dict(self, obj: Any) -> dict:
@@ -882,15 +825,12 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
 
     async def async_initiate_self_removal(self) -> None:
         """Proactively remove this entity and its children from Home Assistant."""
-        global _CREATED_UNIQUE_IDS  # Move global declaration to the top of the method
+        global _CREATED_UNIQUE_IDS
         entity_id_for_log = self.entity_id or self._attr_unique_id
 
-        # LOGGER.info("%s(%s): ASYNC_INITIATE_SELF_REMOVAL called.", type(self).__name__, entity_id_for_log)
         if getattr(self, '_removal_initiated', False):
-            # LOGGER.debug("%s(%s): Removal already in progress.", type(self).__name__, entity_id_for_log)
             return
 
-        # LOGGER.info("%s(%s): Initiating self-removal.", type(self).__name__, entity_id_for_log)
         self._removal_initiated = True # Set flag to prevent loops
 
         entity_registry = async_get_entity_registry(self.hass)
@@ -898,19 +838,12 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         # 0. Always remove from coordinator known_unique_ids first to prevent recreation
         if hasattr(self.coordinator, 'known_unique_ids'):
             self.coordinator.known_unique_ids.discard(self._attr_unique_id)
-            # LOGGER.info("%s(%s): Immediately removed self (%s) from coordinator known_unique_ids",
-            #             type(self).__name__, entity_id_for_log, self._attr_unique_id)
 
         # Also remove from global tracking set immediately
         _CREATED_UNIQUE_IDS.discard(self._attr_unique_id)
-        # LOGGER.debug("%s(%s): Removed from global _CREATED_UNIQUE_IDS tracking: %s",
-        #              type(self).__name__, entity_id_for_log, self._attr_unique_id)
 
         # 1. Remove Child Entities RECURSIVELY
         if self._linked_child_ids:
-            # LOGGER.debug("%s(%s): Requesting removal for %d child entities: %s",
-            #              type(self).__name__, entity_id_for_log, len(self._linked_child_ids), self._linked_child_ids)
-            # Create a copy of the set to avoid modification during iteration
             children_to_remove = list(self._linked_child_ids)
             for child_unique_id in children_to_remove:
                 child_entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, child_unique_id)
@@ -921,21 +854,15 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
 
                 if child_entity and hasattr(child_entity, 'async_initiate_self_removal'):
                     try:
-                        # LOGGER.debug("%s(%s): Requesting child %s (%s) to initiate self-removal.",
-                        #              type(self).__name__, entity_id_for_log, child_entity_id or child_unique_id, child_unique_id)
                         await child_entity.async_initiate_self_removal()
                     except Exception as child_err:
                         LOGGER.error("%s(%s): Error requesting self-removal for child entity %s (%s): %s",
                                      type(self).__name__, entity_id_for_log, child_entity_id or child_unique_id, child_unique_id, child_err)
                 else:
                     # Fallback: Child object not found or doesn't have the method. Remove directly from registry.
-                    # LOGGER.warning("%s(%s): Child entity object %s not found or lacks removal method. Removing directly from registry.",
-                    #              type(self).__name__, entity_id_for_log, child_entity_id or child_unique_id)
                     if child_entity_id and entity_registry.async_get(child_entity_id):
                         try:
                             entity_registry.async_remove(child_entity_id)
-                            # LOGGER.debug("%s(%s): Successfully removed child %s from registry directly.",
-                            #              type(self).__name__, entity_id_for_log, child_entity_id)
                         except Exception as reg_rem_err:
                             LOGGER.error("%s(%s): Error removing child %s from registry directly: %s",
                                          type(self).__name__, entity_id_for_log, child_entity_id, reg_rem_err)
@@ -945,39 +872,26 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                     _CREATED_UNIQUE_IDS.discard(child_unique_id) # Use discard
 
                 # Remove from parent's list regardless of success/failure of child removal
-                # This prevents repeated attempts if child removal fails
                 self._linked_child_ids.discard(child_unique_id)
 
-        # 2. Remove Self from Coordinator Tracking (Done in step 0)
-        # if hasattr(self.coordinator, 'known_unique_ids'):
-        #     self.coordinator.known_unique_ids.discard(self._attr_unique_id)
-        #     LOGGER.debug("Removed self (%s) from coordinator known_unique_ids.", self._attr_unique_id)
-
         # 3. Remove Self from Entity Registry and HA Core
-        # Let HA handle this via self.async_remove(). This will eventually trigger
-        # async_will_remove_from_hass() for final internal cleanup.
         entity_id_to_remove = self.entity_id # Store current entity_id for logging
         LOGGER.debug("%s(%s): Preparing to call self.async_remove(force_remove=True) for entity_id: %s",
-                     type(self).__name__, entity_id_for_log, entity_id_to_remove) # ADDED LOG
+                     type(self).__name__, entity_id_for_log, entity_id_to_remove)
         try:
-            # LOGGER.debug("%s(%s): Calling self.async_remove(force_remove=True).", type(self).__name__, entity_id_for_log)
             await self.async_remove(force_remove=True)
-            # LOGGER.info("%s(%s): Successfully completed self.async_remove().", type(self).__name__, entity_id_for_log)
             LOGGER.info("%s(%s): Successfully completed self.async_remove() for entity_id: %s.",
-                         type(self).__name__, entity_id_for_log, entity_id_to_remove) # UPDATED LOG
+                         type(self).__name__, entity_id_for_log, entity_id_to_remove)
         except Exception as remove_err:
             # Log expected errors during removal less severely
             if isinstance(remove_err, HomeAssistantError) and "Entity not found" in str(remove_err):
-                # pass # LOGGER.debug("%s(%s): Entity already removed from HA core.", type(self).__name__, entity_id_for_log)
                 LOGGER.debug("%s(%s): Entity %s already removed from HA core.",
-                             type(self).__name__, entity_id_for_log, entity_id_to_remove) # UPDATED LOG
+                             type(self).__name__, entity_id_for_log, entity_id_to_remove)
             else:
-                # LOGGER.error("%s(%s): Error during final async_remove: %s", type(self).__name__, entity_id_for_log, remove_err)
-                # LOGGER.exception("%s(%s): Exception during async_remove:", type(self).__name__, entity_id_for_log)
                 LOGGER.error("%s(%s): Error during final async_remove for entity_id %s: %s",
-                             type(self).__name__, entity_id_for_log, entity_id_to_remove, remove_err) # UPDATED LOG
+                             type(self).__name__, entity_id_for_log, entity_id_to_remove, remove_err)
                 LOGGER.exception("%s(%s): Exception during async_remove for entity_id %s:",
-                                 type(self).__name__, entity_id_for_log, entity_id_to_remove) # UPDATED LOG
+                                 type(self).__name__, entity_id_for_log, entity_id_to_remove)
 
     async def async_added_to_hass(self) -> None:
         """When entity is added to hass."""
@@ -1307,6 +1221,20 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
         LOGGER.debug("Finished KillSwitch __init__ for unique_id=%s, entity_id=%s",
                    self._attr_unique_id, self.entity_id)
 
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator.
+
+        This method delegates to the base class implementation.
+        The base class handles all the necessary logic:
+        - Checking coordinator data validity
+        - Finding the parent rule using our specialized _get_current_rule method
+        - Handling optimistic state management
+        - Triggering removal if the parent rule is missing
+        """
+        LOGGER.debug("KillSwitch(%s): Delegating coordinator update to base class", self.entity_id or self.unique_id)
+        super()._handle_coordinator_update()
+        
     def _get_actual_state_from_rule(self, rule: Any) -> Optional[bool]:
         """Helper to get the actual kill switch state from the PARENT rule object."""
         if rule is None:
@@ -1317,82 +1245,64 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
         if hasattr(rule, 'raw') and isinstance(rule.raw, dict):
             state = rule.raw.get("kill_switch_enabled") # Use .get() for safety
             if state is not None:
-                 # LOGGER.debug("KillSwitch(%s): Got state '%s' from rule.raw['kill_switch_enabled']", self.entity_id or self.unique_id, state)
-                 return state
-            # else:
-                 # LOGGER.debug("KillSwitch(%s): 'kill_switch_enabled' not found in rule.raw dict.", self.entity_id or self.unique_id)
+                return state
 
         # Fallback: Check direct attribute if raw doesn't have it
         if hasattr(rule, 'kill_switch_enabled'):
             state = getattr(rule, 'kill_switch_enabled')
-            # LOGGER.debug("KillSwitch(%s): Got state '%s' from rule.kill_switch_enabled attribute.", self.entity_id or self.unique_id, state)
             return state
 
         LOGGER.warning("KillSwitch(%s): Cannot determine actual state from parent rule object %s (type: %s)",
                      self.entity_id or self.unique_id, getattr(rule, 'id', 'N/A'), type(rule).__name__)
         return None # Return None if state cannot be determined
-
+        
     def _get_current_rule(self) -> Any | None:
         """Get the current rule from the coordinator data.
-
-        This special implementation handles finding the parent route for kill switches.
+        
+        Special implementation for KillSwitch that finds the PARENT rule in traffic_routes.
+        Kill switches don't have their own rule objects - they are settings on parent objects.
         """
-        # Extract parent ID for kill switch
-        kill_switch_id = self._rule_id # This is the kill switch's unique_id (e.g., unr_route_abc_kill_switch)
-        entity_id_for_log = self.entity_id or kill_switch_id
-        # LOGGER.debug("%s(%s): Entering _get_current_rule (KillSwitch override). _rule_id='%s'",
-        #              type(self).__name__, entity_id_for_log, kill_switch_id)
-
-        parent_rule = None # Initialize parent_rule
-
-        if kill_switch_id and kill_switch_id.endswith('_kill_switch'):
-            parent_unique_id = self._linked_parent_id # Use the stored parent unique ID
+        try:
+            # 1. Validate the kill switch ID format
+            kill_switch_id = self._rule_id  # This should be a kill switch ID like "unr_route_abc_kill_switch"
+            if not kill_switch_id or not kill_switch_id.endswith('_kill_switch'):
+                LOGGER.warning("KillSwitch(%s): Invalid kill switch ID format: %s", 
+                              self.entity_id, kill_switch_id)
+                return None
+                
+            # 2. Get the parent unique ID from our stored property 
+            parent_unique_id = self._linked_parent_id
             if not parent_unique_id:
-                 LOGGER.error("%s(%s): Cannot find parent rule - _linked_parent_id is not set!", type(self).__name__, entity_id_for_log)
-                 return None
-
-            # The parent's rule type is always traffic_routes
-            parent_rule_type = "traffic_routes"
-            # LOGGER.debug("%s(%s): Looking for parent rule with unique ID: '%s' in type '%s'",
-            #              type(self).__name__, entity_id_for_log, parent_unique_id, parent_rule_type)
-
-            # Find the parent route in the coordinator data
-            # Ensure coordinator and data dictionary exist
-            if self.coordinator and self.coordinator.data and parent_rule_type in self.coordinator.data:
-                traffic_routes = self.coordinator.data[parent_rule_type]
-                # rule_ids_in_list = [get_rule_id(r) for r in traffic_routes if get_rule_id(r)]
-                # LOGGER.debug("%s(%s): Searching within %d rules of type '%s'. Parent IDs: %s",
-                #              type(self).__name__, entity_id_for_log, len(traffic_routes), parent_rule_type, rule_ids_in_list)
-
-                found = False
-                for rule in traffic_routes:
-                    # We need to compare using the *unique ID format* (unr_route_...) used by the parent entity
-                    current_parent_unique_id = get_rule_id(rule)
-                    if current_parent_unique_id == parent_unique_id:
-                        # Log success
-                        # LOGGER.debug("%s(%s): Found parent rule object with unique ID: %s", type(self).__name__, entity_id_for_log, parent_unique_id)
-                        parent_rule = rule
-                        found = True
-                        break # Exit loop once found
-
-                # if not found:
-                    # Log failure
-                    # LOGGER.debug("%s(%s): Parent rule with unique ID '%s' not found in coordinator %s list (count: %d).",
-                    #            type(self).__name__, entity_id_for_log, parent_unique_id, parent_rule_type, len(traffic_routes))
-            # else:
-                # Log reason for not searching
-                # reason = "coordinator missing" if not self.coordinator else "coordinator data missing" if not self.coordinator.data else f"{parent_rule_type} missing from data"
-                # LOGGER.debug("%s(%s): Cannot search for parent rule - %s.", type(self).__name__, entity_id_for_log, reason)
-
-            # Return the found parent rule or None
+                LOGGER.error("KillSwitch(%s): Cannot find parent rule - _linked_parent_id is not set!",
+                            self.entity_id)
+                return None
+                
+            # 3. Look for the parent rule in traffic_routes collection
+            # The parent's rule type is always traffic_routes for kill switches
+            parent_rule_type = "traffic_routes" 
+            
+            # Basic validations - ensure coordinator data exists
+            if not self.coordinator or not self.coordinator.data or parent_rule_type not in self.coordinator.data:
+                return None
+                
+            # Get the traffic routes collection
+            traffic_routes = self.coordinator.data[parent_rule_type]
+            
+            # Search for the parent rule by its unique ID
+            parent_rule = None
+            for rule in traffic_routes:
+                current_parent_unique_id = get_rule_id(rule)
+                if current_parent_unique_id == parent_unique_id:
+                    parent_rule = rule
+                    break  # Found it
+                    
+            # Return the parent rule (or None if not found)
             return parent_rule
-
-        else:
-             # Log if rule_id is invalid or not a kill switch
-             LOGGER.warning("%s(%s): Invalid rule_id '%s' for parent lookup or not a kill switch.", type(self).__name__, entity_id_for_log, kill_switch_id)
-             # Fallback to parent class implementation might be needed if this class is misused
-             # return super()._get_current_rule()
-             return None # Explicitly return None if not a valid kill switch ID pattern
+            
+        except Exception as err:
+            LOGGER.error("KillSwitch(%s): Error finding parent rule: %s", 
+                        self.entity_id, err)
+            return None
 
     @property
     def is_on(self) -> bool:
@@ -1521,23 +1431,6 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
             self.async_write_ha_state()
             
             raise HomeAssistantError(f"Error toggling kill switch for {self.name}: {error}")
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator.
-
-        This method now relies entirely on the base class implementation.
-        The base class handles:
-        - Checking coordinator/data validity.
-        - Calling _get_current_rule() (which finds the parent for KillSwitch).
-        - Initiating removal if the parent rule is not found.
-        - Handling optimistic state based on _get_actual_state_from_rule().
-        - Writing HA state.
-        """
-        # Add entry log specific to KillSwitch for clarity
-        LOGGER.debug("KillSwitch(%s): Delegating coordinator update handling to base class.", self.entity_id or self.unique_id)
-        # Call the base class implementation directly
-        super()._handle_coordinator_update()
 
 # Define QoS rule switch class
 class UnifiQoSRuleSwitch(UnifiRuleSwitch):
