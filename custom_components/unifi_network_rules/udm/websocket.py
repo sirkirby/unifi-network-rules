@@ -18,7 +18,7 @@ try:
 except ImportError:
     USE_ORJSON = False
 
-from ..const import LOGGER, DEFAULT_SITE
+from ..const import LOGGER, DEFAULT_SITE, LOG_WEBSOCKET
 from ..utils.logger import log_websocket
 from .api_base import CannotConnect
 
@@ -108,12 +108,14 @@ class CustomUnifiWebSocket:
     def set_message_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
         """Set the message callback."""
         self._message_callback = callback
-        LOGGER.debug("WebSocket message callback set")
+        if LOG_WEBSOCKET:
+            LOGGER.debug("WebSocket message callback set")
         
     def set_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
         """Set a callback for compatibility with older code."""
         self._callback = callback
-        LOGGER.debug("WebSocket callback set")
+        if LOG_WEBSOCKET:
+            LOGGER.debug("WebSocket callback set")
         
     def is_connected(self) -> bool:
         """Return if socket is connected."""
@@ -138,7 +140,8 @@ class CustomUnifiWebSocket:
     async def connect(self) -> None:
         """Connect to the websocket and start receiving messages."""
         if self._connected:
-            LOGGER.debug("WebSocket is already connected, skipping connect")
+            if LOG_WEBSOCKET:
+                LOGGER.debug("WebSocket is already connected, skipping connect")
             return
 
         # Set up reconnect backoff
@@ -162,16 +165,18 @@ class CustomUnifiWebSocket:
                 # Build WS URL with varying strategies based on reconnect attempt
                 if reconnect_attempt < 3:
                     ws_url = self._build_url()
-                    LOGGER.debug("Connecting to WebSocket using primary URL: %s", ws_url)
+                    if LOG_WEBSOCKET:
+                        LOGGER.debug("Connecting to WebSocket using primary URL: %s", ws_url)
                 else:
                     urls = self._get_all_url_variants()
                     url_index = min(reconnect_attempt - 3, len(urls) - 1)
                     ws_url = urls[url_index % len(urls)]
-                    LOGGER.debug("Connecting to WebSocket using fallback URL (#%d): %s", 
-                                url_index + 1, ws_url)
+                    if LOG_WEBSOCKET:
+                        LOGGER.debug("Connecting to WebSocket using fallback URL (#%d): %s", 
+                                    url_index + 1, ws_url)
                 
                 # Log connection headers for debugging (redacting sensitive info)
-                if LOGGER.isEnabledFor(logging.DEBUG):
+                if LOG_WEBSOCKET and LOGGER.isEnabledFor(logging.DEBUG):
                     safe_headers = {k: v if k.lower() not in ("cookie", "x-csrf-token") else "[REDACTED]" 
                                 for k, v in self._headers.items()}
                     LOGGER.debug("WebSocket connection headers: %s", safe_headers)
@@ -208,7 +213,8 @@ class CustomUnifiWebSocket:
                     if msg.type == WSMsgType.TEXT:
                         await self._handle_message(msg.data)
                     elif msg.type == WSMsgType.BINARY:
-                        LOGGER.debug("Received binary WebSocket message (len: %d bytes)", len(msg.data))
+                        if LOG_WEBSOCKET:
+                            LOGGER.debug("Received binary WebSocket message (len: %d bytes)", len(msg.data))
                     elif msg.type == WSMsgType.CLOSED:
                         LOGGER.info("WebSocket connection closed by server, will reconnect")
                         break
@@ -216,17 +222,20 @@ class CustomUnifiWebSocket:
                         LOGGER.error("WebSocket connection error: %s", msg.data)
                         break
                     elif msg.type == WSMsgType.CLOSING:
-                        LOGGER.debug("WebSocket closing")
+                        if LOG_WEBSOCKET:
+                            LOGGER.debug("WebSocket closing")
                         break
                     elif msg.type == WSMsgType.CLOSE:
-                        LOGGER.debug("WebSocket close frame received")
+                        if LOG_WEBSOCKET:
+                            LOGGER.debug("WebSocket close frame received")
                         break
                 
                 # If we get here, the connection is closed
                 LOGGER.info("WebSocket connection closed, reconnecting...")
                 
             except asyncio.CancelledError:
-                LOGGER.debug("WebSocket connect task cancelled")
+                if LOG_WEBSOCKET:
+                    LOGGER.debug("WebSocket connect task cancelled")
                 self._should_stop = True
                 break
             
@@ -278,13 +287,15 @@ class CustomUnifiWebSocket:
             await self._ws.close()
         self._ws = None
         self._connected = False
-        LOGGER.debug("WebSocket connection task ended")
+        if LOG_WEBSOCKET:
+            LOGGER.debug("WebSocket connection task ended")
         
     async def _handle_message(self, data: str) -> None:
         """Handle a WebSocket message."""
         # Check for empty messages
         if not data or not data.strip():
-            LOGGER.debug("Received empty WebSocket message, ignoring")
+            if LOG_WEBSOCKET:
+                LOGGER.debug("Received empty WebSocket message, ignoring")
             return
         
         try:
@@ -296,7 +307,8 @@ class CustomUnifiWebSocket:
             
             # Verify we have a valid message
             if not message or not isinstance(message, dict):
-                LOGGER.debug("Received invalid WebSocket message format: %s", type(message))
+                if LOG_WEBSOCKET:
+                    LOGGER.debug("Received invalid WebSocket message format: %s", type(message))
                 return
             
             # Record message time for connection health monitoring
@@ -318,11 +330,13 @@ class CustomUnifiWebSocket:
             
             # Skip device status and client updates that come in at high frequency
             if "device.status" in msg_type_lower or "device-state" in msg_type_lower:
-                log_websocket("Ignoring high-frequency device status update: %s", msg_type)
+                if LOG_WEBSOCKET:
+                    log_websocket("Ignoring high-frequency device status update: %s", msg_type)
                 return
             
             if "client" in msg_type_lower and not any(kw in msg_type_lower for kw in rule_keywords):
-                log_websocket("Ignoring client update: %s", msg_type)
+                if LOG_WEBSOCKET:
+                    log_websocket("Ignoring client update: %s", msg_type)
                 return
             
             # Look for keywords in message type 
@@ -346,13 +360,19 @@ class CustomUnifiWebSocket:
                                 break
             
             # Log based on message type and relevance
+            callback_exists = self._message_callback or self._callback
+            
             if is_rule_related:
-                # For rule-related messages, log with more detail
-                log_websocket("Rule message received (%s): %s", 
-                           msg_type, str(message)[:150] + "..." if len(str(message)) > 150 else str(message))
+                # For rule-related messages, log type if callback exists, full details if LOG_WEBSOCKET is on
+                if callback_exists:
+                    LOGGER.info("WebSocket rule message processed: %s", msg_type)
+                if LOG_WEBSOCKET:
+                    log_websocket("Rule message details (%s): %s", 
+                               msg_type, str(message)[:150] + "..." if len(str(message)) > 150 else str(message))
             else:
-                # For non-rule messages, just log the type (less verbose)
-                log_websocket("Other WebSocket message: %s", msg_type)
+                # For non-rule messages, log only if LOG_WEBSOCKET is on
+                if LOG_WEBSOCKET:
+                    log_websocket("Other WebSocket message: %s", msg_type)
             
             # Call message handler if set
             if self._message_callback:
@@ -362,12 +382,13 @@ class CustomUnifiWebSocket:
             elif self._callback:
                 # Fallback to legacy callback
                 self._callback(message)
-            else:
-                LOGGER.debug("WebSocket message received but no callback set: %s", msg_type)
+            elif LOG_WEBSOCKET: # Only log if no callback and debug enabled
+                 LOGGER.debug("WebSocket message received but no callback set: %s", msg_type)
                 
         except json.JSONDecodeError as err:
             if not data or data.strip() == "":
-                LOGGER.debug("Received empty or whitespace-only WebSocket message")
+                if LOG_WEBSOCKET:
+                    LOGGER.debug("Received empty or whitespace-only WebSocket message")
             else:
                 LOGGER.error("Failed to parse message: %s - Data: %s", err, data[:100] if len(data) > 100 else data)
         except Exception as err:
@@ -376,7 +397,8 @@ class CustomUnifiWebSocket:
     async def _schedule_reconnect(self) -> None:
         """Schedule a reconnect."""
         if self._closing:
-            LOGGER.debug("Not scheduling reconnect as WebSocket is closing")
+            if LOG_WEBSOCKET:
+                 LOGGER.debug("Not scheduling reconnect as WebSocket is closing")
             return
             
         # Cancel any existing reconnect task
@@ -384,7 +406,8 @@ class CustomUnifiWebSocket:
             self._reconnect_task.cancel()
             
         # Schedule reconnect with 10 second delay
-        LOGGER.debug("Scheduling WebSocket reconnect in 10 seconds")
+        if LOG_WEBSOCKET:
+            LOGGER.debug("Scheduling WebSocket reconnect in 10 seconds")
         self._reconnect_task = asyncio.create_task(self._delayed_reconnect(10))
         
     async def _delayed_reconnect(self, delay: int) -> None:
@@ -406,21 +429,25 @@ class CustomUnifiWebSocket:
         
         # Close WebSocket connection if connected
         if self._ws and not self._ws.closed:
-            LOGGER.debug("Closing active WebSocket connection")
+            if LOG_WEBSOCKET:
+                LOGGER.debug("Closing active WebSocket connection")
             await self._ws.close()
             self._ws = None
         
         # Cancel any pending tasks
         if self._task and not self._task.done():
-            LOGGER.debug("Cancelling WebSocket task")
+            if LOG_WEBSOCKET:
+                LOGGER.debug("Cancelling WebSocket task")
             self._task.cancel()
         
         if self._reconnect_task and not self._reconnect_task.done():
-            LOGGER.debug("Cancelling reconnect task")
+            if LOG_WEBSOCKET:
+                LOGGER.debug("Cancelling reconnect task")
             self._reconnect_task.cancel()
         
         self._connected = False
-        LOGGER.debug("WebSocket connection closed")
+        if LOG_WEBSOCKET:
+            LOGGER.debug("WebSocket connection closed")
         
     async def stop(self) -> None:
         """Stop the WebSocket connection (alias for close)."""
@@ -433,7 +460,8 @@ class WebSocketMixin:
     def set_websocket_path_prefix(self, prefix: str) -> None:
         """Set the websocket path prefix for UniFi OS compatibility."""
         self._websocket_path_prefix = prefix
-        LOGGER.debug("Set websocket path prefix to: %s", prefix)
+        if LOG_WEBSOCKET:
+            LOGGER.debug("Set websocket path prefix to: %s", prefix)
 
     async def start_websocket(self) -> None:
         """Start WebSocket connection for real-time event notifications."""
@@ -475,7 +503,8 @@ class WebSocketMixin:
                 if auth_headers:
                     headers.update(auth_headers)
                     
-                LOGGER.debug("Creating custom WebSocket with %d headers", len(headers))
+                if LOG_WEBSOCKET:
+                    LOGGER.debug("Creating custom WebSocket with %d headers", len(headers))
                 
                 # Get site from property or default
                 site = getattr(self, "site", DEFAULT_SITE)
@@ -495,10 +524,12 @@ class WebSocketMixin:
                 
                 # Set message handler if available
                 if self._ws_message_handler:
-                    LOGGER.debug("Setting message handler on new custom WebSocket")
+                    if LOG_WEBSOCKET:
+                        LOGGER.debug("Setting message handler on new custom WebSocket")
                     self._custom_websocket.set_message_callback(self._ws_message_handler)
                     
-                LOGGER.debug("WebSocket callback set for %s", base_host)
+                if LOG_WEBSOCKET:
+                    LOGGER.debug("WebSocket callback set for %s", base_host)
                 
                 # Start the WebSocket connection
                 self._ws_connect_task = asyncio.create_task(self._custom_websocket.connect())
@@ -517,7 +548,8 @@ class WebSocketMixin:
                 # If our custom implementation fails, try the built-in as a last resort
                 if self.controller and hasattr(self.controller, "start_websocket"):
                     try:
-                        LOGGER.debug("Custom WebSocket failed, attempting to use built-in WebSocket as fallback")
+                        if LOG_WEBSOCKET:
+                             LOGGER.debug("Custom WebSocket failed, attempting to use built-in WebSocket as fallback")
                         # Set timeout to avoid hanging
                         async with asyncio.timeout(30):
                             await self.controller.start_websocket()
@@ -526,7 +558,8 @@ class WebSocketMixin:
                         # Set the WebSocket message handler if available
                         if self._ws_message_handler and hasattr(self.controller, "ws_handler"):
                             self.controller.ws_handler = self._ws_message_handler
-                            LOGGER.debug("WebSocket message handler set on controller")
+                            if LOG_WEBSOCKET:
+                                LOGGER.debug("WebSocket message handler set on controller")
                         return
                     except (asyncio.TimeoutError, Exception) as fallback_err:
                         LOGGER.warning("Built-in WebSocket fallback also failed: %s", fallback_err)
@@ -546,7 +579,8 @@ class WebSocketMixin:
 
     async def _monitor_websocket_health(self) -> None:
         """Monitor WebSocket health and attempt to reconnect if issues are detected."""
-        LOGGER.debug("Starting WebSocket health monitoring")
+        if LOG_WEBSOCKET:
+            LOGGER.debug("Starting WebSocket health monitoring")
         check_interval = 60  # Check every 60 seconds
         
         try:
@@ -579,7 +613,8 @@ class WebSocketMixin:
                             except Exception as err:
                                 LOGGER.error("Failed to reconnect built-in WebSocket: %s", err)
         except asyncio.CancelledError:
-            LOGGER.debug("WebSocket health monitor task cancelled")
+            if LOG_WEBSOCKET:
+                LOGGER.debug("WebSocket health monitor task cancelled")
         except Exception as err:
             LOGGER.error("Error in WebSocket health monitor: %s", err)
 
@@ -591,7 +626,8 @@ class WebSocketMixin:
         """
         headers = {}
         try:
-            LOGGER.debug("Attempting to get authentication headers for WebSocket")
+            if LOG_WEBSOCKET:
+                LOGGER.debug("Attempting to get authentication headers for WebSocket")
             
             # First, try to extract headers from the existing session
             if hasattr(self, "_session") and self._session:
@@ -605,19 +641,23 @@ class WebSocketMixin:
                         cookie_header = cookies.output(header="", sep=";").strip()
                         if cookie_header:
                             headers["Cookie"] = cookie_header
-                            LOGGER.debug("Using %d cookies from existing session", len(session_cookies))
+                            if LOG_WEBSOCKET:
+                                LOGGER.debug("Using %d cookies from existing session", len(session_cookies))
                             
                     # Check if there's a CSRF token in session (required for UniFi OS)
                     if hasattr(self, "_csrf_token") and self._csrf_token:
                         headers["X-CSRF-Token"] = self._csrf_token
-                        LOGGER.debug("Using cached CSRF token")
+                        if LOG_WEBSOCKET:
+                            LOGGER.debug("Using cached CSRF token")
                     
                     # If we got both cookies and CSRF token, we're done
                     if "Cookie" in headers and "X-CSRF-Token" in headers:
-                        LOGGER.debug("Successfully obtained authentication headers from session")
+                        if LOG_WEBSOCKET:
+                            LOGGER.debug("Successfully obtained authentication headers from session")
                         return headers
                 except Exception as session_err:
-                    LOGGER.debug("Could not get cookies from session: %s", session_err)
+                    if LOG_WEBSOCKET:
+                         LOGGER.debug("Could not get cookies from session: %s", session_err)
             
             # ========== Direct Authentication Attempt ==========
             # If we couldn't extract from session, try direct authentication
@@ -627,7 +667,8 @@ class WebSocketMixin:
             
             # Modern UniFi OS authentication endpoint
             login_url = f"https://{base_host}:443/api/auth/login"
-            LOGGER.debug("Attempting authentication using UniFi OS URL: %s", login_url)
+            if LOG_WEBSOCKET:
+                LOGGER.debug("Attempting authentication using UniFi OS URL: %s", login_url)
             
             login_data = {
                 "username": self.username,
@@ -644,7 +685,8 @@ class WebSocketMixin:
                     allow_redirects=True
                 ) as response:
                     if response.status == 200:
-                        LOGGER.debug("UniFi OS authentication successful")
+                        if LOG_WEBSOCKET:
+                            LOGGER.debug("UniFi OS authentication successful")
                         
                         # Extract cookies from response
                         if response.cookies:
@@ -655,7 +697,8 @@ class WebSocketMixin:
                             cookie_header = cookies.output(header="", sep=";").strip()
                             if cookie_header:
                                 headers["Cookie"] = cookie_header
-                                LOGGER.debug("Got %d cookies from auth response", len(response.cookies))
+                                if LOG_WEBSOCKET:
+                                    LOGGER.debug("Got %d cookies from auth response", len(response.cookies))
                         
                         # Extract CSRF token if available (critical for UniFi OS)
                         csrf_token = response.headers.get('X-CSRF-Token')
@@ -663,14 +706,16 @@ class WebSocketMixin:
                             headers["X-CSRF-Token"] = csrf_token
                             # Cache it for future use
                             self._csrf_token = csrf_token
-                            LOGGER.debug("Got X-CSRF-Token: %s", csrf_token[:5] + "..." if len(csrf_token) > 5 else csrf_token)
+                            if LOG_WEBSOCKET:
+                                LOGGER.debug("Got X-CSRF-Token: %s", csrf_token[:5] + "..." if len(csrf_token) > 5 else csrf_token)
                     else:
                         LOGGER.warning("UniFi OS authentication failed with status %s", response.status)
                         
                         # Log more details in debug mode
                         try:
                             response_text = await response.text()
-                            LOGGER.debug("Auth response: %s", response_text[:100])
+                            if LOG_WEBSOCKET:
+                                LOGGER.debug("Auth response: %s", response_text[:100])
                         except Exception:
                             pass
             except Exception as err:
@@ -679,8 +724,9 @@ class WebSocketMixin:
             # ========== Final Result ==========
             # Report success or failure
             if headers:
-                LOGGER.debug("Authentication successful, got headers: %s", 
-                           ", ".join(headers.keys()))
+                if LOG_WEBSOCKET:
+                    LOGGER.debug("Authentication successful, got headers: %s", 
+                               ", ".join(headers.keys()))
                 return headers
             else:
                 LOGGER.warning("UniFi OS authentication failed")
@@ -692,19 +738,22 @@ class WebSocketMixin:
 
     def set_websocket_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
         """Set callback to be used by controller on websocket events."""
-        LOGGER.debug("Setting WebSocket callback")
+        if LOG_WEBSOCKET:
+            LOGGER.debug("Setting WebSocket callback")
         self._ws_message_handler = callback
         
         # Set on controller if available
         if self.controller and hasattr(self.controller, "ws_handler"):
-            LOGGER.debug("Setting callback on controller ws_handler")
+            if LOG_WEBSOCKET:
+                LOGGER.debug("Setting callback on controller ws_handler")
             self.controller.ws_handler = callback
-        else:
-            LOGGER.debug("Controller doesn't have ws_handler attribute, will use custom handler")
+        elif LOG_WEBSOCKET:
+             LOGGER.debug("Controller doesn't have ws_handler attribute, will use custom handler")
         
         # Set on custom WebSocket if it exists
         if hasattr(self, "_custom_websocket") and self._custom_websocket:
-            LOGGER.debug("Setting callback on custom WebSocket")
+            if LOG_WEBSOCKET:
+                LOGGER.debug("Setting callback on custom WebSocket")
             self._custom_websocket.set_message_callback(callback)
 
     async def stop_websocket(self) -> None:
@@ -719,6 +768,7 @@ class WebSocketMixin:
         if hasattr(self, "_custom_websocket") and self._custom_websocket:
             try:
                 await self._custom_websocket.close()
-                LOGGER.debug("Custom WebSocket stopped")
+                if LOG_WEBSOCKET:
+                    LOGGER.debug("Custom WebSocket stopped")
             except Exception as err:
                 LOGGER.warning("Error stopping custom WebSocket: %s", err)
