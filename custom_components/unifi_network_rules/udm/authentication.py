@@ -14,6 +14,23 @@ from .api_base import CannotConnect, InvalidAuth
 class AuthenticationMixin:
     """Mixin class for authentication operations."""
     
+    def __init__(self, *args, **kwargs):
+        """Initialize AuthenticationMixin attributes."""
+        # Initialize attributes, potentially overriding if called via super()
+        # Rate Limiting for _try_login
+        self._login_attempt_count = getattr(self, '_login_attempt_count', 0)
+        self._max_login_attempts = getattr(self, '_max_login_attempts', 5) # e.g., 5 attempts
+        self._login_cooldown = getattr(self, '_login_cooldown', 60) # e.g., 60 seconds cooldown
+        self._last_login_attempt = getattr(self, '_last_login_attempt', 0)
+        self._login_lock = getattr(self, '_login_lock', None)
+        self._last_successful_login = getattr(self, '_last_successful_login', 0)
+        self._min_login_interval = getattr(self, '_min_login_interval', 30)
+        
+        # Call super().__init__ if this mixin isn't the first in MRO
+        # Check if super() provides an __init__ method before calling
+        if hasattr(super(), '__init__'):
+             super().__init__(*args, **kwargs)
+
     async def async_init(self, hass=None):
         """Initialize the UDM API."""
         LOGGER.debug("Initializing UDMAPI")
@@ -83,11 +100,6 @@ class AuthenticationMixin:
         
         # Initial refresh of all data
         await self.refresh_all()
-
-        # Authentication lock to prevent parallel login attempts
-        self._login_lock = None
-        self._last_successful_login = 0
-        self._min_login_interval = 30  # seconds - increased from 15 to 30
 
     def _force_unifi_os_detection(self) -> None:
         """Force the UniFi OS detection flag if needed."""
@@ -171,16 +183,30 @@ class AuthenticationMixin:
                 
                 # Check for auth failure vs connectivity error
                 error_str = str(err).lower()
-                if "unauthorized" in error_str or "forbidden" in error_str:
+                status_code = getattr(err, 'status', None) # Try to get status code if it's an aiohttp error
+                
+                # --- Specific 429 Handling ---
+                if status_code == 429 or "limit_reached" in error_str:
+                    LOGGER.warning("Login failed due to rate limiting (429). Triggering cooldown.")
+                    # Force cooldown by setting attempt count to max
+                    self._login_attempt_count = self._max_login_attempts
+                    self._last_login_attempt = time.time() # Ensure cooldown timer starts now
+                    # Raise CannotConnect to prevent immediate retry by refresh_session
+                    raise CannotConnect(f"Login rate limited (429): {err}")
+                
+                # --- General Auth Failure (401/403) ---
+                elif "unauthorized" in error_str or "forbidden" in error_str or status_code in [401, 403]:
                     LOGGER.error("Authentication failure detected")
                     if hasattr(self, "_auth_failure_callback") and self._auth_failure_callback:
                         try:
                             LOGGER.debug("Calling authentication failure callback")
-                            await self._auth_failure_callback(self)
+                            # Pass self if the callback expects it, adjust if needed
+                            await self._auth_failure_callback(self) 
                         except Exception as callback_err:
                             LOGGER.error("Error in auth failure callback: %s", callback_err)
                     raise InvalidAuth(f"Authentication failed: {err}")
                 else:
+                    # Assume other errors are connectivity issues
                     raise CannotConnect(f"Connection failed: {err}")
 
     async def _check_udm_device(self, authenticated: bool = False) -> bool:
