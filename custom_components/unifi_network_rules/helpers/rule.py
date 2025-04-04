@@ -14,6 +14,7 @@ from aiounifi.models.wlan import Wlan
 # Import our custom models
 from ..models.firewall_rule import FirewallRule
 from ..models.qos_rule import QoSRule
+from ..const import DOMAIN
 
 LOGGER = logging.getLogger(__name__)
 
@@ -441,37 +442,6 @@ def get_entity_id(rule: Any, rule_type: str, domain: str = "switch") -> str:
     # Combine with domain
     return f"{domain}.{object_id}"
 
-def is_our_entity_id(entity_id: str) -> bool:
-    """Check if an entity ID matches our naming pattern.
-    
-    This can be used to identify entities created by this integration,
-    regardless of which entity ID format was used:
-    - Current format: domain.unr_<type>_<descriptive_name>
-    
-    Args:
-        entity_id: The entity ID to check
-        
-    Returns:
-        True if the entity ID matches our pattern, False otherwise
-    """
-    # Check for our standard entity ID pattern (containing 'unr_')
-    if ".unr_" in entity_id:
-        return True
-    
-    # Legacy patterns - these checks help with migration
-    legacy_patterns = [
-        "network_traffic_route_", 
-        "network_firewall_policy_",
-        "port_forward_",
-        "traffic_rule_"
-    ]
-    
-    for pattern in legacy_patterns:
-        if pattern in entity_id:
-            return True
-            
-    return False
-
 def get_child_entity_name(parent_name: str, child_type: str) -> str:
     """Generate a standardized name for a child entity.
     
@@ -525,3 +495,20 @@ def get_child_unique_id(parent_unique_id: str, child_type: str) -> str:
     
     # Return the combined ID
     return f"{parent_unique_id}_{sanitized_child_type}"
+
+def is_our_entity(entity_entry, domain=DOMAIN) -> bool:
+    """Reliably identify if an entity entry belongs to this integration.
+    
+    This function uses the entity registry entry properties that cannot
+    be changed by users, making it more reliable than entity_id checks.
+    
+    Args:
+        entity_entry: The entity registry entry to check
+        domain: The domain to check against (default: DOMAIN constant)
+        
+    Returns:
+        True if the entity belongs to this integration, False otherwise
+    """
+    # Check if entity's platform matches our domain
+    # This property cannot be changed by users
+    return entity_entry.platform == domain

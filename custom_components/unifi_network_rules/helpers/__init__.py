@@ -7,7 +7,7 @@ from .rule import (  # noqa
     get_rule_enabled,
     get_object_id,
     get_entity_id,
-    is_our_entity_id,
+    is_our_entity,
     sanitize_entity_id,
     get_rule_prefix,
     get_zone_name_by_id,
