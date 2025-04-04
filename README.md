@@ -69,7 +69,11 @@ Once you have configured the integration, you will be able to see the policies, 
 
 The integration provides several services focused on managing and automating existing UniFi Network rules:
 
-### Method 1: Using an Input Button Helper with Automation
+### Getting Started with Services
+
+There are two main ways to use these services in Home Assistant:
+
+#### Method 1: Using an Input Button Helper with Automation
 
 This is the simplest method:
 
@@ -100,7 +104,7 @@ mode: single
 
 <img src="./assets/backup_unr_button.png" alt="Backup UNR Button" width="200" />
 
-### Method 2: Using Scripts with a Lovelace Button Card (More Customizable)
+#### Method 2: Using Scripts with a Lovelace Button Card (More Customizable)
 
 First, create a script in your Settings → Automations & Scenes → Scripts:
 
@@ -129,27 +133,25 @@ name: Backup my Network Rules
 icon: mdi:cloud-upload
 ```
 
-### Available Services
+### Services Reference
 
-#### Refresh Rules
+| Service | Description | Parameters |
+|---------|-------------|------------|
+| `unifi_network_rules.refresh_rules` | Manually refresh all network rules from the UniFi controller | None |
+| `unifi_network_rules.backup_rules` | Create a backup of all firewall policies and traffic routes | `filename`: Name of the backup file to create |
+| `unifi_network_rules.restore_rules` | Restore rules from a backup file | `filename`: Backup file to restore from<br>`name_filter`: (Optional) Only restore rules containing this string<br>`rule_ids`: (Optional) List of specific rule IDs to restore<br>`rule_types`: (Optional) List of rule types to restore (policy, port_forward, route, qos_rule) |
+| `unifi_network_rules.bulk_update_rules` | Enable or disable multiple rules by name pattern | `state`: true (enable) or false (disable)<br>`name_filter`: String to match in rule names |
+| `unifi_network_rules.delete_rule` | Delete an existing firewall policy by ID | `rule_id`: ID of the rule to delete |
+| `unifi_network_rules.refresh_data` | Refresh data for a specific integration instance or all | `entry_id`: (Optional) Specific integration instance ID |
+| `unifi_network_rules.reset_rate_limit` | Reset API rate limiting if you hit request limits | None |
+| `unifi_network_rules.websocket_diagnostics` | Run diagnostics on WebSocket connections and try to repair if needed | None |
+| `unifi_network_rules.force_cleanup` | Force cleanup of all entities in the integration | None |
+| `unifi_network_rules.force_remove_stale` | Force removal of stale or broken entities | `remove_all`: (Optional) Remove all entities instead of just stale ones |
+| `unifi_network_rules.apply_template` | Apply a predefined rule template | `template_id`: ID of the template to apply<br>`variables`: (Optional) Variables to use in the template |
+| `unifi_network_rules.save_template` | Save a rule as a template for reuse | `rule_id`: ID of the rule to save<br>`template_id`: ID to save the template as<br>`rule_type`: (Optional) Type of rule |
+| `unifi_network_rules.toggle_rule` | Toggle a specific rule on or off | `rule_id`: ID of the rule to toggle<br>`rule_type`: Type of the rule |
 
-Manually refresh the state of all network rules. Useful if you've made changes directly in the UniFi interface.
-
-#### Backup Rules
-
-Create a backup of all your firewall policies and traffic routes. The backup will be stored in your Home Assistant config directory.
-
-#### Restore Rules
-
-Restore rules from a previously created backup file. You can selectively restore specific rules by their IDs, names, or rule types.
-
-#### Bulk Update Rules
-
-Enable or disable multiple rules at once by matching their names. This is useful for automating rule management based on conditions or schedules.
-
-#### Delete Rule
-
-Delete an existing zone-based firewall policy by its ID. Only available for UniFi OS 9.0.92+ with zone-based firewall enabled.
+> **Note**: For `rule_types` parameter, you can specify one or more of: `policy` (zone-based firewall rules), `port_forward` (port forwarding rules), `route` (traffic routes), or `qos_rule` (quality of service rules). See the "Understanding Rule Types" section for more details.
 
 ## Automation Examples
 
