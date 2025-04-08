@@ -1242,7 +1242,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             return
         
         # Import local reference to the entities to avoid circular imports
-        from .entities.switches import (
+        from .switch import (
             UnifiPortForwardSwitch,
             UnifiTrafficRuleSwitch,
             UnifiFirewallPolicySwitch,
@@ -1338,7 +1338,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     self, # Pass coordinator
                     data["rule_data"],
                     data["rule_type"],
-                    self.websocket.config_entry.entry_id if self.websocket.config_entry else None # Pass entry_id if available
+                    self.config_entry.entry_id if self.config_entry else None # Pass entry_id if available
                 )
 
                 # Sanity check unique ID
@@ -1369,7 +1369,19 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                          if registry:
                               parent_entity_id_in_hass = registry.async_get_entity_id("switch", DOMAIN, parent_id)
                          if parent_entity_id_in_hass:
-                              parent_entity = self.hass.data.get(DOMAIN, {}).get('entities', {}).get(parent_entity_id_in_hass)
+                              # We could either get entities from DOMAIN data, or use registry to get state to check the object
+                              # Use registry-based state since it's more reliable
+                              parent_entity_state = self.hass.states.get(parent_entity_id_in_hass)
+                              if parent_entity_state:
+                                  # For convenience, store the basic known information we have
+                                  LOGGER.debug("Found parent entity '%s' state for kill switch", parent_entity_id_in_hass)
+                                  entity.parent_entity_id = parent_entity_id_in_hass
+                                  # This is different from the parent_entity check below, which refers to newly created entities
+                                  LOGGER.debug("Coordinator: Linked new child %s to parent state %s", 
+                                             unique_id, parent_entity_id_in_hass)
+                              else:
+                                  LOGGER.warning("Coordinator: Could not find parent entity state %s for new kill switch %s", 
+                                               parent_id, unique_id)
 
                      if parent_entity and isinstance(parent_entity, UnifiTrafficRouteSwitch):
                           parent_entity.register_child_entity(unique_id)
