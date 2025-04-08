@@ -53,7 +53,7 @@ LOGGER = logging.getLogger(__package__)
 #     aiounifi: debug
 
 # More targeted debugging flags - enable only what you need
-LOG_WEBSOCKET: Final = False  # WebSocket connection/reconnection logs
+LOG_WEBSOCKET: Final = True  # WebSocket connection/reconnection logs
 LOG_API_CALLS: Final = False  # API requests and responses
 LOG_DATA_UPDATES: Final = False  # Data refresh and update cycles 
 LOG_ENTITY_CHANGES: Final = False  # Entity addition/removal/state changes
