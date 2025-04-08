@@ -372,6 +372,9 @@ async def async_create_entity(hass: HomeAssistant, rule_type: str, rule: Any) ->
         elif rule_type == "qos_rules":
             from .switch import UnifiQoSRuleSwitch
             entity = UnifiQoSRuleSwitch(coordinator, rule, rule_type, config_entry_id)
+        elif rule_type == "vpn_clients":
+            from .switch import UnifiVPNClientSwitch
+            entity = UnifiVPNClientSwitch(coordinator, rule, rule_type, config_entry_id)
         else:
             LOGGER.warning("Unknown rule type for entity creation: %s", rule_type)
             return False

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Final, Optional, Set
+from typing import Any, Final, Optional, Set, Dict
 import time  # Add this import
 import asyncio
 import contextlib
@@ -44,6 +44,7 @@ from .helpers.rule import (
 from .models.firewall_rule import FirewallRule  # Import FirewallRule
 from .models.traffic_route import TrafficRoute  # Import TrafficRoute
 from .models.qos_rule import QoSRule  # Import QoSRule
+from .models.vpn_client import VPNClient
 from .services.constants import SIGNAL_ENTITIES_CLEANUP
 
 LOGGER = logging.getLogger(__name__)
@@ -55,7 +56,8 @@ RULE_TYPES: Final = {
     "port_forwards": "Port Forward",
     "traffic_routes": "Traffic Route",
     "legacy_firewall_rules": "Legacy Firewall Rule",
-    "qos_rules": "QoS Rule"
+    "qos_rules": "QoS Rule",
+    "vpn_clients": "VPN Client"
 }
 
 # Track entities across the platform
@@ -112,8 +114,9 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         ("firewall_policies", coordinator.firewall_policies, UnifiFirewallPolicySwitch),
         ("traffic_rules", coordinator.traffic_rules, UnifiTrafficRuleSwitch),
         ("legacy_firewall_rules", coordinator.legacy_firewall_rules, UnifiLegacyFirewallRuleSwitch),
-        ("qos_rules", coordinator.data.get("qos_rules", []), UnifiQoSRuleSwitch),
+        ("qos_rules", coordinator.qos_rules, UnifiQoSRuleSwitch),
         ("wlans", coordinator.wlans, UnifiWlanSwitch),
+        ("vpn_clients", coordinator.vpn_clients, UnifiVPNClientSwitch),
     ]
 
     for rule_type, rules, entity_class in all_rule_sources:
@@ -759,6 +762,8 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                 toggle_func = self.coordinator.api.toggle_wlan
             elif self._rule_type == "qos_rules":
                 toggle_func = self.coordinator.api.toggle_qos_rule
+            elif self._rule_type == "vpn_clients":
+                toggle_func = self.coordinator.api.toggle_vpn_client
             else:
                 raise ValueError(f"Unknown rule type: {self._rule_type}")
             
@@ -1196,7 +1201,7 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
         parent_object_id = get_object_id(rule_data, "traffic_routes")
         kill_switch_object_id = get_child_entity_id(parent_object_id, "kill_switch")
         self.entity_id = generate_entity_id(
-            f"{DOMAIN}.{{}}", kill_switch_object_id, hass=coordinator.hass # OVERRIDE
+            "switch.{}", kill_switch_object_id, hass=coordinator.hass # OVERRIDE
         )
 
         # 4. Initialize kill switch state specifically
@@ -1448,3 +1453,58 @@ class UnifiQoSRuleSwitch(UnifiRuleSwitch):
                   getattr(rule_data, "id", "unknown"), type(rule_data).__name__)
         super().__init__(coordinator, rule_data, rule_type, entry_id)
         # Add any QoS-rule specific functionality here
+
+class UnifiVPNClientSwitch(UnifiRuleSwitch):
+    """Switch to enable/disable a UniFi VPN client."""
+    
+    def __init__(
+        self,
+        coordinator: UnifiRuleUpdateCoordinator,
+        rule_data: VPNClient,
+        rule_type: str = "vpn_clients",
+        entry_id: str = None,
+    ) -> None:
+        """Initialize VPN client switch."""
+        # Call parent init first
+        super().__init__(coordinator, rule_data, rule_type, entry_id)
+        
+        # Customize properties after parent init
+        vpn_type = "WireGuard" if rule_data.is_wireguard else "OpenVPN"
+        self._attr_name = f"{vpn_type} VPN: {rule_data.display_name}"
+        
+        # Set appropriate icon
+        if rule_data.is_wireguard:
+            self._attr_icon = "mdi:vpn"
+        elif rule_data.is_openvpn:
+            self._attr_icon = "mdi:security-network"
+        else:
+            self._attr_icon = "mdi:vpn"
+    
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Return entity specific state attributes."""
+        attributes = {}
+        
+        # Get current rule from coordinator data
+        current_client = self._get_current_rule()
+        
+        if not current_client:
+            return attributes
+        
+        # Add core attributes
+        attributes["vpn_type"] = current_client.vpn_type
+        attributes["name"] = current_client.name
+        
+        # Add connection status if available
+        if hasattr(current_client, "connection_status") and current_client.connection_status:
+            attributes["connection_status"] = current_client.connection_status
+        
+        # Type-specific attributes
+        if current_client.is_wireguard:
+            attributes["wireguard_endpoint"] = current_client.wireguard.get("endpoint", "")
+        elif current_client.is_openvpn:
+            config_file = current_client.openvpn.get("configuration_filename", "")
+            if config_file:
+                attributes["openvpn_config"] = config_file
+        
+        return attributes

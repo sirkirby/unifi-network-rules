@@ -14,6 +14,7 @@ from aiounifi.models.wlan import Wlan
 # Import our custom models
 from ..models.firewall_rule import FirewallRule
 from ..models.qos_rule import QoSRule
+from ..models.vpn_client import VPNClient
 from ..const import DOMAIN
 
 LOGGER = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ def get_rule_enabled(rule: Any) -> bool:
         True if the rule is enabled, False otherwise
     """
     # Check different rule types and return appropriate enabled status
-    if isinstance(rule, (PortForward, TrafficRoute, FirewallPolicy, TrafficRule, Wlan, QoSRule)):
+    if isinstance(rule, (PortForward, TrafficRoute, FirewallPolicy, TrafficRule, Wlan, QoSRule, VPNClient)):
         return getattr(rule, "enabled", False)
     
     # For dictionaries, try common enabled attributes
@@ -117,7 +118,14 @@ def get_rule_id(rule: Any) -> str | None:
         if hasattr(rule, 'id') and rule.id:
             return f"unr_wlan_{rule.id}"
         else:
-            LOGGER.warning("Wlan without id attribute: %s", rule)
+            LOGGER.warning("Wlan without id: %s", rule)
+            return None
+    
+    if isinstance(rule, VPNClient):
+        if rule.id:
+            return f"unr_vpn_{rule.id}"
+        else:
+            LOGGER.warning("VPNClient without id: %s", rule)
             return None
     
     # Dictionary fallback - this should not happen with properly typed data
@@ -272,6 +280,24 @@ def extract_descriptive_name(rule: Any, coordinator=None) -> str | None:
         name = getattr(rule, "name", None)
         if name:
             return name
+        return None
+        
+    elif isinstance(rule, VPNClient):
+        # For VPN clients, use display_name property which handles different VPN types
+        if hasattr(rule, "display_name"):
+            return rule.display_name
+        # Fallback to name or construct from properties
+        name = getattr(rule, "name", None)
+        if name:
+            return name
+        
+        # Try to construct from VPN type and configuration
+        vpn_type = getattr(rule, "vpn_type", "").replace("-client", "").upper()
+        if vpn_type:
+            if rule.id:
+                return f"{vpn_type} VPN {rule.id}"
+            return f"{vpn_type} VPN"
+        
         return None
         
     elif isinstance(rule, dict):

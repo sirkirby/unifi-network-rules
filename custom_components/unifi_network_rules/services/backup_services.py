@@ -33,6 +33,7 @@ from aiounifi.models.firewall_policy import FirewallPolicy
 from aiounifi.models.traffic_rule import TrafficRule
 from ..models.firewall_rule import FirewallRule
 from ..models.qos_rule import QoSRule
+from ..models.vpn_client import VPNClient
 
 # Schema for backup_rules service
 BACKUP_RULES_SCHEMA = vol.Schema(
@@ -49,8 +50,8 @@ RESTORE_RULES_SCHEMA = vol.Schema(
         vol.Optional(CONF_NAME_FILTER): cv.string,
         vol.Optional(CONF_RULE_TYPES): vol.All(
             cv.ensure_list, 
-            [vol.In(["policy", "port_forward", "route", "qos_rule"])],
-            description="Types of rules to restore: policy (firewall), port_forward, route (traffic routes), qos_rule (QoS rules)"
+            [vol.In(["policy", "port_forward", "route", "qos_rule", "vpn_client"])],
+            description="Types of rules to restore: policy (firewall), port_forward, route (traffic routes), qos_rule (QoS rules), vpn_client (VPN clients)"
         ),
     }
 )
@@ -300,7 +301,8 @@ async def async_restore_rules_service(hass: HomeAssistant, coordinators: Dict, c
                 "legacy_firewall": "policy",   # Maps to policy as it's the older version
                 "traffic_rule": "policy",      # Maps to policy as it's the older version of firewall rules
                 "legacy_traffic": "policy",     # Maps to policy as it's the older version of firewall rules
-                "qos_rule": "qos_rule"         # Maps to qos_rule as it's the newer version of QoS rules
+                "qos_rule": "qos_rule",        # Maps to qos_rule as it's the newer version of QoS rules
+                "vpn_client": "vpn_client"      # Maps to vpn_client as it's the newer version of VPN clients
             }
             mapped_type = rule_type_map.get(rule_type)
             
@@ -670,6 +672,57 @@ async def async_restore_rules_service(hass: HomeAssistant, coordinators: Dict, c
                   restore_counts["qos_rules"], 
                   skip_counts["qos_rules"])
 
+    # Restore VPN clients
+    if "vpn_clients" in backup_entry and hasattr(api, "update_vpn_client"):
+        restore_counts["vpn_clients"] = 0
+        skip_counts["vpn_clients"] = 0
+        LOGGER.info("Restoring VPN clients...")
+        for rule_dict in backup_entry["vpn_clients"]:
+            rule_id = rule_dict.get("_id", "")
+            
+            # Apply filters first
+            should_restore_rule = await should_restore(rule_dict, "vpn_client")
+            
+            if should_restore_rule:
+                # Check if this rule already exists in the system
+                rule_exists = False
+                if "vpn_clients" in coordinator.data:
+                    rule_exists = rule_exists_in_collection(rule_dict, coordinator.data["vpn_clients"])
+                
+                try:
+                    if rule_exists and force_restore:
+                        # Use update method when the rule exists and we're forcing an update
+                        LOGGER.debug("Rule %s exists and force_restore is True, updating existing rule", rule_id)
+                        # Convert to typed object for update
+                        rule_obj = VPNClient(rule_dict)
+                        await api.queue_api_operation(api.update_vpn_client, rule_obj)
+                    elif rule_exists:
+                        # Rule exists but force_restore is False, so skip it
+                        LOGGER.debug("Rule %s already exists, skipping (use force_restore=True to update existing rules)", rule_id)
+                        skip_counts["vpn_clients"] += 1
+                    else:
+                        # Use add method when the rule doesn't exist
+                        LOGGER.debug("Creating new VPN client based on %s", rule_id)
+                        # For adding new rules, create a copy without the _id field
+                        # to let the API assign a new ID
+                        add_rule_dict = rule_dict.copy()
+                        if '_id' in add_rule_dict:
+                            del add_rule_dict['_id']  # Remove ID to avoid InvalidObject errors
+                        
+                        # Let the UniFi API handle validation itself
+                        await api.queue_api_operation(api.add_vpn_client, add_rule_dict)
+                    
+                    restore_counts["vpn_clients"] += 1
+                except Exception as err:
+                    LOGGER.error("Error restoring VPN client %s: %s", rule_id, err)
+            else:
+                skip_counts["vpn_clients"] += 1
+        
+        LOGGER.info("Processed %d VPN clients (restored: %d, skipped: %d)", 
+                  restore_counts["vpn_clients"] + skip_counts["vpn_clients"],
+                  restore_counts["vpn_clients"], 
+                  skip_counts["vpn_clients"])
+
     # Refresh data after restore
     await coordinator.async_refresh()
     
@@ -731,8 +784,8 @@ async def async_setup_backup_services(hass: HomeAssistant, coordinators: Dict) -
             vol.Optional("name_filter"): cv.string,
             vol.Optional("rule_types"): vol.All(
                 cv.ensure_list, 
-                [vol.In(["policy", "port_forward", "route", "qos_rule"])],
-                description="Types of rules to restore: policy (firewall), port_forward, route (traffic routes), qos_rule (QoS rules)"
+                [vol.In(["policy", "port_forward", "route", "qos_rule", "vpn_client"])],
+                description="Types of rules to restore: policy (firewall), port_forward, route (traffic routes), qos_rule (QoS rules), vpn_client (VPN clients)"
             ),
         })
     )
