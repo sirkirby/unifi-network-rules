@@ -352,9 +352,9 @@ class UnifiRuleWebsocket:
         
         # Log message details based on relevance
         if is_rule_related:
-            # For rule-related messages, log with more detail
-            log_websocket("Rule event received: %s - %s", 
-                       msg_type, str(message)[:150] + "..." if len(str(message)) > 150 else str(message))
+            # For rule-related messages, log with more detail at INFO level always
+            message_summary = str(message)[:150] + "..." if len(str(message)) > 150 else str(message)
+            LOGGER.info("Rule event received: %s - %s", msg_type, message_summary)
         elif DEBUG_WEBSOCKET:
             # Only log other messages when debug is enabled
             log_websocket("Other WebSocket message: %s", msg_type)

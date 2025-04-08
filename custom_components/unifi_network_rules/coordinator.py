@@ -879,8 +879,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     # Update last refresh timestamp
                     self._last_ws_refresh = current_time
                     
-                    log_websocket("Refreshing data due to: %s (rule type: %s)", 
-                                 refresh_reason, rule_type_affected or "unknown")
+                    # Log refresh events at INFO level for visibility
+                    LOGGER.info("Refreshing data due to: %s (rule type: %s)", 
+                               refresh_reason, rule_type_affected or "unknown")
                     
                     # Use the standard refresh workflow for all rule types
                     self.hass.async_create_task(self._controlled_refresh_wrapper())
