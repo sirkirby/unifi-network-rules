@@ -20,7 +20,6 @@ from aiounifi.models.traffic_rule import TrafficRule
 from aiounifi.models.port_forward import PortForward
 from aiounifi.models.firewall_zone import FirewallZone
 from aiounifi.models.wlan import Wlan
-from aiounifi.models.rule_type import RuleType
 
 from .const import DOMAIN, LOGGER, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DEBUG_WEBSOCKET
 from .udm import UDMAPI
@@ -44,8 +43,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self, 
         hass: HomeAssistant, 
         api: UDMAPI, 
-        config_entry: ConfigEntry,
-        scan_interval_seconds: int = 60,
+        websocket: UnifiRuleWebsocket,
+        update_interval: int = DEFAULT_UPDATE_INTERVAL,
         platforms: Optional[List[Platform]] = None,
     ) -> None:
         """Initialize the coordinator with API and update interval."""
@@ -53,15 +52,16 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             hass,
             LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(seconds=scan_interval_seconds),
+            update_interval=timedelta(seconds=update_interval),
         )
 
-        # Keep a reference to the config entry
-        self.config_entry = config_entry
-
-        # API interface
+        # Keep a reference to the API and websocket
         self.api = api
-
+        self.websocket = websocket
+        
+        # For accessing config_entry_id
+        self._config_entry = None
+        
         # Update lock - prevent simultaneous updates
         self._update_lock = asyncio.Lock()
 
@@ -1338,7 +1338,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     self, # Pass coordinator
                     data["rule_data"],
                     data["rule_type"],
-                    self.config_entry.entry_id if self.config_entry else None # Pass entry_id if available
+                    self.websocket.config_entry.entry_id if self.websocket.config_entry else None # Pass entry_id if available
                 )
 
                 # Sanity check unique ID
@@ -1419,3 +1419,30 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             LOGGER.error("Failed to fetch VPN servers: %s", err)
             self._api_errors += 1
             raise
+
+    @property
+    def config_entry(self):
+        """Get the config entry."""
+        if self._config_entry:
+            return self._config_entry
+            
+        # Try to get from shared data
+        if self.hass and DOMAIN in self.hass.data and "shared" in self.hass.data[DOMAIN]:
+            config_entry_id = self.hass.data[DOMAIN]["shared"].get("config_entry_id")
+            if config_entry_id:
+                # Find the actual config entry
+                for entry in self.hass.config_entries.async_entries(DOMAIN):
+                    if entry.entry_id == config_entry_id:
+                        self._config_entry = entry
+                        return self._config_entry
+                        
+        # As a fallback, look for entry_id from websocket
+        if hasattr(self.websocket, "entry_id"):
+            entry_id = self.websocket.entry_id
+            # Find the actual config entry
+            for entry in self.hass.config_entries.async_entries(DOMAIN):
+                if entry.entry_id == entry_id:
+                    self._config_entry = entry
+                    return self._config_entry
+                    
+        return None
