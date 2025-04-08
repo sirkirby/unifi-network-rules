@@ -97,6 +97,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Setup the coordinator
         coordinator = UnifiRuleUpdateCoordinator(hass, api, websocket_handler)
         
+        # Explicitly set the config_entry reference
+        coordinator.config_entry = entry
+        
+        # Connect the websocket handler to the coordinator
+        websocket_handler.set_callback(coordinator._handle_websocket_message)
+        LOGGER.debug("Set websocket handler callback to coordinator's message handler")
+        
         # Define entity removal callback
         @callback
         def handle_entity_removal(entity_id):
@@ -372,6 +379,9 @@ async def async_create_entity(hass: HomeAssistant, rule_type: str, rule: Any) ->
         elif rule_type == "qos_rules":
             from .switch import UnifiQoSRuleSwitch
             entity = UnifiQoSRuleSwitch(coordinator, rule, rule_type, config_entry_id)
+        elif rule_type == "vpn_clients":
+            from .switch import UnifiVPNClientSwitch
+            entity = UnifiVPNClientSwitch(coordinator, rule, rule_type, config_entry_id)
         else:
             LOGGER.warning("Unknown rule type for entity creation: %s", rule_type)
             return False

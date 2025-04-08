@@ -114,7 +114,8 @@ restore_rules:
         "policy" (firewall policies, legacy firewall rules, traffic rules),
         "route" (traffic routes only),
         "port_forward" (port forwarding rules),
-        "qos_rule" (QoS quality of service rules)
+        "qos_rule" (QoS quality of service rules),
+        "vpn_client" (VPN client configurations)
       required: false
       example: '["policy", "route", "qos_rule"]'
       selector:
@@ -124,6 +125,7 @@ restore_rules:
             - "route"
             - "port_forward"
             - "qos_rule"
+            - "vpn_client"
           multiple: true
 
 bulk_update_rules:
