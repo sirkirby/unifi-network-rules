@@ -59,8 +59,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self.api = api
         self.websocket = websocket
         
-        # For accessing config_entry_id
-        self._config_entry = None
+        # Initialize config_entry to None - it will be looked up when needed
+        self.config_entry = None
         
         # Update lock - prevent simultaneous updates
         self._update_lock = asyncio.Lock()
@@ -1419,30 +1419,3 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             LOGGER.error("Failed to fetch VPN servers: %s", err)
             self._api_errors += 1
             raise
-
-    @property
-    def config_entry(self):
-        """Get the config entry."""
-        if self._config_entry:
-            return self._config_entry
-            
-        # Try to get from shared data
-        if self.hass and DOMAIN in self.hass.data and "shared" in self.hass.data[DOMAIN]:
-            config_entry_id = self.hass.data[DOMAIN]["shared"].get("config_entry_id")
-            if config_entry_id:
-                # Find the actual config entry
-                for entry in self.hass.config_entries.async_entries(DOMAIN):
-                    if entry.entry_id == config_entry_id:
-                        self._config_entry = entry
-                        return self._config_entry
-                        
-        # As a fallback, look for entry_id from websocket
-        if hasattr(self.websocket, "entry_id"):
-            entry_id = self.websocket.entry_id
-            # Find the actual config entry
-            for entry in self.hass.config_entries.async_entries(DOMAIN):
-                if entry.entry_id == entry_id:
-                    self._config_entry = entry
-                    return self._config_entry
-                    
-        return None

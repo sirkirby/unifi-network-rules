@@ -97,6 +97,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Setup the coordinator
         coordinator = UnifiRuleUpdateCoordinator(hass, api, websocket_handler)
         
+        # Explicitly set the config_entry reference
+        coordinator.config_entry = entry
+        
         # Define entity removal callback
         @callback
         def handle_entity_removal(entity_id):
