@@ -33,7 +33,7 @@ from aiounifi.models.firewall_policy import FirewallPolicy
 from aiounifi.models.traffic_rule import TrafficRule
 from ..models.firewall_rule import FirewallRule
 from ..models.qos_rule import QoSRule
-from ..models.vpn_client import VPNClient
+from ..models.vpn_config import VPNConfig
 
 # Schema for backup_rules service
 BACKUP_RULES_SCHEMA = vol.Schema(
@@ -694,7 +694,7 @@ async def async_restore_rules_service(hass: HomeAssistant, coordinators: Dict, c
                         # Use update method when the rule exists and we're forcing an update
                         LOGGER.debug("Rule %s exists and force_restore is True, updating existing rule", rule_id)
                         # Convert to typed object for update
-                        rule_obj = VPNClient(rule_dict)
+                        rule_obj = VPNConfig(rule_dict)
                         await api.queue_api_operation(api.update_vpn_client, rule_obj)
                     elif rule_exists:
                         # Rule exists but force_restore is False, so skip it

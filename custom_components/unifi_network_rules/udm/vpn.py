@@ -1,4 +1,4 @@
-"""VPN client management mixin for UniFi Network Rules integration."""
+"""VPN management mixin for UniFi Network Rules integration."""
 from __future__ import annotations
 
 import logging
@@ -9,18 +9,28 @@ from ..const import (
     API_PATH_NETWORK_CONF,
     API_PATH_NETWORK_CONF_DETAIL,
 )
-from ..models.vpn_client import VPNClient
+from ..models.vpn_config import VPNConfig
 
 class VPNMixin:
-    """Mixin to add VPN client management capabilities to the UDMAPI class."""
+    """Mixin to add VPN management capabilities to the UDMAPI class."""
 
-    async def get_vpn_clients(self) -> List[VPNClient]:
-        """Get VPN client connections.
+    async def get_vpn_configs(self, include_clients=True, include_servers=True) -> List[VPNConfig]:
+        """Get VPN configurations.
         
+        Args:
+            include_clients: Whether to include VPN clients in the results
+            include_servers: Whether to include VPN servers in the results
+            
         Returns:
-            List of VPN client objects
+            List of VPN configuration objects
         """
-        LOGGER.debug("Fetching VPN client connections")
+        config_types = []
+        if include_clients:
+            config_types.extend(["vpn-client", "openvpn-client", "wireguard-client"])
+        if include_servers:
+            config_types.extend(["vpn-server", "openvpn-server", "wireguard-server"])
+            
+        LOGGER.debug("Fetching VPN configurations (clients: %s, servers: %s)", include_clients, include_servers)
         
         try:
             # Create API request using the wrapper method in the base class
@@ -33,172 +43,222 @@ class VPNMixin:
                 
             network_data = data.get("data", [])
             
-            # Filter the network configurations to only get VPN clients
-            vpn_clients = []
+            # Filter the network configurations to get requested VPN configs
+            vpn_configs = []
             for network in network_data:
                 purpose = network.get("purpose", "")
                 vpn_type = network.get("vpn_type", "")
                 
-                # Check for both purpose and vpn_type to ensure we only get VPN clients
-                if purpose == "vpn-client" or vpn_type in ["openvpn-client", "wireguard-client"]:
+                # Check for both purpose and vpn_type to catch all VPN configs
+                is_client = purpose == "vpn-client" or vpn_type in ["openvpn-client", "wireguard-client"]
+                is_server = purpose == "vpn-server" or vpn_type in ["openvpn-server", "wireguard-server"]
+                
+                if (include_clients and is_client) or (include_servers and is_server):
                     try:
-                        vpn_client = VPNClient(network)
-                        vpn_clients.append(vpn_client)
-                        LOGGER.debug(f"Found VPN client: {vpn_client.display_name} (Type: {vpn_client.vpn_type})")
-                    except Exception as client_err:
-                        LOGGER.error(f"Error creating VPN client from data: {client_err}")
+                        vpn_config = VPNConfig(network)
+                        vpn_configs.append(vpn_config)
+                        LOGGER.debug(f"Found VPN config: {vpn_config.display_name} (Type: {vpn_config.vpn_type})")
+                    except Exception as config_err:
+                        LOGGER.error(f"Error creating VPN config from data: {config_err}")
                     
-            LOGGER.debug(f"Found {len(vpn_clients)} VPN client connections")
-            return vpn_clients
+            LOGGER.debug(f"Found {len(vpn_configs)} VPN configurations")
+            return vpn_configs
             
         except Exception as err:
-            LOGGER.error(f"Error fetching VPN client connections: {err}")
+            LOGGER.error(f"Error fetching VPN configurations: {err}")
             return []
+    
+    async def get_vpn_clients(self) -> List[VPNConfig]:
+        """Get VPN client connections.
+        
+        Returns:
+            List of VPN client objects
+        """
+        LOGGER.debug("Fetching VPN client connections")
+        return await self.get_vpn_configs(include_clients=True, include_servers=False)
+    
+    async def get_vpn_servers(self) -> List[VPNConfig]:
+        """Get VPN server configurations.
+        
+        Returns:
+            List of VPN server objects
+        """
+        LOGGER.debug("Fetching VPN server configurations")
+        return await self.get_vpn_configs(include_clients=False, include_servers=True)
             
-    async def add_vpn_client(self, client_data: Dict[str, Any]) -> Optional[VPNClient]:
-        """Add a new VPN client configuration.
+    async def add_vpn_config(self, config_data: Dict[str, Any]) -> Optional[VPNConfig]:
+        """Add a new VPN configuration.
         
         Args:
-            client_data: Dictionary with the VPN client configuration
+            config_data: Dictionary with the VPN configuration
             
         Returns:
-            VPNClient object if successful, None otherwise
+            VPNConfig object if successful, None otherwise
         """
-        LOGGER.debug("Adding new VPN client")
+        # Determine if this is a client or server based on vpn_type or purpose
+        is_server = False
+        vpn_type = config_data.get("vpn_type", "")
+        purpose = config_data.get("purpose", "")
+        
+        if vpn_type in ["openvpn-server", "wireguard-server"] or purpose == "vpn-server":
+            is_server = True
+            LOGGER.debug("Adding new VPN server")
+        else:
+            LOGGER.debug("Adding new VPN client")
         
         try:
-            # Ensure the purpose is set to vpn-client
-            client_data["purpose"] = "vpn-client"
+            # Set the purpose based on whether this is a client or server
+            config_data["purpose"] = "vpn-server" if is_server else "vpn-client"
             
             # Set default values if not provided
-            if "name" not in client_data:
-                vpn_type = client_data.get("vpn_type", "openvpn-client")
-                if vpn_type == "wireguard-client":
-                    client_data["name"] = "WireGuard Client"
+            if "name" not in config_data:
+                vpn_variant = "Server" if is_server else "Client"
+                if "wireguard" in vpn_type:
+                    config_data["name"] = f"WireGuard {vpn_variant}"
                 else:
-                    client_data["name"] = "OpenVPN Client"
+                    config_data["name"] = f"OpenVPN {vpn_variant}"
             
             # Ensure enabled is set (default to enabled)
-            if "enabled" not in client_data:
-                client_data["enabled"] = True
+            if "enabled" not in config_data:
+                config_data["enabled"] = True
                 
             # Create and execute the API request using the wrapper method
-            request = self.create_api_request("POST", API_PATH_NETWORK_CONF, data=client_data)
+            request = self.create_api_request("POST", API_PATH_NETWORK_CONF, data=config_data)
             response = await self.controller.request(request)
             
             if not response or "data" not in response:
-                LOGGER.error("Failed to add VPN client")
+                LOGGER.error(f"Failed to add VPN {config_data['purpose']}")
                 return None
                 
-            # Return the newly created VPN client as a typed object
-            LOGGER.info("Successfully added VPN client")
-            return VPNClient(response["data"])
+            # Return the newly created VPN config as a typed object
+            LOGGER.info(f"Successfully added VPN {config_data['purpose']}")
+            return VPNConfig(response["data"])
             
         except Exception as err:
-            LOGGER.error(f"Error adding VPN client: {err}")
+            LOGGER.error(f"Error adding VPN {config_data.get('purpose', 'configuration')}: {err}")
             return None
+    
+    # Convenience wrappers for add_vpn_config
+    async def add_vpn_client(self, client_data: Dict[str, Any]) -> Optional[VPNConfig]:
+        """Add a new VPN client configuration."""
+        if "purpose" not in client_data:
+            client_data["purpose"] = "vpn-client"
+        return await self.add_vpn_config(client_data)
+    
+    async def add_vpn_server(self, server_data: Dict[str, Any]) -> Optional[VPNConfig]:
+        """Add a new VPN server configuration."""
+        if "purpose" not in server_data:
+            server_data["purpose"] = "vpn-server"
+        return await self.add_vpn_config(server_data)
             
-    async def update_vpn_client(self, client: VPNClient) -> bool:
-        """Update a VPN client configuration.
+    async def update_vpn_config(self, config: VPNConfig) -> bool:
+        """Update a VPN configuration.
         
         Args:
-            client: The VPN client to update
+            config: The VPN configuration to update
             
         Returns:
             True if successful, False otherwise
         """
-        if not client.id:
-            LOGGER.error("Cannot update VPN client without an ID")
+        if not config.id:
+            LOGGER.error("Cannot update VPN configuration without an ID")
             return False
             
-        LOGGER.debug(f"Updating VPN client {client.display_name} ({client.id})")
+        LOGGER.debug(f"Updating VPN configuration {config.display_name} ({config.id})")
         
         try:
-            client_data = client.to_dict()
+            config_data = config.to_dict()
             
             # Log what we're updating (excluding sensitive data)
-            LOGGER.debug(f"Updating VPN client {client.display_name} with enabled={client.enabled}")
+            LOGGER.debug(f"Updating VPN configuration {config.display_name} with enabled={config.enabled}")
             
             # Create path with the network ID and execute the API request
-            path = API_PATH_NETWORK_CONF_DETAIL.format(network_id=client.id)
-            request = self.create_api_request("PUT", path, data=client_data)
+            path = API_PATH_NETWORK_CONF_DETAIL.format(network_id=config.id)
+            request = self.create_api_request("PUT", path, data=config_data)
             response = await self.controller.request(request)
             
             if not response:
-                LOGGER.error(f"Failed to update VPN client {client.display_name}")
+                LOGGER.error(f"Failed to update VPN configuration {config.display_name}")
                 return False
                 
-            LOGGER.info(f"Successfully updated VPN client {client.display_name}")
+            LOGGER.info(f"Successfully updated VPN configuration {config.display_name}")
             return True
             
         except Exception as err:
-            LOGGER.error(f"Error updating VPN client {client.display_name}: {err}")
+            LOGGER.error(f"Error updating VPN configuration {config.display_name}: {err}")
             return False
             
-    async def toggle_vpn_client(self, client: VPNClient) -> bool:
-        """Toggle a VPN client connection.
+    async def toggle_vpn_config(self, config: VPNConfig) -> bool:
+        """Toggle a VPN configuration.
         
         Args:
-            client: The VPN client to toggle
+            config: The VPN configuration to toggle
             
         Returns:
             True if successful, False otherwise
         """
-        new_state = not client.enabled
-        LOGGER.debug(f"Toggling VPN client {client.display_name} ({client.id}) to {new_state}")
+        new_state = not config.enabled
+        LOGGER.debug(f"Toggling VPN configuration {config.display_name} ({config.id}) to {new_state}")
         
         try:
             # Update the enabled state
-            client.enabled = new_state
+            config.enabled = new_state
             
             # Create path with the network ID and execute the API request
-            path = API_PATH_NETWORK_CONF_DETAIL.format(network_id=client.id)
-            request = self.create_api_request("PUT", path, data=client.to_dict())
+            path = API_PATH_NETWORK_CONF_DETAIL.format(network_id=config.id)
+            request = self.create_api_request("PUT", path, data=config.to_dict())
             response = await self.controller.request(request)
             
             if not response:
-                LOGGER.error(f"Failed to toggle VPN client {client.display_name}")
+                LOGGER.error(f"Failed to toggle VPN configuration {config.display_name}")
                 return False
                 
-            LOGGER.info(f"VPN client {client.display_name} toggled to {'enabled' if new_state else 'disabled'}")
+            LOGGER.info(f"VPN configuration {config.display_name} toggled to {'enabled' if new_state else 'disabled'}")
             return True
             
         except Exception as err:
-            LOGGER.error(f"Error toggling VPN client {client.display_name}: {err}")
+            LOGGER.error(f"Error toggling VPN configuration {config.display_name}: {err}")
             return False
             
-    async def remove_vpn_client(self, client: Union[VPNClient, str]) -> bool:
-        """Remove a VPN client configuration.
+    async def remove_vpn_config(self, config: Union[VPNConfig, str]) -> bool:
+        """Remove a VPN configuration.
         
         Args:
-            client: The VPN client object or client ID to remove
+            config: The VPN configuration object or config ID to remove
             
         Returns:
             True if successful, False otherwise
         """
-        # Extract the client ID
-        client_id = client if isinstance(client, str) else client.id
-        display_name = client.display_name if isinstance(client, VPNClient) else client_id
+        # Extract the config ID
+        config_id = config if isinstance(config, str) else config.id
+        display_name = config.display_name if isinstance(config, VPNConfig) else config_id
         
-        if not client_id:
-            LOGGER.error("Cannot remove VPN client without an ID")
+        if not config_id:
+            LOGGER.error("Cannot remove VPN configuration without an ID")
             return False
             
-        LOGGER.debug(f"Removing VPN client {display_name} ({client_id})")
+        LOGGER.debug(f"Removing VPN configuration {display_name} ({config_id})")
         
         try:
             # Create path with the network ID and execute the API request
-            path = API_PATH_NETWORK_CONF_DETAIL.format(network_id=client_id)
+            path = API_PATH_NETWORK_CONF_DETAIL.format(network_id=config_id)
             request = self.create_api_request("DELETE", path)
             response = await self.controller.request(request)
             
             if not response:
-                LOGGER.error(f"Failed to remove VPN client {display_name}")
+                LOGGER.error(f"Failed to remove VPN configuration {display_name}")
                 return False
                 
-            LOGGER.info(f"Successfully removed VPN client {display_name}")
+            LOGGER.info(f"Successfully removed VPN configuration {display_name}")
             return True
             
         except Exception as err:
-            LOGGER.error(f"Error removing VPN client {display_name}: {err}")
+            LOGGER.error(f"Error removing VPN configuration {display_name}: {err}")
             return False
+    
+    # Convenience methods for readability
+    toggle_vpn_client = toggle_vpn_config
+    toggle_vpn_server = toggle_vpn_config
+    update_vpn_client = update_vpn_config
+    remove_vpn_client = remove_vpn_config
+    remove_vpn_server = remove_vpn_config

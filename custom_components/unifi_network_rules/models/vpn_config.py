@@ -1,14 +1,14 @@
-"""VPN client model for UniFi Network Rules integration."""
+"""VPN configuration model for UniFi Network Rules integration."""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Union, Literal
 from dataclasses import dataclass
 
-class VPNClient:
-    """Representation of a VPN client connection."""
+class VPNConfig:
+    """Representation of a VPN configuration (client or server)."""
     
     def __init__(self, data: Dict[str, Any]) -> None:
-        """Initialize a VPN client from raw data."""
+        """Initialize a VPN configuration from raw data."""
         self.raw = data
         self._id = data.get("_id")
         self.enabled = data.get("enabled", False)
@@ -45,6 +45,16 @@ class VPNClient:
             "persistent_keepalive": wg_config.get("persistent_keepalive", data.get("wireguard_persistent_keepalive", 0))
         }
         
+        # Server-specific fields (for server types)
+        self.server = {
+            "port": data.get("openvpn_port", data.get("wireguard_port", "")),
+            "protocol": data.get("openvpn_protocol", ""),
+            "subnet": data.get("subnet", ""),
+            "interface": data.get("interface", ""),
+            "network": data.get("network", ""),
+            "mask": data.get("mask", ""),
+        }
+        
         # IP configuration
         self.ip_subnet = data.get("ip_subnet", "")
         
@@ -55,22 +65,32 @@ class VPNClient:
     
     @property
     def id(self) -> str:
-        """Get the ID of the VPN client."""
+        """Get the ID of the VPN configuration."""
         return self._id
     
     @property
     def is_openvpn(self) -> bool:
-        """Check if this is an OpenVPN client."""
-        return self.vpn_type == "openvpn-client"
+        """Check if this is an OpenVPN configuration."""
+        return self.vpn_type in ["openvpn-client", "openvpn-server"]
     
     @property
     def is_wireguard(self) -> bool:
-        """Check if this is a WireGuard client."""
-        return self.vpn_type == "wireguard-client"
+        """Check if this is a WireGuard configuration."""
+        return self.vpn_type in ["wireguard-client", "wireguard-server"]
+    
+    @property
+    def is_client(self) -> bool:
+        """Check if this is a client configuration."""
+        return self.vpn_type in ["openvpn-client", "wireguard-client"] or self.purpose == "vpn-client"
+    
+    @property
+    def is_server(self) -> bool:
+        """Check if this is a server configuration."""
+        return self.vpn_type in ["openvpn-server", "wireguard-server"] or self.purpose == "vpn-server"
     
     @property
     def is_connected(self) -> bool:
-        """Check if the VPN client is currently connected."""
+        """Check if the VPN client is currently connected or server is running."""
         return self.connection_status == "connected" or self.connection_status == "up"
     
     @property
@@ -79,16 +99,28 @@ class VPNClient:
         if self.name:
             return self.name
         
-        if self.is_openvpn and self.openvpn["configuration_filename"]:
-            return f"OpenVPN: {self.openvpn['configuration_filename']}"
+        # For clients
+        if self.is_client:
+            if self.is_openvpn and self.openvpn["configuration_filename"]:
+                return f"OpenVPN Client: {self.openvpn['configuration_filename']}"
+            
+            if self.is_wireguard and self.wireguard["configuration_filename"]:
+                return f"WireGuard Client: {self.wireguard['configuration_filename']}"
         
-        if self.is_wireguard and self.wireguard["configuration_filename"]:
-            return f"WireGuard: {self.wireguard['configuration_filename']}"
+        # For servers
+        if self.is_server:
+            if self.is_openvpn:
+                port = self.server.get("port", "")
+                return f"OpenVPN Server{f' (Port {port})' if port else ''}"
+            
+            if self.is_wireguard:
+                port = self.server.get("port", "")
+                return f"WireGuard Server{f' (Port {port})' if port else ''}"
             
         return f"VPN {self._id}"
     
     def to_dict(self) -> Dict[str, Any]:
-        """Convert the VPN client to a dictionary for API requests.
+        """Convert the VPN configuration to a dictionary for API requests.
         
         We're primarily concerned with updating the enabled state while
         preserving the original structure of the data to avoid unexpected
@@ -117,4 +149,4 @@ class VPNClient:
             if field in sanitized:
                 sanitized[field] = "***REDACTED***"
                 
-        return f"VPNClient({self.vpn_type}, {self.display_name}, enabled={self.enabled})"
+        return f"VPNConfig({self.vpn_type}, {self.display_name}, enabled={self.enabled})"
