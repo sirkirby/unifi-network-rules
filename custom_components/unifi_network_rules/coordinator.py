@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 import asyncio
-from typing import Any, Dict, Callable, List
+from typing import Any, Dict, Callable, List, Optional, Set
 import time
 
 from homeassistant.core import HomeAssistant, callback
@@ -11,6 +11,8 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 
 from aiounifi.models.traffic_route import TrafficRoute
 from aiounifi.models.firewall_policy import FirewallPolicy
@@ -18,6 +20,7 @@ from aiounifi.models.traffic_rule import TrafficRule
 from aiounifi.models.port_forward import PortForward
 from aiounifi.models.firewall_zone import FirewallZone
 from aiounifi.models.wlan import Wlan
+from aiounifi.models.rule_type import RuleType
 
 from .const import DOMAIN, LOGGER, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DEBUG_WEBSOCKET
 from .udm import UDMAPI
@@ -26,110 +29,68 @@ from .helpers.rule import get_rule_id, get_rule_name, get_rule_enabled, get_chil
 from .utils.logger import log_data, log_websocket
 from .models.firewall_rule import FirewallRule
 from .models.qos_rule import QoSRule
-from .models.vpn_client import VPNClient
+from .models.vpn_config import VPNConfig
 
 # This is a fallback if no update_interval is specified
 SCAN_INTERVAL = timedelta(seconds=60)
 
-def _log_rule_info(rule: Any) -> None:
-    """Log detailed information about a rule object."""
-    try:
-        # For all API objects with common properties (including FirewallRule)
-        if hasattr(rule, "id") and hasattr(rule, "raw"):
-            # Get common attributes that most rule objects have
-            attrs = {
-                "ID": getattr(rule, "id", ""),
-                "Name": getattr(rule, "name", ""),
-                "Enabled": getattr(rule, "enabled", False)
-            }
-            
-            # Add description if available
-            if hasattr(rule, "description"):
-                attrs["Description"] = getattr(rule, "description", "")
-                
-            # Log the common attributes
-            log_data(
-                "Rule info - Type: %s, Attributes: %s",
-                type(rule),
-                attrs
-            )
-        else:
-            # Fallback for other objects
-            log_data(
-                "Rule info - Type: %s, Dir: %s, Dict: %s", 
-                type(rule),
-                getattr(rule, "__dir__", lambda: ["no __dir__"])(),
-                rule.__dict__ if hasattr(rule, "__dict__") else repr(rule),
-            )
-    except Exception as e:
-        LOGGER.debug("Error logging rule: %s", e)
+class NeedsFetch(Exception):
+    """Raised when a rule needs to be fetched again after a discovery."""
 
-class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
-    """Coordinator to manage data updates."""
+class UnifiCoordinator(DataUpdateCoordinator):
+    """UniFi Network Rules API Coordinator."""
 
     def __init__(
-        self,
-        hass: HomeAssistant,
-        api: UDMAPI,
-        websocket: UnifiRuleWebsocket,
-        update_interval: int = DEFAULT_UPDATE_INTERVAL,
+        self, 
+        hass: HomeAssistant, 
+        api: UDMAPI, 
+        config_entry: ConfigEntry,
+        scan_interval_seconds: int = 60,
+        platforms: Optional[List[Platform]] = None,
     ) -> None:
-        """Initialize the coordinator."""
-        self.api = api
-        self.websocket = websocket
-        self.hass = hass
-        
-        # Track authentication failures and API issues
-        self._auth_failures = 0
-        self._max_auth_failures = 3
-        self._last_successful_data = None
-        self._consecutive_errors = 0
-        self._in_error_state = False
-        
-        # WebSocket refresh control variables
-        self._last_ws_refresh = 0
-        self._min_ws_refresh_interval = 1.5  # Reduced from 3.0 to 1.5 seconds minimum between refreshes
-        self._pending_ws_refresh = False
-        self._ws_refresh_task = None
-        self._refresh_semaphore = asyncio.Semaphore(1)
-        
-        # Add a lock to prevent concurrent updates during authentication
-        self._update_lock = asyncio.Lock()
-        # Track authentication in progress
-        self._authentication_in_progress = False
-
-        # Set auth failure callback on API
-        if hasattr(api, "set_auth_failure_callback"):
-            api.set_auth_failure_callback(self._handle_auth_failure)
-
-        # Convert update_interval from seconds to timedelta
-        update_interval_td = timedelta(seconds=update_interval)
-
+        """Initialize the coordinator with API and update interval."""
         super().__init__(
             hass,
             LOGGER,
             name=DOMAIN,
-            update_interval=update_interval_td,
+            update_interval=timedelta(seconds=scan_interval_seconds),
         )
 
-        # Set up websocket message handler
-        self.websocket.set_callback(self._handle_websocket_message)
+        # Keep a reference to the config entry
+        self.config_entry = config_entry
 
-        # Subscribe to websocket messages
-        self._cleanup_callbacks: list[Callable[[], None]] = []
-        self._cleanup_callbacks.append(
-            async_dispatcher_connect(
-                hass,
-                SIGNAL_WEBSOCKET_MESSAGE,
-                self._handle_websocket_message
-            )
-        )
+        # API interface
+        self.api = api
 
-        # For tracking entity updates
-        self.device_name = None
-        self.data: Dict[str, Any] = {}
+        # Update lock - prevent simultaneous updates
+        self._update_lock = asyncio.Lock()
+
+        # Authentication state
+        self._authentication_in_progress = False
+        self._auth_failures = 0  
+        self._max_auth_failures = 5  # After this many failures, we'll stop trying to reconnect
+
+        # Error tracking
+        self._in_error_state = False
+        self._consecutive_errors = 0
+        self._api_errors = 0
+        self._last_successful_data = {}
+
+        # Track initial update
+        self._initial_update_done = False
+
+        # Flag to track update in progress
+        self._update_in_progress = False
+        self._has_data = False
         
-        # Rule collections - initialized during update
+        # Track entities we added or removed
+        # By unique ID rather than the objects themselves
+        self.known_unique_ids: Set[str] = set()
+        self.removed_unique_ids: Set[str] = set()
+        self._entity_creation_queue = []
+        
+        # Rule collections - these are maintained by the coordinator
+        # To be used by services for operations like enable/disable rules
         self.port_forwards: List[PortForward] = []
         self.traffic_routes: List[TrafficRoute] = []
         self.firewall_policies: List[FirewallPolicy] = []
@@ -138,180 +99,334 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         self.firewall_zones: List[FirewallZone] = []
         self.wlans: List[Wlan] = []
         self.qos_rules: List[QoSRule] = []
-        self.vpn_clients: List[VPNClient] = []
-        
+        self.vpn_clients: List[VPNConfig] = []
+        self.vpn_servers: List[VPNConfig] = []
+
         # For dynamic entity creation
         self.async_add_entities_callback: AddEntitiesCallback | None = None
-        self.known_unique_ids: set[str] = set()
-        
-        # Entity removal callback
-        self._entity_removal_callback = None
-        
-        # Flag to ensure post-setup check runs only once
-        self._initial_update_done = False
-        
-        # Entity creation callback
-        self.on_create_entity = None
-        
-        # Task handling queued entity creation
-        self._queue_task = None
-        self._queue_lock = asyncio.Lock()
-        self._entity_creation_queue = []
+        self.entity_platform = None  # Store the entity platform for later use
 
-        # API fetch counts
-        self._api_requests = 0
+        # Save platforms to load
+        self._platforms = platforms or [Platform.SWITCH]
+
+        # Webhook tracking
+        self.webhook_id = None
+        self.webhook_url = None
+        self.webhook_registered = False
+
+        # Error tracking
+        self._in_error_state = False
+        self._consecutive_errors = 0
         self._api_errors = 0
 
     async def _async_update_data(self) -> Dict[str, List[Any]]:
-        """Fetch data from API endpoint.
+        """Fetch data from API endpoint."""
+        # Use a lock to prevent concurrent updates, especially during authentication
+        if self._update_lock.locked():
+            LOGGER.debug("Another update is already in progress, waiting for it to complete")
+            # If an update is already in progress, wait for it to complete and use its result
+            if self.data:
+                return self.data
+            elif self._last_successful_data:
+                return self._last_successful_data
         
-        This is the place where data for all entities is updated from.
-        
-        Returns:
-            Dict[str, list]: A dictionary containing lists of entities by type
-        """
-        if not self.api.is_initialized:
-            LOGGER.error("API is not initialized during coordinator update.")
-            return {}
-            
-        # Flag that update is in progress
-        self._update_in_progress = True
-        
-        try:
-            # Check for connection problems
-            if not self.api.is_connected:
-                LOGGER.warning("API not connected, attempting reconnection...")
-                await self.api.login()
-                
-                if not self.api.is_connected:
-                    LOGGER.error("Failed to reconnect to UniFi Network during update.")
-                    # Set data to previous but flag as unavailable
-                    self._has_data = False
-                    result = self.data or {} 
-                    # Return the previous data structure to avoid total loss of state
-                    return result
+        async with self._update_lock:
+            try:
+                # Track authentication state at start of update
+                authentication_active = self._authentication_in_progress
+                if authentication_active:
+                    LOGGER.warning("Update started while authentication is in progress - using cached data")
+                    if self.data:
+                        return self.data
+                    elif self._last_successful_data:
+                        return self._last_successful_data
 
-            # Start collecting data - always get the data even if it may fail
-            # Instead of immediately returning when any error occurs, try to get as much data as possible
-            result = {}
-            errors = []
-            
-            # Fetch each type of rule with individual try/except blocks
-            
-            # Fetch firewall policies
-            try:
-                result["firewall_policies"] = await self._async_get_firewall_policies()
-            except Exception as err:
-                errors.append(f"Error fetching firewall policies: {err}")
-                # Keep existing data if available
-                if self.data and "firewall_policies" in self.data:
-                    result["firewall_policies"] = self.data["firewall_policies"]
-                else:
-                    result["firewall_policies"] = []
-            
-            # Fetch port forwards
-            try:
-                result["port_forwards"] = await self._async_get_port_forwards()
-            except Exception as err:
-                errors.append(f"Error fetching port forwards: {err}")
-                # Keep existing data if available
-                if self.data and "port_forwards" in self.data:
-                    result["port_forwards"] = self.data["port_forwards"]
-                else:
-                    result["port_forwards"] = []
-            
-            # Fetch traffic routes
-            try:
-                result["traffic_routes"] = await self._async_get_traffic_routes()
-            except Exception as err:
-                errors.append(f"Error fetching traffic routes: {err}")
-                # Keep existing data if available
-                if self.data and "traffic_routes" in self.data:
-                    result["traffic_routes"] = self.data["traffic_routes"]
-                else:
-                    result["traffic_routes"] = []
-            
-            # Fetch traffic rules
-            try:
-                result["traffic_rules"] = await self._async_get_traffic_rules()
-            except Exception as err:
-                errors.append(f"Error fetching traffic rules: {err}")
-                # Keep existing data if available
-                if self.data and "traffic_rules" in self.data:
-                    result["traffic_rules"] = self.data["traffic_rules"]
-                else:
-                    result["traffic_rules"] = []
-            
-            # Fetch legacy firewall rules
-            try:
-                result["legacy_firewall_rules"] = await self._async_get_legacy_firewall_rules()
-            except Exception as err:
-                errors.append(f"Error fetching legacy firewall rules: {err}")
-                # Keep existing data if available
-                if self.data and "legacy_firewall_rules" in self.data:
-                    result["legacy_firewall_rules"] = self.data["legacy_firewall_rules"]
-                else:
-                    result["legacy_firewall_rules"] = []
-            
-            # Fetch zones - needed for enriching policy data
-            try:
-                result["firewall_zones"] = await self._async_get_firewall_zones()
-            except Exception as err:
-                errors.append(f"Error fetching firewall zones: {err}")
-                # Keep existing data if available
-                if self.data and "firewall_zones" in self.data:
-                    result["firewall_zones"] = self.data["firewall_zones"]
-                else:
-                    result["firewall_zones"] = []
-            
-            # Fetch wireless networks (WLANs)
-            try:
-                result["wlans"] = await self._async_get_wlans()
-            except Exception as err:
-                errors.append(f"Error fetching WLANs: {err}")
-                # Keep existing data if available
-                if self.data and "wlans" in self.data:
-                    result["wlans"] = self.data["wlans"]
-                else:
-                    result["wlans"] = []
+                # Proactively refresh the session to prevent 403 errors
+                # Only refresh every 5 minutes to avoid excessive API calls
+                refresh_interval = 300  # seconds
+                current_time = asyncio.get_event_loop().time()
+                last_refresh = getattr(self, "_last_session_refresh", 0)
 
-            # Fetch QoS rules
-            try:
-                result["qos_rules"] = await self._async_get_qos_rules()
-            except Exception as err:
-                errors.append(f"Error fetching QoS rules: {err}")
-                # Keep existing data if available
-                if self.data and "qos_rules" in self.data:
-                    result["qos_rules"] = self.data["qos_rules"]
-                else:
-                    result["qos_rules"] = []
-                    
-            # Fetch VPN clients
-            try:
-                result["vpn_clients"] = await self._async_get_vpn_clients()
-            except Exception as err:
-                errors.append(f"Error fetching VPN clients: {err}")
-                # Keep existing data if available
-                if self.data and "vpn_clients" in self.data:
-                    result["vpn_clients"] = self.data["vpn_clients"]
-                else:
-                    result["vpn_clients"] = []
+                if current_time - last_refresh > refresh_interval:
+                    LOGGER.debug("Proactively refreshing session")
+                    try:
+                        # We'll track successful refreshes but not fail the update if refresh fails
+                        refresh_success = await self.api.refresh_session()
+                        if refresh_success:
+                            self._last_session_refresh = current_time
+                            LOGGER.debug("Session refresh successful")
+                        else:
+                            LOGGER.warning("Session refresh skipped or failed, continuing with update")
+                    except Exception as refresh_err:
+                        LOGGER.warning("Failed to refresh session: %s", str(refresh_err))
 
-            # Log errors if any occurred
-            if errors:
-                LOGGER.error("Errors during data update: %s", errors)
+                # Initialize with empty lists for each rule type
+                rules_data: Dict[str, List[Any]] = {
+                    "firewall_policies": [],
+                    "traffic_rules": [],
+                    "port_forwards": [],
+                    "traffic_routes": [],
+                    "firewall_zones": [],
+                    "wlans": [],
+                    "legacy_firewall_rules": [],
+                    "qos_rules": [],
+                    "vpn_clients": [],
+                    "vpn_servers": [],
+                }
+
+                # Store the previous data to detect deletions and protect against API failures
+                previous_data = self.data.copy() if self.data else {}
+
+                # Check if we're rate limited before proceeding
+                if hasattr(self.api, "_rate_limited") and self.api._rate_limited:
+                    current_time = asyncio.get_event_loop().time()
+                    if current_time < getattr(self.api, "_rate_limit_until", 0):
+                        # If rate limited, return last good data and don't attempt API calls
+                        LOGGER.warning(
+                            "Rate limit in effect. Skipping update and returning last good data. "
+                            "This prevents excessive API calls during rate limiting."
+                        )
+                        if self._last_successful_data:
+                            return self._last_successful_data
+                        else:
+                            return rules_data
+
+                # Clear any caches before fetching to ensure we get fresh data
+                await self.api.clear_cache()
+
+                LOGGER.debug("Beginning rule data collection with fresh cache")
+
+                # Periodically force a cleanup of stale entities (once per hour)
+                force_cleanup_interval = 3600  # seconds
+                last_cleanup = getattr(self, "_last_entity_cleanup", 0)
+                if current_time - last_cleanup > force_cleanup_interval:
+                    setattr(self, "_force_cleanup", True)
+                    setattr(self, "_last_entity_cleanup", current_time)
+
+                # Add delay between API calls to avoid rate limiting
+                api_call_delay = 1.0  # seconds
+
+                # Track authentication failures during the update
+                auth_failure_during_update = False
+
+                # Try a core API call first to detect auth issues early
+                try:
+                    # First get port forwards - CRITICAL to check auth early but also preserve during auth failures
+                    port_forwards_success = await self._update_port_forwards_in_dict(rules_data)
+                    if not port_forwards_success:
+                        error_msg = getattr(self.api, "_last_error_message", "")
+                        if error_msg and ("401 Unauthorized" in error_msg or "403 Forbidden" in error_msg):
+                            auth_failure_during_update = True
+                            LOGGER.warning("Authentication failure detected during initial fetch: %s", error_msg)
+                            # Trigger auth recovery but continue trying other endpoints
+                            if hasattr(self.api, "handle_auth_failure"):
+                                recovery_task = asyncio.create_task(self.api.handle_auth_failure(error_msg))
+
+                            # Preserve previous port forwards data if available
+                            if previous_data and "port_forwards" in previous_data and previous_data["port_forwards"]:
+                                LOGGER.info("Preserving previous port forwards data during authentication failure")
+                                rules_data["port_forwards"] = previous_data["port_forwards"]
+                except Exception as err:
+                    LOGGER.error("Error in initial API call: %s", str(err))
+
+                await asyncio.sleep(api_call_delay)
+
+                # Then firewall policies
+                await self._update_firewall_policies_in_dict(rules_data)
+                await asyncio.sleep(api_call_delay)
+
+                # Then traffic routes
+                await self._update_traffic_routes_in_dict(rules_data)
+                await asyncio.sleep(api_call_delay)
+
+                # Then firewall zones
+                await self._update_firewall_zones_in_dict(rules_data)
+                await asyncio.sleep(api_call_delay)
+
+                # Then WLANs
+                await self._update_wlans_in_dict(rules_data)
+                await asyncio.sleep(api_call_delay)
+
+                # Then traffic rules
+                await self._update_traffic_rules_in_dict(rules_data)
+                await asyncio.sleep(api_call_delay)
+
+                # Then legacy firewall rules
+                await self._update_legacy_firewall_rules_in_dict(rules_data)
+                await asyncio.sleep(api_call_delay)
+
+                # Then QoS rules
+                await self._update_qos_rules_in_dict(rules_data)
+                await asyncio.sleep(api_call_delay)
                 
-            # Mark that we now have data, even if some pieces failed
-            if result:
-                self._has_data = True
+                # Then VPN clients
+                await self._update_vpn_clients_in_dict(rules_data)
+                await asyncio.sleep(api_call_delay)
                 
-            return result
-            
-        except Exception as exception:
-            LOGGER.exception("Error updating from UniFi Network: %s", exception)
-            return self.data or {}  # Return last data on error
-        finally:
-            self._update_in_progress = False
+                # Then VPN servers
+                await self._update_vpn_servers_in_dict(rules_data)
+
+                # Verify the data is valid - check if we have at least some data in key categories
+                # This helps prevent entity removal during temporary API errors
+                data_valid = (
+                    len(rules_data["firewall_policies"]) > 0 or 
+                    len(rules_data["traffic_rules"]) > 0 or
+                    len(rules_data["port_forwards"]) > 0 or
+                    len(rules_data["qos_rules"]) > 0 or
+                    len(rules_data["traffic_routes"]) > 0 or
+                    len(rules_data["legacy_firewall_rules"]) > 0
+                )
+
+                # Special handling for authentication failures detected during update
+                if auth_failure_during_update:
+                    LOGGER.warning("Authentication issues detected during update - preserving existing data")
+                    # If authentication failures occurred, preserve previous data for key categories
+                    for key in ["port_forwards", "firewall_policies", "traffic_rules", "traffic_routes"]:
+                        if not rules_data[key] and previous_data and key in previous_data and previous_data[key]:
+                            LOGGER.info(f"Preserving previous {key} data due to authentication issues")
+                            rules_data[key] = previous_data[key]
+
+                # Check any API responses for auth errors
+                api_error_message = getattr(self.api, "_last_error_message", "")
+                if api_error_message and ("401 Unauthorized" in api_error_message or "403 Forbidden" in api_error_message):
+                    LOGGER.warning("Authentication error in API response: %s", api_error_message)
+                    auth_failure_during_update = True
+
+                    # Notify entities about auth failure
+                    async_dispatcher_send(self.hass, f"{DOMAIN}_auth_failure")
+
+                # If we get no data but had data before, likely a temporary API issue
+                if not data_valid and previous_data and any(
+                    len(previous_data.get(key, [])) > 0 
+                    for key in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes"]
+                ):
+                    # We're in a potential error state
+                    self._consecutive_errors += 1
+                    LOGGER.warning(
+                        "No valid rule data received but had previous data. "
+                        "Likely a temporary API issue (attempt %d).", 
+                        self._consecutive_errors
+                    )
+
+                    # If this is a persistent issue (3+ consecutive failures)
+                    if self._consecutive_errors >= 3:
+                        if not self._in_error_state:
+                            LOGGER.error(
+                                "Multiple consecutive empty data responses. "
+                                "API may be experiencing issues. Using last valid data."
+                            )
+                            self._in_error_state = True
+
+                        # Return last known good data instead of empty data
+                        if self._last_successful_data:
+                            LOGGER.info("Using cached data from last successful update")
+                            return self._last_successful_data
+
+                    # Try forcing a session refresh on error - mark authentication in progress
+                    self._authentication_in_progress = True
+                    try:
+                        LOGGER.info("Forcing session refresh due to API data issue")
+                        await self.api.refresh_session(force=True)
+                    except Exception as session_err:
+                        LOGGER.error("Failed to refresh session during error recovery: %s", session_err)
+                    finally:
+                        self._authentication_in_progress = False
+
+                    # If we have previous data and this is likely a temporary failure, return previous data
+                    if previous_data:
+                        LOGGER.info("Returning previous data during API issue")
+                        return previous_data
+
+                    # Otherwise, raise an error
+                    raise UpdateFailed("Failed to get any valid rule data")
+
+                # If we got here with valid data, reset error counters
+                if data_valid:
+                    if self._consecutive_errors > 0:
+                        LOGGER.info("Recovered from API data issue after %d attempts", self._consecutive_errors)
+                    self._consecutive_errors = 0
+                    self._in_error_state = False
+                    self._last_successful_data = rules_data.copy()
+
+                    # If we previously had auth issues but now have valid data, signal recovery
+                    if auth_failure_during_update:
+                        LOGGER.info("Successfully recovered from authentication issues")
+                        async_dispatcher_send(self.hass, f"{DOMAIN}_auth_restored")
+
+                    # Mark initial update as done AFTER first successful processing and BEFORE checks
+                    if not self._initial_update_done:
+                        self._initial_update_done = True
+
+                    # Perform checks only AFTER the initial update is marked done
+                    if self._initial_update_done:
+                        # --- Check for DELETED Entities ---
+                        self._check_for_deleted_rules(rules_data)
+
+                        # --- Discover and Add NEW Entities --- 
+                        await self._discover_and_add_new_entities(rules_data)
+
+                    # --- Update Internal Collections --- 
+                    self.port_forwards = rules_data.get("port_forwards", [])
+                    self.traffic_routes = rules_data.get("traffic_routes", [])
+                    self.firewall_policies = rules_data.get("firewall_policies", [])
+                    self.traffic_rules = rules_data.get("traffic_rules", [])
+                    self.legacy_firewall_rules = rules_data.get("legacy_firewall_rules", [])
+                    self.wlans = rules_data.get("wlans", [])
+                    self.firewall_zones = rules_data.get("firewall_zones", [])
+                    self.qos_rules = rules_data.get("qos_rules", [])
+                    self.vpn_clients = rules_data.get("vpn_clients", [])
+                    self.vpn_servers = rules_data.get("vpn_servers", [])
+
+                    LOGGER.info("Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d, QoS Rules=%d, VPN Clients=%d, VPN Servers=%d", 
+                               len(self.port_forwards),
+                               len(self.traffic_routes),
+                               len(self.firewall_policies),
+                               len(self.traffic_rules),
+                               len(self.legacy_firewall_rules),
+                               len(self.wlans),
+                               len(self.qos_rules),
+                               len(self.vpn_clients),
+                               len(self.vpn_servers))
+
+                return rules_data
+
+            except Exception as err:
+                LOGGER.error("Error updating coordinator data: %s", err)
+
+                # Check if this is an authentication error
+                auth_error = False
+                error_str = str(err).lower()
+                if "401 unauthorized" in error_str or "403 forbidden" in error_str:
+                    auth_error = True
+                    self._auth_failures += 1
+                    self._authentication_in_progress = True
+                    try:
+                        LOGGER.warning("Authentication failure #%d during data update", self._auth_failures)
+
+                        # Signal auth failure to entities
+                        async_dispatcher_send(self.hass, f"{DOMAIN}_auth_failure")
+
+                        # Try to refresh the session if we haven't exceeded max failures
+                        if self._auth_failures < self._max_auth_failures:
+                            LOGGER.info("Attempting to refresh authentication session")
+                            try:
+                                await self.api.refresh_session(force=True)
+                                # If we succeeded in refreshing, notify components
+                                async_dispatcher_send(self.hass, f"{DOMAIN}_auth_restored")
+                                # Return the previous data
+                                if self.data:
+                                    return self.data
+                            except Exception as refresh_err:
+                                LOGGER.error("Failed to refresh session: %s", refresh_err)
+                    finally:
+                        self._authentication_in_progress = False
+
+                # Return previous data during errors if available to prevent entity flickering
+                if self.data:
+                    LOGGER.info("Returning previous data during error")
+                    return self.data
+
+                raise UpdateFailed(f"Error updating data: {err}")
 
     def _check_for_deleted_rules(self, new_data: Dict[str, List[Any]]) -> None:
         """Check for rules previously known but not in the new data, and trigger their removal."""
@@ -336,6 +451,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             "qos_rules",
             "wlans",
             "vpn_clients",
+            "vpn_servers",
         ]
         
         for rule_type in all_rule_sources_types:
@@ -477,6 +593,10 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         """Update VPN clients in the given data dictionary."""
         await self._update_rule_type_in_dict(data, "vpn_clients", self.api.get_vpn_clients)
 
+    async def _update_vpn_servers_in_dict(self, data: Dict[str, List[Any]]) -> None:
+        """Update VPN servers in the given data dictionary."""
+        await self._update_rule_type_in_dict(data, "vpn_servers", self.api.get_vpn_servers)
+
     async def _update_rule_type(self, rule_type: str, fetch_method: Callable) -> None:
         """Update a specific rule type in self.data.
         
@@ -584,7 +704,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
 
     @callback
     def _handle_websocket_message(self, message: dict[str, Any]) -> None:
-        """Handle incoming websocket message."""
+        """Handle a message from the WebSocket connection."""
         try:
             if not message:
                 return
@@ -593,169 +713,180 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             meta = message.get("meta", {})
             msg_type = meta.get("message", "")
             msg_data = message.get("data", {})
-            
-            # Log the message for debugging to keep full context
-            log_websocket("Rule event received: %s - %s", 
-                       msg_type, str(message)[:150] + "..." if len(str(message)) > 150 else str(message))
-            
-            # Device state changes don't require a full refresh
-            if "device" in msg_type.lower() and "state" in str(message).lower():
-                # Check if this is just a state update, not a configuration change
-                if "state" in str(message).lower():
-                    state_value = None
-                    if isinstance(msg_data, list) and len(msg_data) > 0 and "state" in msg_data[0]:
-                        state_value = msg_data[0].get("state")
-                        log_websocket("Detected state change in %s: %s", msg_type, state_value)
-                        # State updates don't need a full refresh
-                        return
-            
-            # Define rule type-specific keywords to help identify relevant events
-            rule_type_keywords = {
-                "firewall_policies": ["firewall", "policy", "allow", "deny"],
-                "traffic_rules": ["traffic", "rule"],
-                "port_forwards": ["port", "forward", "nat"],
-                "traffic_routes": ["route", "traffic"],
-                "legacy_firewall_rules": ["firewall", "rule", "allow", "deny"],
-                "qos_rules": ["qos", "quality", "service"],
-                "vpn_clients": ["vpn", "client"],
-            }
-            
-            # Check if this message might relate to rule changes
-            should_refresh = False
-            refresh_reason = None
-            rule_type_affected = None
-            
-            # Configuration changes and provisioning often relate to rule updates
-            if "cfgversion" in str(message).lower() or "provisioned" in str(message).lower():
-                should_refresh = True
-                refresh_reason = "Configuration version change detected"
-            
-            # Direct rule-related events
-            elif any(word in msg_type.lower() for word in ["firewall", "rule", "policy", "route", "forward", "qos"]):
-                should_refresh = True
-                refresh_reason = f"Rule-related event type: {msg_type}"
                 
-                # Try to determine the specific rule type affected
-                for rule_type, keywords in rule_type_keywords.items():
-                    if any(keyword in msg_type.lower() for keyword in keywords):
-                        rule_type_affected = rule_type
-                        break
+            # Use string representation of message to quickly determine the message type
+            message_str = str(message).lower()
             
-            # General CRUD operations that might indicate rule changes
-            elif any(op in msg_type.lower() for op in ["add", "delete", "update", "remove"]):
-                # Check if the operation relates to any rule types
-                message_str = str(message).lower()
+            # Process delete events first
+            if "delete" in message_str and ("event" in message or "events" in message_str):
+                # This looks like a deletion event, check for IDs being removed
+                LOGGER.debug("WebSocket deletion event: %s", message)
                 
-                # Special handling for port forwards vs device port tables
-                if "port" in message_str:
-                    # Check if this is a device port_table update (which is distinct from port forwards)
+                # Attempt to match deletion events to entities
+                pass
+            
+            # Check if any key event data exists (log even if we don't process it)
+            if any(key in message_str for key in ["rule", "policy", "route", "forward", "nat", "traffic", "port"]):
+                # These keywords might indicate a rule-related event
+                LOGGER.debug("WebSocket rule event: %s", message)
+                
+                # Map keywords to rule types
+                rule_type_keywords = {
+                    "firewall_policies": ["policy", "security", "firewall"],
+                    "traffic_rules": ["traffic", "traffic_rules"],
+                    "port_forwards": ["port", "forward", "nat"],
+                    "traffic_routes": ["route", "traffic"],
+                    "legacy_firewall_rules": ["firewall", "rule", "allow", "deny"],
+                    "qos_rules": ["qos", "quality", "service"],
+                    "vpn_clients": ["vpn", "client"],
+                    "vpn_servers": ["vpn", "server"],
+                }
+                
+                # Check if this message might relate to rule changes
+                should_refresh = False
+                refresh_reason = None
+                rule_type_affected = None
+                
+                # Configuration changes and provisioning often relate to rule updates
+                if "cfgversion" in str(message).lower() or "provisioned" in str(message).lower():
+                    should_refresh = True
+                    refresh_reason = "Configuration version change detected"
+                
+                # Direct rule-related events
+                elif any(word in msg_type.lower() for word in ["firewall", "rule", "policy", "route", "forward", "qos"]):
+                    should_refresh = True
+                    refresh_reason = f"Rule-related event type: {msg_type}"
+                    
+                    # Try to determine the specific rule type affected
+                    for rule_type, keywords in rule_type_keywords.items():
+                        if any(keyword in msg_type.lower() for keyword in keywords):
+                            rule_type_affected = rule_type
+                            break
+                
+                # General CRUD operations that might indicate rule changes
+                elif any(op in msg_type.lower() for op in ["add", "delete", "update", "remove"]):
+                    # Check if the operation relates to any rule types
+                    message_str = str(message).lower()
+                    
+                    # Special handling for port forwards vs device port tables
+                    if "port" in message_str:
+                        # Check if this is a device port_table update (which is distinct from port forwards)
+                        if "port_table" in message_str and not any(kw in message_str for kw in ["port_forward", "portforward", "nat"]):
+                            # Skip false positive port_table updates that aren't related to port forwarding
+                            log_websocket("Skipping CRUD operation for port_table (not related to port forwards)")
+                            return
+                    
+                    for rule_type, keywords in rule_type_keywords.items():
+                        if any(keyword in message_str for keyword in keywords):
+                            # For port_forwards, require more specific keywords to avoid false positives
+                            if rule_type == "port_forwards" and not any(kw in message_str for kw in ["port_forward", "portforward", "nat"]):
+                                continue
+                                
+                            should_refresh = True
+                            rule_type_affected = rule_type
+                            refresh_reason = f"CRUD operation detected for {rule_type}"
+                            break
+                
+                # Device updates - only process if they contain config changes
+                elif "device" in msg_type.lower() and "update" in msg_type.lower():
+                    # Only refresh for specific configuration changes
+                    message_str = str(message).lower()
+                    config_keywords = ["config", "firewall", "rule", "policy", "route", "qos"]
+                    
+                    # Skip updating for commonly noisy device state update patterns
+                    if isinstance(msg_data, list) and len(msg_data) == 1:
+                        # Skip purely device state updates - these don't affect configurations
+                        if set(msg_data[0].keys()).issubset({"state", "upgrade_state", "provisioned_at"}):
+                            log_websocket("Skipping refresh for routine device state update: %s", 
+                                          set(msg_data[0].keys()))
+                            return
+                    
+                    # Check if this is specifically a port_table update (which is not related to port forwards)
                     if "port_table" in message_str and not any(kw in message_str for kw in ["port_forward", "portforward", "nat"]):
-                        # Skip false positive port_table updates that aren't related to port forwarding
-                        log_websocket("Skipping CRUD operation for port_table (not related to port forwards)")
+                        # Skip device updates that only contain port_table information without port forwarding references
+                        log_websocket("Skipping refresh for device update with port_table (not related to port forwards)")
                         return
-                
-                for rule_type, keywords in rule_type_keywords.items():
-                    if any(keyword in message_str for keyword in keywords):
-                        # For port_forwards, require more specific keywords to avoid false positives
-                        if rule_type == "port_forwards" and not any(kw in message_str for kw in ["port_forward", "portforward", "nat"]):
-                            continue
-                            
+                    
+                    # Check if this contains configuration version changes (accept these)
+                    if "cfgversion" in message_str:
                         should_refresh = True
-                        rule_type_affected = rule_type
-                        refresh_reason = f"CRUD operation detected for {rule_type}"
-                        break
-            
-            # Device updates - only process if they contain config changes
-            elif "device" in msg_type.lower() and "update" in msg_type.lower():
-                # Only refresh for specific configuration changes
-                message_str = str(message).lower()
-                config_keywords = ["config", "firewall", "rule", "policy", "route", "qos"]
-                
-                # Skip updating for commonly noisy device state update patterns
-                if isinstance(msg_data, list) and len(msg_data) == 1:
-                    # Skip purely device state updates - these don't affect configurations
-                    if set(msg_data[0].keys()).issubset({"state", "upgrade_state", "provisioned_at"}):
-                        log_websocket("Skipping refresh for routine device state update: %s", 
-                                      set(msg_data[0].keys()))
+                        refresh_reason = "Device update with configuration version change"
+                    # Otherwise, be more selective about what triggers refreshes
+                    elif any(keyword in message_str for keyword in config_keywords):
+                        should_refresh = True
+                        refresh_reason = "Device update with potential rule changes"
+                    else:
+                        # Not all device updates need a refresh - skip ones without config changes
+                        log_websocket("Skipping refresh for device update without rule-related changes")
                         return
                 
-                # Check if this is specifically a port_table update (which is not related to port forwards)
-                if "port_table" in message_str and not any(kw in message_str for kw in ["port_forward", "portforward", "nat"]):
-                    # Skip device updates that only contain port_table information without port forwarding references
-                    log_websocket("Skipping refresh for device update with port_table (not related to port forwards)")
-                    return
-                
-                # Check if this contains configuration version changes (accept these)
-                if "cfgversion" in message_str:
+                # Check for QoS-specific event patterns that might not be caught by other checks
+                if not should_refresh and "qos" in str(message).lower():
                     should_refresh = True
-                    refresh_reason = "Device update with configuration version change"
-                # Otherwise, be more selective about what triggers refreshes
-                elif any(keyword in message_str for keyword in config_keywords):
-                    should_refresh = True
-                    refresh_reason = "Device update with potential rule changes"
-                else:
-                    # Not all device updates need a refresh - skip ones without config changes
-                    log_websocket("Skipping refresh for device update without rule-related changes")
-                    return
-            
-            # Check for QoS-specific event patterns that might not be caught by other checks
-            if not should_refresh and "qos" in str(message).lower():
-                should_refresh = True
-                rule_type_affected = "qos_rules"
-                refresh_reason = "QoS-related event detected"
-                log_websocket("QoS-specific event detected: %s", msg_type)
-            
-            if should_refresh:
-                # Use a semaphore to prevent multiple concurrent refreshes
-                if not hasattr(self, '_refresh_semaphore'):
-                    self._refresh_semaphore = asyncio.Semaphore(1)
+                    rule_type_affected = "qos_rules"
+                    refresh_reason = "QoS-related event detected"
+                    log_websocket("QoS-specific event detected: %s", msg_type)
                 
-                # Only proceed if we can acquire the semaphore
-                if self._refresh_semaphore.locked():
-                    log_websocket("Skipping refresh as one is already in progress")
-                    return
-                
-                # Should prevent rapid-fire refreshes during switch operations
-                self._min_ws_refresh_interval = 1.5
-                
-                current_time = time.time()
-                if current_time - self._last_ws_refresh < self._min_ws_refresh_interval:
-                    log_websocket(
-                        "Debouncing refresh request (last refresh was %0.1f seconds ago)",
-                        current_time - self._last_ws_refresh
-                    )
+                if should_refresh:
+                    # Use a semaphore to prevent multiple concurrent refreshes
+                    if not hasattr(self, '_refresh_semaphore'):
+                        self._refresh_semaphore = asyncio.Semaphore(1)
                     
-                    # Cancel any pending refresh task
-                    if self._ws_refresh_task and not self._ws_refresh_task.done():
-                        self._ws_refresh_task.cancel()
+                    # Only proceed if we can acquire the semaphore
+                    if self._refresh_semaphore.locked():
+                        log_websocket("Skipping refresh as one is already in progress")
+                        return
                     
-                    # Schedule a delayed refresh if one isn't already pending
-                    if not self._pending_ws_refresh:
-                        self._pending_ws_refresh = True
-                        delay = self._min_ws_refresh_interval - (current_time - self._last_ws_refresh)
+                    # Should prevent rapid-fire refreshes during switch operations
+                    if not hasattr(self, '_min_ws_refresh_interval'):
+                        self._min_ws_refresh_interval = 1.5
+                    
+                    if not hasattr(self, '_last_ws_refresh'):
+                        self._last_ws_refresh = 0
+                    
+                    if not hasattr(self, '_pending_ws_refresh'):
+                        self._pending_ws_refresh = False
+                    
+                    if not hasattr(self, '_ws_refresh_task'):
+                        self._ws_refresh_task = None
+                    
+                    current_time = time.time()
+                    if current_time - self._last_ws_refresh < self._min_ws_refresh_interval:
+                        log_websocket(
+                            "Debouncing refresh request (last refresh was %0.1f seconds ago)",
+                            current_time - self._last_ws_refresh
+                        )
                         
-                        async def delayed_refresh():
-                            await asyncio.sleep(delay)
-                            self._pending_ws_refresh = False
-                            log_websocket("Executing delayed refresh after debounce period")
-                            # Use the standard refresh workflow for all rule types
-                            await self._controlled_refresh_wrapper()
+                        # Cancel any pending refresh task
+                        if self._ws_refresh_task and not self._ws_refresh_task.done():
+                            self._ws_refresh_task.cancel()
                         
-                        self._ws_refresh_task = self.hass.async_create_task(delayed_refresh())
-                    return
-                
-                # Update last refresh timestamp
-                self._last_ws_refresh = current_time
-                
-                log_websocket("Refreshing data due to: %s (rule type: %s)", 
-                             refresh_reason, rule_type_affected or "unknown")
-                
-                # Use the standard refresh workflow for all rule types
-                self.hass.async_create_task(self._controlled_refresh_wrapper())
-            elif DEBUG_WEBSOCKET:
-                # Only log non-refreshing messages when debug is enabled
-                log_websocket("No refresh triggered for message type: %s", msg_type)
-
+                        # Schedule a delayed refresh if one isn't already pending
+                        if not self._pending_ws_refresh:
+                            self._pending_ws_refresh = True
+                            delay = self._min_ws_refresh_interval - (current_time - self._last_ws_refresh)
+                            
+                            async def delayed_refresh():
+                                await asyncio.sleep(delay)
+                                self._pending_ws_refresh = False
+                                log_websocket("Executing delayed refresh after debounce period")
+                                # Use the standard refresh workflow for all rule types
+                                await self._controlled_refresh_wrapper()
+                            
+                            self._ws_refresh_task = self.hass.async_create_task(delayed_refresh())
+                        return
+                    
+                    # Update last refresh timestamp
+                    self._last_ws_refresh = current_time
+                    
+                    log_websocket("Refreshing data due to: %s (rule type: %s)", 
+                                 refresh_reason, rule_type_affected or "unknown")
+                    
+                    # Use the standard refresh workflow for all rule types
+                    self.hass.async_create_task(self._controlled_refresh_wrapper())
+                elif DEBUG_WEBSOCKET:
+                    # Only log non-refreshing messages when debug is enabled
+                    log_websocket("No refresh triggered for message type: %s", msg_type)
         except Exception as err:
             LOGGER.error("Error handling websocket message: %s", err)
     
@@ -882,7 +1013,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
         await self._process_entity_queue()
 
     async def process_new_entities(self) -> None:
-        """Check for new entities in all rule types and queue them for creation."""
+        """Process and create entities that were discovered."""
         LOGGER.debug("Starting process_new_entities check")
         
         # Create sets of currently tracked rule IDs for comparison
@@ -928,15 +1059,21 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
             if get_rule_id(rule) not in self.known_unique_ids and get_rule_id(rule) is not None
         }
         
+        # Add set for VPN servers
+        vpn_servers_to_add = {
+            get_rule_id(rule) for rule in self.vpn_servers
+            if get_rule_id(rule) not in self.known_unique_ids and get_rule_id(rule) is not None
+        }
+        
         # Log counts of new rules detected
         if (port_forwards_to_add or routes_to_add or policies_to_add or 
-            traffic_rules_to_add or firewall_rules_to_add or wlans_to_add or qos_rules_to_add or vpn_clients_to_add):
+            traffic_rules_to_add or firewall_rules_to_add or wlans_to_add or qos_rules_to_add or vpn_clients_to_add or vpn_servers_to_add):
             LOGGER.debug(
                 "Detected new rules - Port Forwards: %d, Traffic Routes: %d, "
-                "Firewall Policies: %d, Traffic Rules: %d, Legacy Firewall Rules: %d, WLANs: %d, QoS Rules: %d, VPN Clients: %d",
+                "Firewall Policies: %d, Traffic Rules: %d, Legacy Firewall Rules: %d, WLANs: %d, QoS Rules: %d, VPN Clients: %d, VPN Servers: %d",
                 len(port_forwards_to_add), len(routes_to_add), len(policies_to_add),
                 len(traffic_rules_to_add), len(firewall_rules_to_add), len(wlans_to_add),
-                len(qos_rules_to_add), len(vpn_clients_to_add)
+                len(qos_rules_to_add), len(vpn_clients_to_add), len(vpn_servers_to_add)
             )
         
         # Queue new entities for creation
@@ -1060,68 +1197,82 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                 else:
                     LOGGER.error("Cannot queue QoS rule without id attribute")
 
-        # Add section for VPN clients
+        # Process VPN clients
         for rule in self.vpn_clients:
-            rule_id = get_rule_id(rule)
-            LOGGER.debug("Processing VPN client with ID: %s, tracked: %s, in add set: %s", 
-                       rule_id, 
-                       rule_id in self.known_unique_ids,
-                       rule_id in vpn_clients_to_add)
-            if rule_id in vpn_clients_to_add:
-                LOGGER.debug(
-                    "Queueing new VPN client for creation: %s (class: %s)",
-                    rule_id, 
-                    type(rule).__name__
-                )
-                # Ensure rule is valid before queueing
-                if hasattr(rule, 'id'):
-                    LOGGER.info("Adding VPN client to entity creation queue: %s", rule_id)
+            try:
+                rule_id = get_rule_id(rule)
+                # Skip if already known or not in our list to add
+                if not rule_id or (
+                    rule_id not in vpn_clients_to_add):
+                    continue
+                    
+                if rule_id in vpn_clients_to_add:
+                    LOGGER.debug("Adding new VPN client entity: %s", rule_id)
                     self._entity_creation_queue.append({
+                        "rule_data": rule,
                         "rule_type": "vpn_clients",
-                        "rule": rule
+                        "entity_class": None,  # Will be determined during creation
                     })
-                    self.known_unique_ids.add(rule_id)
-                else:
-                    LOGGER.error("Cannot queue VPN client without id attribute")
+            except Exception as err:
+                LOGGER.exception("Error processing VPN client for entity creation: %s", err)
+                
+        # Process VPN servers
+        for rule in self.vpn_servers:
+            try:
+                rule_id = get_rule_id(rule)
+                # Skip if already known or not in our list to add
+                if not rule_id or (
+                    rule_id not in vpn_servers_to_add):
+                    continue
+                    
+                if rule_id in vpn_servers_to_add:
+                    LOGGER.debug("Adding new VPN server entity: %s", rule_id)
+                    self._entity_creation_queue.append({
+                        "rule_data": rule,
+                        "rule_type": "vpn_servers",
+                        "entity_class": None,  # Will be determined during creation
+                    })
+            except Exception as err:
+                LOGGER.exception("Error processing VPN server for entity creation: %s", err)
 
     async def _discover_and_add_new_entities(self, new_data: Dict[str, List[Any]]) -> None:
         """Discover new rules from fetched data and dynamically add corresponding entities."""
         if not self.async_add_entities_callback:
-            LOGGER.debug("Coordinator: async_add_entities_callback not set, skipping dynamic entity creation.")
+            LOGGER.warning("Cannot add entities: callback not set")
             return
-
-        LOGGER.debug("Coordinator: Starting discovery of new entities.")
-        potential_entities_data = {} # Map: unique_id -> {rule_data, rule_type, entity_class}
-        all_current_unique_ids = set() # Keep track of all IDs found in this run
-
-        # Import necessary entity classes here to avoid circular imports at module level
-        from .switch import (
+        
+        # Import local reference to the entities to avoid circular imports
+        from .entities.switches import (
             UnifiPortForwardSwitch,
-            UnifiTrafficRouteSwitch,
-            UnifiFirewallPolicySwitch,
             UnifiTrafficRuleSwitch,
+            UnifiFirewallPolicySwitch,
+            UnifiTrafficRouteSwitch,
             UnifiLegacyFirewallRuleSwitch,
             UnifiQoSRuleSwitch,
             UnifiWlanSwitch,
             UnifiTrafficRouteKillSwitch,
-            UnifiVPNClientSwitch
+            UnifiVPNClientSwitch,
+            UnifiVPNServerSwitch
         )
-        # Use a relative import for helpers
-        from .helpers.rule import get_rule_id, get_child_unique_id 
 
-        all_rule_source_configs = [
+        # Define mappings from rule types to entities
+        rule_type_entity_map = [
             ("port_forwards", UnifiPortForwardSwitch),
-            ("traffic_routes", UnifiTrafficRouteSwitch),
-            ("firewall_policies", UnifiFirewallPolicySwitch),
             ("traffic_rules", UnifiTrafficRuleSwitch),
-            ("legacy_firewall_rules", UnifiLegacyFirewallRuleSwitch),
+            ("firewall_policies", UnifiFirewallPolicySwitch),
+            ("traffic_routes", UnifiTrafficRouteSwitch),
+            ("legacy_firewall_rules", UnifiLegacyFirewallRuleSwitch), 
             ("qos_rules", UnifiQoSRuleSwitch),
             ("wlans", UnifiWlanSwitch),
             ("vpn_clients", UnifiVPNClientSwitch),
+            ("vpn_servers", UnifiVPNServerSwitch),
         ]
 
         # Gather potential entities from the NEW data
-        for rule_type_key, entity_class in all_rule_source_configs:
+        potential_entities_data = {} # Map: unique_id -> {rule_data, rule_type, entity_class}
+        all_current_unique_ids = set() # Keep track of all IDs found in this run
+
+        for rule_type_key, entity_class in rule_type_entity_map:
             rules = new_data.get(rule_type_key, []) # Use new_data here
             if not rules:
                 continue
@@ -1240,3 +1391,34 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator[Dict[str, List[Any]]]):
                  LOGGER.error("Coordinator: Failed to dynamically add entities: %s", add_err)
         else:
              LOGGER.debug("Coordinator: No new entities to add dynamically in this cycle.")
+
+    async def _async_get_vpn_clients(self) -> List[VPNConfig]:
+        """Get VPN clients from the API."""
+        try:
+            result = await self.api.get_vpn_clients()
+            LOGGER.debug("Fetched %d VPN clients", len(result))
+            
+            # Update the internal list
+            self.vpn_clients = result
+            return result
+        except Exception as err:
+            LOGGER.error("Failed to fetch VPN clients: %s", err)
+            self._api_errors += 1
+            raise
+
+    async def _async_get_vpn_servers(self) -> List[VPNConfig]:
+        """Get VPN servers from the API."""
+        try:
+            result = await self.api.get_vpn_servers()
+            LOGGER.debug("Fetched %d VPN servers", len(result))
+            
+            # Update the internal list
+            self.vpn_servers = result
+            return result
+        except Exception as err:
+            LOGGER.error("Failed to fetch VPN servers: %s", err)
+            self._api_errors += 1
+            raise
+
+# Add an alias for backward compatibility
+UnifiRuleUpdateCoordinator = UnifiCoordinator
