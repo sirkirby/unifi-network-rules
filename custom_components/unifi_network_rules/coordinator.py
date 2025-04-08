@@ -37,7 +37,7 @@ SCAN_INTERVAL = timedelta(seconds=60)
 class NeedsFetch(Exception):
     """Raised when a rule needs to be fetched again after a discovery."""
 
-class UnifiCoordinator(DataUpdateCoordinator):
+class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
     """UniFi Network Rules API Coordinator."""
 
     def __init__(
@@ -1419,6 +1419,3 @@ class UnifiCoordinator(DataUpdateCoordinator):
             LOGGER.error("Failed to fetch VPN servers: %s", err)
             self._api_errors += 1
             raise
-
-# Add an alias for backward compatibility
-UnifiRuleUpdateCoordinator = UnifiCoordinator
