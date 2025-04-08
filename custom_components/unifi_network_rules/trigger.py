@@ -10,7 +10,11 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.trigger import TriggerActionType, TriggerInfo, TriggerProtocol
 
 from .const import DOMAIN, LOGGER
-from .rule_template import RuleType
+
+# Rule types as constants
+RULE_TYPE_FIREWALL_POLICY = "policy"
+RULE_TYPE_TRAFFIC_ROUTE = "route"
+RULE_TYPE_PORT_FORWARD = "port_forward"
 
 # Trigger types
 TRIGGER_RULE_ENABLED = "rule_enabled"
@@ -26,9 +30,9 @@ WS_MSG_DPI = "dpi"
 
 # Mapping of websocket message types to rule types
 WS_MSG_TYPE_MAP = {
-    WS_MSG_FIREWALL: RuleType.FIREWALL_POLICY.value,
-    WS_MSG_PORT_FORWARD: RuleType.PORT_FORWARD.value,
-    WS_MSG_ROUTING: RuleType.TRAFFIC_ROUTE.value,
+    WS_MSG_FIREWALL: RULE_TYPE_FIREWALL_POLICY,
+    WS_MSG_PORT_FORWARD: RULE_TYPE_PORT_FORWARD,
+    WS_MSG_ROUTING: RULE_TYPE_TRAFFIC_ROUTE,
 }
 
 # Configuration schema
@@ -43,9 +47,9 @@ TRIGGER_SCHEMA = vol.Schema(
         ]),
         vol.Optional("rule_id"): cv.string,
         vol.Optional("rule_type"): vol.In([
-            RuleType.FIREWALL_POLICY.value,
-            RuleType.TRAFFIC_ROUTE.value,
-            RuleType.PORT_FORWARD.value,
+            RULE_TYPE_FIREWALL_POLICY,
+            RULE_TYPE_TRAFFIC_ROUTE,
+            RULE_TYPE_PORT_FORWARD,
         ]),
         vol.Optional("name_filter"): cv.string,
     }
