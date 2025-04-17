@@ -15,6 +15,7 @@ UniFi Network Rules is a custom integration for Home Assistant that integrates w
 ## Features
 
 - Switch entities for all rules, including firewall policies (zone-based firewall), traffic/firewall rules (non-zone-based firewall), forwarding rules, traffic routes.
+- VPN management including both client and server configurations for OpenVPN and WireGuard.
 - Service actions for full backup and restore of all rules that are managed by this integration.
 - Service actions for batch enabling and disabling rules by pattern matching rule names or IDs.
 - Service actions for deleting rules by ID.

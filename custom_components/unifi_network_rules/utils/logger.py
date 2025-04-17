@@ -23,7 +23,15 @@ def _is_debug_enabled() -> bool:
 
 def log_websocket(msg: str, *args: Any, **kwargs: Any) -> None:
     """Log websocket-related debug messages if websocket debugging is enabled."""
-    if LOG_WEBSOCKET or _is_debug_enabled():
+    # Check if the message contains indication that it's rule-related
+    is_rule_related = False
+    if "rule event" in msg.lower() or "rule message" in msg.lower() or "rule-related" in msg.lower():
+        is_rule_related = True
+    
+    # Always log rule events as INFO, use DEBUG for everything else
+    if is_rule_related:
+        LOGGER.info(f"[WEBSOCKET] {msg}", *args, **kwargs)
+    elif LOG_WEBSOCKET or _is_debug_enabled():
         LOGGER.debug(f"[WEBSOCKET] {msg}", *args, **kwargs)
 
 def log_api(msg: str, *args: Any, **kwargs: Any) -> None:

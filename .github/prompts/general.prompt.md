@@ -8,10 +8,13 @@
 - When designing a new feature, prefer elegant solutions using established best practices and patterns.
 - When fixing a problem or bug, avoid treating the symptop, look for the root cause.
 - Details matter, ensure to always preserve existing functionlity unless otherwise instructed.
+- KISS
 
 ## Notes
 
 - If a reference to the aiounifi library is needed or required, check for a local copy in the root /aiounifi
+- Changes preserving backwards compatibility may not be required, ask before assuming.
+- Avoid excessive code comments
 - Keep a rolling log of each change you make in a file called changelog.md
 
 ## Purpose
