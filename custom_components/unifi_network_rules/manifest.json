@@ -15,5 +15,5 @@
         "aiounifi>=82.0.0",
         "orjson>=3.8.0"
     ],
-    "version": "2.2.1-beta.2"
+    "version": "2.2.1"
 }
