@@ -9,7 +9,7 @@ import contextlib
 import re
 import copy
 
-from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription, PLATFORM_SCHEMA
+from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription, SwitchDeviceClass, PLATFORM_SCHEMA
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
@@ -343,9 +343,6 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         # Set default icon for all rule switches (can be overridden by subclasses)
         self._attr_icon = "mdi:toggle-switch"
         
-        # Set device class to outlet to force toggle/slider rendering instead of icon button
-        self._attr_device_class = "outlet"
-        
         # Set device info
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, coordinator.api.host)},
@@ -602,8 +599,8 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
 
     @property
     def assumed_state(self) -> bool:
-        """Return True as we're implementing optimistic state."""
-        return True
+        """Return False to get toggle slider UI instead of icon buttons."""
+        return False
 
     def _get_current_rule(self) -> Any | None:
         """Get current rule data from coordinator."""
