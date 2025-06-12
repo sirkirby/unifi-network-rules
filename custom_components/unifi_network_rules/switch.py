@@ -9,7 +9,7 @@ import contextlib
 import re
 import copy
 
-from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription, PLATFORM_SCHEMA
+from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription, SwitchDeviceClass, PLATFORM_SCHEMA
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
@@ -340,6 +340,9 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         # Set has_entity_name to False to ensure the entity name is shown in UI
         self._attr_has_entity_name = False
         
+        # Set default icon for all rule switches (can be overridden by subclasses)
+        self._attr_icon = "mdi:toggle-switch"
+        
         # Set device info
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, coordinator.api.host)},
@@ -596,8 +599,8 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
 
     @property
     def assumed_state(self) -> bool:
-        """Return True as we're implementing optimistic state."""
-        return True
+        """Return False to get toggle slider UI instead of icon buttons."""
+        return False
 
     def _get_current_rule(self) -> Any | None:
         """Get current rule data from coordinator."""
@@ -1094,7 +1097,8 @@ class UnifiPortForwardSwitch(UnifiRuleSwitch):
     ) -> None:
         """Initialize port forward switch."""
         super().__init__(coordinator, rule_data, rule_type, entry_id)
-        # Add any port-forward specific functionality here
+        # Set icon for port forward rules
+        self._attr_icon = "mdi:network-pos"
 
 class UnifiTrafficRouteSwitch(UnifiRuleSwitch):
     """Switch to enable/disable a UniFi traffic route rule."""
@@ -1108,7 +1112,8 @@ class UnifiTrafficRouteSwitch(UnifiRuleSwitch):
     ) -> None:
         """Initialize traffic route switch."""
         super().__init__(coordinator, rule_data, rule_type, entry_id)
-        # Add any traffic-route specific functionality here
+        # Set icon for traffic route rules
+        self._attr_icon = "mdi:directions-fork"
 
 class UnifiFirewallPolicySwitch(UnifiRuleSwitch):
     """Switch to enable/disable a UniFi firewall policy."""
@@ -1122,7 +1127,8 @@ class UnifiFirewallPolicySwitch(UnifiRuleSwitch):
     ) -> None:
         """Initialize firewall policy switch."""
         super().__init__(coordinator, rule_data, rule_type, entry_id)
-        # Add any firewall-policy specific functionality here
+        # Set icon for firewall policy rules
+        self._attr_icon = "mdi:shield-check"
 
 class UnifiTrafficRuleSwitch(UnifiRuleSwitch):
     """Switch to enable/disable a UniFi traffic rule."""
@@ -1136,7 +1142,8 @@ class UnifiTrafficRuleSwitch(UnifiRuleSwitch):
     ) -> None:
         """Initialize traffic rule switch."""
         super().__init__(coordinator, rule_data, rule_type, entry_id)
-        # Add any traffic-rule specific functionality here
+        # Set icon for traffic rules
+        self._attr_icon = "mdi:traffic-light"
 
 class UnifiLegacyFirewallRuleSwitch(UnifiRuleSwitch):
     """Switch to enable/disable a UniFi legacy firewall rule."""
@@ -1150,7 +1157,8 @@ class UnifiLegacyFirewallRuleSwitch(UnifiRuleSwitch):
     ) -> None:
         """Initialize legacy firewall rule switch."""
         super().__init__(coordinator, rule_data, rule_type, entry_id)
-        # Add any legacy-firewall specific functionality here
+        # Set icon for legacy firewall rules
+        self._attr_icon = "mdi:shield-outline"
 
 class UnifiWlanSwitch(UnifiRuleSwitch):
     """Switch to enable/disable a UniFi wireless network."""
@@ -1164,7 +1172,8 @@ class UnifiWlanSwitch(UnifiRuleSwitch):
     ) -> None:
         """Initialize WLAN switch."""
         super().__init__(coordinator, rule_data, rule_type, entry_id)
-        # Add any WLAN-specific functionality here
+        # Set icon for WLAN switches
+        self._attr_icon = "mdi:wifi"
 
 class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
     """Switch to enable/disable kill switch for a UniFi traffic route rule."""
@@ -1224,6 +1233,9 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
         # 5. Linking Information (Parent ID needed for lookups)
         self._linked_parent_id = original_rule_id # Store parent's unique_id
         self._linked_child_ids = set() # Kill switches have no children
+
+        # Set icon for kill switch
+        self._attr_icon = "mdi:shield-off"
 
         # Global tracking is now handled in base async_added_to_hass
 
@@ -1456,7 +1468,8 @@ class UnifiQoSRuleSwitch(UnifiRuleSwitch):
         LOGGER.info("Initializing QoS rule switch with data: %s (type: %s)", 
                   getattr(rule_data, "id", "unknown"), type(rule_data).__name__)
         super().__init__(coordinator, rule_data, rule_type, entry_id)
-        # Add any QoS-rule specific functionality here
+        # Set icon for QoS rules
+        self._attr_icon = "mdi:speedometer"
 
 class UnifiVPNClientSwitch(UnifiRuleSwitch):
     """Switch to enable/disable a UniFi VPN client."""
