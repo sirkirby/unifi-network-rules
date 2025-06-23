@@ -20,6 +20,7 @@ from aiounifi.models.traffic_rule import TrafficRule
 from aiounifi.models.port_forward import PortForward
 from aiounifi.models.firewall_zone import FirewallZone
 from aiounifi.models.wlan import Wlan
+from aiounifi.models.device import Device
 
 from .const import DOMAIN, LOGGER, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DEBUG_WEBSOCKET
 from .udm import UDMAPI
@@ -101,6 +102,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self.qos_rules: List[QoSRule] = []
         self.vpn_clients: List[VPNConfig] = []
         self.vpn_servers: List[VPNConfig] = []
+        self.devices: List[Device] = []  # For LED toggle switches
 
         # For dynamic entity creation
         self.async_add_entities_callback: AddEntitiesCallback | None = None
@@ -172,6 +174,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     "qos_rules": [],
                     "vpn_clients": [],
                     "vpn_servers": [],
+                    "devices": [],
                 }
 
                 # Store the previous data to detect deletions and protect against API failures
@@ -265,6 +268,10 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 
                 # Then VPN servers
                 await self._update_vpn_servers_in_dict(rules_data)
+                await asyncio.sleep(api_call_delay)
+                
+                # Then devices (for LED switches)
+                await self._update_devices_in_dict(rules_data)
 
                 # Verify the data is valid - check if we have at least some data in key categories
                 # This helps prevent entity removal during temporary API errors
@@ -376,8 +383,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     self.qos_rules = rules_data.get("qos_rules", [])
                     self.vpn_clients = rules_data.get("vpn_clients", [])
                     self.vpn_servers = rules_data.get("vpn_servers", [])
+                    self.devices = rules_data.get("devices", [])
 
-                    LOGGER.info("Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d, QoS Rules=%d, VPN Clients=%d, VPN Servers=%d", 
+                    LOGGER.info("Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d, QoS Rules=%d, VPN Clients=%d, VPN Servers=%d, Devices=%d", 
                                len(self.port_forwards),
                                len(self.traffic_routes),
                                len(self.firewall_policies),
@@ -386,7 +394,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                                len(self.wlans),
                                len(self.qos_rules),
                                len(self.vpn_clients),
-                               len(self.vpn_servers))
+                               len(self.vpn_servers),
+                               len(self.devices))
 
                 return rules_data
 
@@ -468,6 +477,15 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                                  all_current_unique_ids.add(kill_switch_id)
                      except Exception as e:
                           LOGGER.warning("Error getting ID during deletion check for %s: %s", rule_type, e)
+
+        # Special handling for device LED switches in deletion check
+        devices = new_data.get("devices", [])
+        for device in devices:
+            try:
+                device_unique_id = f"unr_device_{device.mac}_led"
+                all_current_unique_ids.add(device_unique_id)
+            except Exception as e:
+                LOGGER.warning("Error getting device ID during deletion check: %s", e)
 
         # Find IDs that are known but NOT in the current data
         deleted_unique_ids = current_known_ids - all_current_unique_ids
@@ -596,6 +614,64 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
     async def _update_vpn_servers_in_dict(self, data: Dict[str, List[Any]]) -> None:
         """Update VPN servers in the given data dictionary."""
         await self._update_rule_type_in_dict(data, "vpn_servers", self.api.get_vpn_servers)
+        
+    async def _update_devices_in_dict(self, data: Dict[str, List[Any]]) -> None:
+        """Update devices in the data dictionary."""
+        try:
+            LOGGER.info("Fetching devices for LED switches...")
+            
+            # Get LED states from the stat/device endpoint (has comprehensive device data including LED states)
+            led_states = await self.api.get_device_led_states()
+            LOGGER.info("Retrieved LED states for %d devices from stat/device", len(led_states))
+            
+            # Debug: Print LED states found
+            if led_states:
+                LOGGER.info("LED-capable devices found:")
+                for mac, led_info in led_states.items():
+                    LOGGER.info("  %s (%s): LED=%s, Model=%s", 
+                              led_info['name'], mac, led_info.get('led_override', 'unknown'), led_info['model'])
+            
+            # Create Device objects directly from the comprehensive LED states data
+            # This avoids the issue where v2 /device endpoint may not return all devices
+            led_capable_devices = []
+            for mac, led_info in led_states.items():
+                try:
+                    # Create a device data structure from the LED info
+                    device_data = {
+                        'mac': mac,
+                        '_id': led_info.get('_id', mac),  # Use _id if available, fallback to mac
+                        'device_id': led_info.get('_id', mac),   # Device ID field expected by Device class
+                        'name': led_info['name'],
+                        'model': led_info['model'],
+                        'type': led_info['type'],
+                        'is_access_point': led_info['is_access_point'],
+                        'led_override': led_info.get('led_override'),
+                        'led_override_color': led_info.get('led_override_color'),
+                        'led_override_color_brightness': led_info.get('led_override_color_brightness'),
+                        'state': led_info.get('state', 1),  # Device connection state
+                    }
+                    
+                    # Create Device object from this data
+                    device = Device(device_data)
+                    led_capable_devices.append(device)
+                    LOGGER.info("Created LED-capable device: %s (%s) - LED state: %s", 
+                              led_info['name'], mac, led_info.get('led_override', 'unknown'))
+                    
+                except Exception as device_err:
+                    LOGGER.warning("Error creating device object for %s (%s): %s", 
+                                 led_info.get('name', 'unknown'), mac, str(device_err))
+                    continue
+            
+            data["devices"] = led_capable_devices
+            self.devices = led_capable_devices
+            LOGGER.info("Updated %d LED-capable devices with current LED states", len(led_capable_devices))
+            
+        except Exception as err:
+            LOGGER.error("Failed to update devices: %s", str(err))
+            LOGGER.exception("Device update exception details:")
+            data["devices"] = []
+            if not hasattr(self, 'devices'):
+                self.devices = []
 
     async def _update_rule_type(self, rule_type: str, fetch_method: Callable) -> None:
         """Update a specific rule type in self.data.
@@ -1238,8 +1314,11 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
 
     async def _discover_and_add_new_entities(self, new_data: Dict[str, List[Any]]) -> None:
         """Discover new rules from fetched data and dynamically add corresponding entities."""
+        LOGGER.debug("Entity discovery called - callback set: %s, initial_update_done: %s", 
+                    bool(self.async_add_entities_callback), self._initial_update_done)
+        
         if not self.async_add_entities_callback:
-            LOGGER.warning("Cannot add entities: callback not set")
+            LOGGER.warning("Cannot add entities: callback not set (this is normal during initial setup)")
             return
         
         # Import local reference to the entities to avoid circular imports
@@ -1253,7 +1332,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             UnifiWlanSwitch,
             UnifiTrafficRouteKillSwitch,
             UnifiVPNClientSwitch,
-            UnifiVPNServerSwitch
+            UnifiVPNServerSwitch,
+            UnifiLedToggleSwitch
         )
 
         # Define mappings from rule types to entities
@@ -1307,6 +1387,24 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                             LOGGER.debug("Coordinator: Discovered potential new kill switch: %s (for parent %s)", kill_switch_id, rule_id)
                 except Exception as err:
                     LOGGER.warning("Coordinator: Error processing rule during dynamic discovery: %s", err)
+
+        # Special handling for LED-capable devices
+        devices = new_data.get("devices", [])
+        if devices:
+            for device in devices:
+                try:
+                    device_unique_id = f"unr_device_{device.mac}_led"
+                    all_current_unique_ids.add(device_unique_id)
+                    
+                    if device_unique_id not in self.known_unique_ids:
+                        potential_entities_data[device_unique_id] = {
+                            "rule_data": device,
+                            "rule_type": "devices",
+                            "entity_class": UnifiLedToggleSwitch,
+                        }
+                        LOGGER.debug("Coordinator: Discovered potential new LED switch: %s", device_unique_id)
+                except Exception as err:
+                    LOGGER.warning("Coordinator: Error processing device during dynamic discovery: %s", err)
 
         # Find IDs that are known but no longer present in the current data (should be handled by deletion logic, but double-check)
         stale_known_ids = self.known_unique_ids - all_current_unique_ids

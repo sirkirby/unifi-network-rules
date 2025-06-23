@@ -28,8 +28,10 @@ from aiounifi.models.traffic_rule import TrafficRule
 from aiounifi.models.port_forward import PortForward
 from aiounifi.models.firewall_zone import FirewallZone
 from aiounifi.models.wlan import Wlan
+from aiounifi.models.device import Device  # For LED toggle
 
 from .const import DOMAIN, MANUFACTURER
+from .helpers.rule import sanitize_entity_id
 from .coordinator import UnifiRuleUpdateCoordinator
 from .helpers.rule import (
     get_rule_id, 
@@ -95,8 +97,9 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     
     # --- Trigger an immediate refresh after initial known_ids population ---
     # This ensures the first deletion check runs with IDs from the registry
+    LOGGER.debug("Requesting coordinator refresh to populate initial data...")
     await coordinator.async_request_refresh()
-    LOGGER.debug("Requested coordinator refresh after switch setup")
+    LOGGER.debug("Initial coordinator refresh completed")
 
     # Initialize as empty, coordinator will manage it
     # if not hasattr(coordinator, 'known_unique_ids'): # Initialize only if it doesn't exist (e.g. first load)
@@ -104,6 +107,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     # Do NOT clear on reload, let coordinator handle sync
 
     # --- Store add_entities callback --- 
+    LOGGER.debug("Setting async_add_entities callback on coordinator")
     coordinator.async_add_entities_callback = async_add_entities
 
     # --- Step 1: Gather all potential entities and their data ---
@@ -155,7 +159,25 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
             except Exception as err:
                 LOGGER.exception("Error processing rule during gathering phase: %s", str(err))
 
-    # --- Step 2: Create entity instances for unique IDs ---
+    # --- LED toggle switches ---
+    LOGGER.debug("Checking for LED-capable devices...")
+    if hasattr(coordinator, 'devices') and coordinator.devices:
+        LOGGER.info("Found %d LED-capable devices in coordinator", len(coordinator.devices))
+        for device in coordinator.devices:
+            # Devices are already filtered by coordinator for LED capability
+            unique_id = f"unr_device_{device.mac}_led"
+            if unique_id not in potential_entities_data:
+                potential_entities_data[unique_id] = {
+                    "rule_data": device,
+                    "rule_type": "devices",
+                    "entity_class": UnifiLedToggleSwitch,
+                }
+                LOGGER.info("Gathered potential LED switch: %s for device %s", unique_id, getattr(device, 'name', device.mac))
+    else:
+        LOGGER.warning("No LED-capable devices found in coordinator. Coordinator devices: %s", 
+                      getattr(coordinator, 'devices', 'NOT_SET'))
+
+        # --- Step 2: Create entity instances for unique IDs ---
     switches_to_add = []
     processed_unique_ids = set()
 
@@ -1454,6 +1476,227 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
             raise HomeAssistantError(f"Error toggling kill switch for {self.name}: {error}")
 
 # Define QoS rule switch class
+class UnifiLedToggleSwitch(CoordinatorEntity, SwitchEntity):
+    """Switch to toggle UniFi AP WiFi LED."""
+    
+    def __init__(self, coordinator: UnifiRuleUpdateCoordinator, rule_data: Device, rule_type: str, entry_id: str = None) -> None:
+        super().__init__(coordinator)
+        self._device = rule_data
+        self._entry_id = entry_id
+        self._rule_type = rule_type
+        
+        # Get device identifiers safely from raw data
+        raw_data = getattr(rule_data, 'raw', {}) if hasattr(rule_data, 'raw') else {}
+        device_mac = raw_data.get('mac', raw_data.get('serial', 'unknown'))
+        device_name = raw_data.get('name', raw_data.get('device_id', device_mac))
+        
+        # Use proper unique ID format consistent with other switches
+        self._attr_unique_id = f"unr_device_{device_mac}_led"
+        
+        # Don't manually set entity_id - let Home Assistant manage it
+        self._attr_name = f"{device_name} LED"
+        
+        # Set appropriate device class and entity category
+        self._attr_entity_category = EntityCategory.CONFIG
+        self._attr_device_class = SwitchDeviceClass.SWITCH
+        
+        # Set up device info with more details
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device_mac)},
+            name=device_name,
+            manufacturer=MANUFACTURER,
+            model=raw_data.get('model', raw_data.get('type', 'UniFi Device')),
+            sw_version=raw_data.get('version'),
+            hw_version=raw_data.get('hw_rev'),
+        )
+        
+        # Icon will be set dynamically based on state
+        self._update_icon()
+
+    def _get_current_device(self) -> Device | None:
+        """Get the current device from coordinator data."""
+        try:
+            # Get device MAC safely from raw data
+            self_raw = getattr(self._device, 'raw', {}) if hasattr(self._device, 'raw') else {}
+            self_mac = self_raw.get('mac', self_raw.get('serial', 'unknown'))
+            
+            # Look for updated device in coordinator data if available
+            devices = getattr(self.coordinator, 'devices', [])
+            for device in devices:
+                device_raw = getattr(device, 'raw', {}) if hasattr(device, 'raw') else {}
+                device_mac = device_raw.get('mac', device_raw.get('serial', 'unknown'))
+                if device_mac == self_mac:
+                    return device
+            # Fallback to original device
+            return self._device
+        except Exception as err:
+            LOGGER.debug("Error getting current device: %s", err)
+            return self._device
+
+    def _update_icon(self) -> None:
+        """Update the icon based on current state."""
+        self._attr_icon = "mdi:led-on" if self.is_on else "mdi:led-off"
+
+    @property
+    def is_on(self) -> bool:
+        """Return True if LED is on."""
+        current_device = self._get_current_device()
+        if not current_device:
+            return False
+            
+        # Check device raw data for LED override status
+        led_override = None
+        if hasattr(current_device, 'raw') and current_device.raw:
+            led_override = current_device.raw.get('led_override')
+        elif hasattr(current_device, 'led_override'):
+            led_override = current_device.led_override
+            
+        if led_override is None:
+            return False
+            
+        return str(led_override).lower() == "on"
+
+    @property
+    def available(self) -> bool:
+        """Return True if device is available."""
+        current_device = self._get_current_device()
+        if not current_device:
+            device_raw = getattr(self._device, 'raw', {}) if hasattr(self._device, 'raw') else {}
+            device_mac = device_raw.get('mac', device_raw.get('serial', 'unknown'))
+            LOGGER.debug("LED Switch %s unavailable: current device not found", device_mac)
+            return False
+            
+        # Check if device is online/adopted
+        if hasattr(current_device, 'raw') and current_device.raw:
+            state = current_device.raw.get('state', 0)
+            device_raw = getattr(current_device, 'raw', {}) if hasattr(current_device, 'raw') else {}
+            device_mac = device_raw.get('mac', device_raw.get('serial', 'unknown'))
+            device_name = device_raw.get('name', 'unknown')
+            
+            # Debug logging for device state
+            LOGGER.debug("LED Switch %s (%s) state check: raw_state=%s, available=%s", 
+                        device_name, device_mac, state, state == 1)
+            
+            # More permissive state check - many device states should be considered available
+            # 0 = Disconnected, 1 = Connected, 2 = Pending, 4 = Upgrading, 5 = Provisioning
+            # We should allow connected (1), upgrading (4), and maybe others
+            available_states = [1, 4, 5]  # Connected, Upgrading, Provisioning
+            is_available = state in available_states
+            
+            if not is_available:
+                LOGGER.warning("LED Switch %s (%s) unavailable due to device state %s (expected one of %s)", 
+                             device_name, device_mac, state, available_states)
+            
+            return is_available
+        
+        # If we can't determine state but have device, default to available
+        device_raw = getattr(current_device, 'raw', {}) if hasattr(current_device, 'raw') else {}
+        device_mac = device_raw.get('mac', device_raw.get('serial', 'unknown'))
+        LOGGER.debug("LED Switch %s: Cannot determine state, defaulting to available", device_mac)
+        return True
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn on the device LED."""
+        try:
+            current_device = self._get_current_device()
+            if not current_device:
+                device_raw = getattr(self._device, 'raw', {}) if hasattr(self._device, 'raw') else {}
+                device_mac = device_raw.get('mac', device_raw.get('serial', 'unknown'))
+                LOGGER.error("Device not found for LED toggle: %s", device_mac)
+                return
+                
+            success = await self.coordinator.api.set_device_led(current_device, True)
+            if success:
+                # Update local state optimistically
+                if hasattr(current_device, 'raw') and current_device.raw:
+                    current_device.raw['led_override'] = 'on'
+                elif hasattr(current_device, 'led_override'):
+                    current_device.led_override = "on"
+                    
+                self._update_icon()
+                self.async_write_ha_state()
+                
+                current_device_raw = getattr(current_device, 'raw', {}) if hasattr(current_device, 'raw') else {}
+                current_device_mac = current_device_raw.get('mac', current_device_raw.get('serial', 'unknown'))
+                LOGGER.debug("Successfully turned on LED for device %s", current_device_mac)
+            else:
+                current_device_raw = getattr(current_device, 'raw', {}) if hasattr(current_device, 'raw') else {}
+                current_device_mac = current_device_raw.get('mac', current_device_raw.get('serial', 'unknown'))
+                LOGGER.error("Failed to turn on LED for device %s", current_device_mac)
+        except Exception as err:
+            device_raw = getattr(self._device, 'raw', {}) if hasattr(self._device, 'raw') else {}
+            device_mac = device_raw.get('mac', device_raw.get('serial', 'unknown'))
+            LOGGER.exception("Error turning on LED for device %s: %s", device_mac, err)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn off the device LED."""
+        try:
+            current_device = self._get_current_device()
+            if not current_device:
+                device_raw = getattr(self._device, 'raw', {}) if hasattr(self._device, 'raw') else {}
+                device_mac = device_raw.get('mac', device_raw.get('serial', 'unknown'))
+                LOGGER.error("Device not found for LED toggle: %s", device_mac)
+                return
+                
+            success = await self.coordinator.api.set_device_led(current_device, False)
+            if success:
+                # Update local state optimistically
+                if hasattr(current_device, 'raw') and current_device.raw:
+                    current_device.raw['led_override'] = 'off'
+                elif hasattr(current_device, 'led_override'):
+                    current_device.led_override = "off"
+                    
+                self._update_icon()
+                self.async_write_ha_state()
+                
+                current_device_raw = getattr(current_device, 'raw', {}) if hasattr(current_device, 'raw') else {}
+                current_device_mac = current_device_raw.get('mac', current_device_raw.get('serial', 'unknown'))
+                LOGGER.debug("Successfully turned off LED for device %s", current_device_mac)
+            else:
+                current_device_raw = getattr(current_device, 'raw', {}) if hasattr(current_device, 'raw') else {}
+                current_device_mac = current_device_raw.get('mac', current_device_raw.get('serial', 'unknown'))
+                LOGGER.error("Failed to turn off LED for device %s", current_device_mac)
+        except Exception as err:
+            device_raw = getattr(self._device, 'raw', {}) if hasattr(self._device, 'raw') else {}
+            device_mac = device_raw.get('mac', device_raw.get('serial', 'unknown'))
+            LOGGER.exception("Error turning off LED for device %s: %s", device_mac, err)
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle coordinator update."""
+        self._update_icon()
+        self.async_write_ha_state()
+        
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Return entity specific state attributes."""
+        current_device = self._get_current_device()
+        if not current_device:
+            return {}
+            
+        # Get device data safely from raw data
+        device_raw = getattr(current_device, 'raw', {}) if hasattr(current_device, 'raw') else {}
+        device_mac = device_raw.get('mac', device_raw.get('serial', 'unknown'))
+        device_type = device_raw.get('type', 'Unknown')
+        device_model = device_raw.get('model', 'Unknown')
+        
+        attributes = {
+            "device_type": device_type,
+            "mac": device_mac,
+        }
+        
+        # Add device model if available
+        if device_model != 'Unknown':
+            attributes["model"] = device_model
+            
+        # Add device state if available
+        state = device_raw.get('state')
+        if state is not None:
+            state_names = {0: "Offline", 1: "Connected", 2: "Pending", 4: "Upgrading"}
+            attributes["device_state"] = state_names.get(state, f"Unknown ({state})")
+                
+        return attributes
+
 class UnifiQoSRuleSwitch(UnifiRuleSwitch):
     """Switch to enable/disable a UniFi QoS rule."""
     
