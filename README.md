@@ -19,6 +19,7 @@ UniFi Network Rules is a custom integration for Home Assistant that integrates w
 - Service actions for full backup and restore of all rules that are managed by this integration.
 - Service actions for batch enabling and disabling rules by pattern matching rule names or IDs.
 - Service actions for deleting rules by ID.
+- LED toggle switch for UniFi access points and other LED capable devices to control LED on/off.
 
 Request a feature [here](https://github.com/sirkirby/unifi-network-rules/issues).
 
