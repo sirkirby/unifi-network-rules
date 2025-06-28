@@ -1,0 +1,94 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Regras da Rede UniFi",
+        "description": "Configure as Regras da Rede UniFi para gerenciar seu UniFi Dream Machine.",
+        "data": {
+          "host": "Host",
+          "username": "Usuário",
+          "password": "Senha",
+          "site": "Nome do site (padrão é 'default')",
+          "update_interval": "Intervalo de atualização (minutos)",
+          "verify_ssl": "Verificar certificado SSL (desative para certificados autoassinados)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Não foi possível conectar",
+      "invalid_auth": "Autenticação inválida",
+      "no_capabilities": "Nenhuma função de firewall compatível foi detectada neste dispositivo.",
+      "unknown": "Erro inesperado"
+    },
+    "abort": {
+      "already_configured": "Dispositivo já configurado"
+    }
+  },
+  "services": {
+    "refresh": {
+      "name": "Atualizar",
+      "description": "Atualiza os dados das Regras da Rede UniFi"
+    },
+    "backup_rules": {
+      "name": "Fazer Backup das Regras",
+      "description": "Salva as regras de firewall e tráfego em um arquivo",
+      "fields": {
+        "filename": {
+          "name": "Nome do Arquivo",
+          "description": "Nome do arquivo de backup (será salvo na pasta de configuração do Home Assistant)"
+        }
+      }
+    },
+    "restore_rules": {
+      "name": "Restaurar Regras",
+      "description": "Restaura as regras de firewall e tráfego a partir de um arquivo de backup",
+      "fields": {
+        "filename": {
+          "name": "Nome do Arquivo",
+          "description": "Nome do arquivo de backup para restaurar (precisa estar na pasta de configuração do Home Assistant)"
+        },
+        "rule_ids": {
+          "name": "IDs das Regras",
+          "description": "Lista opcional de IDs específicos de regras para restaurar"
+        },
+        "name_filter": {
+          "name": "Filtro por Nome",
+          "description": "Filtro opcional - só restaurar regras que contenham esse texto no nome"
+        },
+        "rule_types": {
+          "name": "Tipos de Regras",
+          "description": "Lista opcional de tipos de regras para restaurar (policy, route, firewall, traffic, port_forward)"
+        }
+      }
+    },
+    "bulk_update_rules": {
+      "name": "Atualização em Massa de Regras",
+      "description": "Ativa ou desativa várias regras com base em uma correspondência de nome",
+      "fields": {
+        "name_filter": {
+          "name": "Filtro por Nome",
+          "description": "Texto para procurar nos nomes das regras"
+        },
+        "state": {
+          "name": "Estado",
+          "description": "Verdadeiro para ativar as regras correspondentes, Falso para desativar"
+        }
+      }
+    },
+    "delete_rule": {
+      "name": "Excluir Regra",
+      "description": "Exclui uma regra",
+      "fields": {
+        "rule_id": {
+          "name": "ID da Regra",
+          "description": "ID da regra que será excluída"
+        },
+        "rule_type": {
+          "name": "Tipo de Regra",
+          "description": "Tipo de regra a ser excluída. No momento, apenas 'policy' (políticas de firewall) é suportado"
+        }
+      }
+    }
+  },
+  "title": "Regras da Rede UniFi"
+}
