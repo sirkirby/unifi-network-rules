@@ -16,6 +16,8 @@ from .const import (
     LOGGER,
     SIGNAL_WEBSOCKET_EVENT,
     DEBUG_WEBSOCKET,  # Keep for backward compatibility
+    LOG_TRIGGERS,
+    LOG_WEBSOCKET,
 )
 from .udm import UDMAPI
 from .utils.diagnostics import log_controller_diagnostics
@@ -299,8 +301,13 @@ class UnifiRuleWebsocket:
         msg_type_lower = msg_type.lower()
         
         # Skip common high-frequency events that aren't rule-related
-        if any(skip in msg_type_lower for skip in ["device.status", "health", "client"]):
+        if any(skip in msg_type_lower for skip in ["device.status", "health", "client", "events"]):
             return
+            
+        # Log rule-related messages to debug triggers
+        if LOG_TRIGGERS or LOG_WEBSOCKET:
+            LOGGER.info("🔍 POTENTIAL RULE MESSAGE: %s - %s", 
+                       msg_type, str(message)[:200] + "..." if len(str(message)) > 200 else str(message))
             
         # Log all messages for debugging - device:update messages are especially important
         if msg_type_lower == "device:update" and DEBUG_WEBSOCKET:

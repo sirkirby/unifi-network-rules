@@ -1,0 +1,91 @@
+rule_enabled:
+  name: "UniFi rule enabled"
+  description: "Triggered when a UniFi Network rule is enabled"
+  variables:
+    rule_id:
+      name: "Rule ID"
+      description: "The unique identifier of the rule"
+      example: "5f4a7b2c8d9e1a3b4c5d6e7f"
+    rule_type:
+      name: "Rule type"
+      description: "The type of rule that was enabled"
+      example: "firewall_policies"
+    old_state:
+      name: "Previous state"
+      description: "The previous state of the rule"
+    new_state:
+      name: "New state"
+      description: "The new state of the rule"
+    trigger_type:
+      name: "Trigger type"
+      description: "The type of trigger that fired"
+      example: "rule_enabled"
+
+rule_disabled:
+  name: "UniFi rule disabled"
+  description: "Triggered when a UniFi Network rule is disabled"
+  variables:
+    rule_id:
+      name: "Rule ID"
+      description: "The unique identifier of the rule"
+      example: "5f4a7b2c8d9e1a3b4c5d6e7f"
+    rule_type:
+      name: "Rule type"
+      description: "The type of rule that was disabled"
+      example: "port_forwards"
+    old_state:
+      name: "Previous state"
+      description: "The previous state of the rule"
+    new_state:
+      name: "New state"
+      description: "The new state of the rule"
+    trigger_type:
+      name: "Trigger type"
+      description: "The type of trigger that fired"
+      example: "rule_disabled"
+
+rule_changed:
+  name: "UniFi rule changed"
+  description: "Triggered when a UniFi Network rule configuration is modified"
+  variables:
+    rule_id:
+      name: "Rule ID"
+      description: "The unique identifier of the rule"
+      example: "5f4a7b2c8d9e1a3b4c5d6e7f"
+    rule_type:
+      name: "Rule type"
+      description: "The type of rule that was changed (firewall_policies, traffic_routes, port_forwards, qos_rules, vpn_clients, vpn_servers, legacy_firewall_rules, traffic_rules, wlans)"
+      example: "qos_rules"
+    old_state:
+      name: "Previous state"
+      description: "The previous state of the rule"
+    new_state:
+      name: "New state"
+      description: "The new state of the rule"
+    trigger_type:
+      name: "Trigger type"
+      description: "The type of trigger that fired"
+      example: "rule_changed"
+
+rule_deleted:
+  name: "UniFi rule deleted"
+  description: "Triggered when a UniFi Network rule is deleted"
+  variables:
+    rule_id:
+      name: "Rule ID"
+      description: "The unique identifier of the rule"
+      example: "5f4a7b2c8d9e1a3b4c5d6e7f"
+    rule_type:
+      name: "Rule type"
+      description: "The type of rule that was deleted (firewall_policies, traffic_routes, port_forwards, qos_rules, vpn_clients, vpn_servers, legacy_firewall_rules, traffic_rules, wlans)"
+      example: "vpn_clients"
+    old_state:
+      name: "Previous state"
+      description: "The previous state of the rule"
+    new_state:
+      name: "New state"
+      description: "The new state of the rule (null for deleted rules)"
+    trigger_type:
+      name: "Trigger type"
+      description: "The type of trigger that fired"
+      example: "rule_deleted" 

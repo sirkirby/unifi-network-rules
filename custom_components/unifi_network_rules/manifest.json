@@ -9,6 +9,7 @@
     "iot_class": "local_push",
     "issue_tracker": "https://github.com/sirkirby/unifi-network-rules/issues",
     "loggers": ["aiounifi"],
+    "platforms": ["switch", "trigger"],
     "quality_scale": "custom",
     "requirements": [
         "aiohttp",

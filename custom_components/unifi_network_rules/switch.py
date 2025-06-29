@@ -612,9 +612,6 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
 
         rule = self._get_current_rule()
         if rule is None:
-            # Add log for debugging is_on when rule is None
-            # entity_id_for_log = self.entity_id or self.unique_id
-            # LOGGER.debug("%s(%s): is_on check - rule is None, returning False.", type(self).__name__, entity_id_for_log)
             return False
 
         return get_rule_enabled(rule)
