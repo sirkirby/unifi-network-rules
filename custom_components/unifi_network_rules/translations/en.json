@@ -24,6 +24,43 @@
       "already_configured": "Device is already configured"
     }
   },
+  "device_automation": {
+    "trigger_type": {
+      "rule_enabled": "Rule enabled",
+      "rule_disabled": "Rule disabled",
+      "rule_changed": "Rule changed",
+      "rule_deleted": "Rule deleted"
+    },
+    "trigger_subtype": {
+      "firewall_policies": "Firewall Policy",
+      "traffic_routes": "Traffic Route",
+      "port_forwards": "Port Forward",
+      "qos_rules": "QoS Rule",
+      "vpn_clients": "VPN Client",
+      "vpn_servers": "VPN Server",
+      "legacy_firewall_rules": "Legacy Firewall Rule",
+      "traffic_rules": "Traffic Rule",
+      "wlans": "WLAN"
+    }
+  },
+  "triggers": {
+    "rule_enabled": {
+      "name": "UniFi rule enabled",
+      "description": "Triggered when a UniFi Network rule is enabled"
+    },
+    "rule_disabled": {
+      "name": "UniFi rule disabled",
+      "description": "Triggered when a UniFi Network rule is disabled"
+    },
+    "rule_changed": {
+      "name": "UniFi rule changed",
+      "description": "Triggered when a UniFi Network rule configuration is modified"
+    },
+    "rule_deleted": {
+      "name": "UniFi rule deleted",
+      "description": "Triggered when a UniFi Network rule is deleted"
+    }
+  },
   "services": {
     "refresh": {
       "name": "Refresh",

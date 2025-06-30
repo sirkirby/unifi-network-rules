@@ -1,6 +1,7 @@
 """UniFi Network Rules trigger platform."""
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Callable, Dict, Optional
 import voluptuous as vol
 
@@ -55,7 +56,7 @@ RULE_TYPE_KEYWORDS = {
     RULE_TYPE_WLAN: ["wlan", "wireless", "wifi", "ssid"],
 }
 
-# Configuration schema - updated with all supported rule types
+# Configuration schema - updated with all supported rule types and proper selectors
 TRIGGER_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_PLATFORM): DOMAIN,
@@ -82,6 +83,185 @@ TRIGGER_SCHEMA = vol.Schema(
 )
 
 
+
+# Add device automation style schemas for better UI integration
+TRIGGER_SELECTOR_SCHEMA = vol.Schema(
+    {
+        vol.Required("trigger"): "unifi_network_rules",
+        vol.Required("type"): vol.In([
+            TRIGGER_RULE_ENABLED,
+            TRIGGER_RULE_DISABLED,
+            TRIGGER_RULE_CHANGED,
+            TRIGGER_RULE_DELETED,
+        ]),
+        vol.Optional("rule_id"): {
+            "selector": {
+                "text": {
+                    "placeholder": "Enter rule ID (optional)"
+                }
+            }
+        },
+        vol.Optional("rule_type"): {
+            "selector": {
+                "select": {
+                    "options": [
+                        {"label": "Firewall Policies", "value": RULE_TYPE_FIREWALL_POLICY},
+                        {"label": "Traffic Routes", "value": RULE_TYPE_TRAFFIC_ROUTE},
+                        {"label": "Port Forwards", "value": RULE_TYPE_PORT_FORWARD},
+                        {"label": "QoS Rules", "value": RULE_TYPE_QOS_RULE},
+                        {"label": "VPN Clients", "value": RULE_TYPE_VPN_CLIENT},
+                        {"label": "VPN Servers", "value": RULE_TYPE_VPN_SERVER},
+                        {"label": "Legacy Firewall Rules", "value": RULE_TYPE_LEGACY_FIREWALL_RULE},
+                        {"label": "Traffic Rules", "value": RULE_TYPE_TRAFFIC_RULE},
+                        {"label": "WLANs", "value": RULE_TYPE_WLAN},
+                    ]
+                }
+            }
+        },
+        vol.Optional("name_filter"): {
+            "selector": {
+                "text": {
+                    "placeholder": "Filter by rule name (optional)"
+                }
+            }
+        },
+    }
+)
+
+# Add trigger type descriptions for better UI display
+TRIGGER_TYPE_DESCRIPTIONS = {
+    TRIGGER_RULE_ENABLED: "When a UniFi rule is enabled",
+    TRIGGER_RULE_DISABLED: "When a UniFi rule is disabled", 
+    TRIGGER_RULE_CHANGED: "When a UniFi rule is modified",
+    TRIGGER_RULE_DELETED: "When a UniFi rule is deleted",
+}
+
+def get_rule_name_from_data(rule_data: Dict[str, Any], rule_id: str, rule_type: str = None) -> str:
+    """Extract a meaningful rule name from rule data."""
+    # Try to get the name field first
+    if "name" in rule_data and rule_data["name"]:
+        return rule_data["name"]
+    
+    # Try common alternative name fields
+    for name_field in ["description", "label", "title"]:
+        if name_field in rule_data and rule_data[name_field]:
+            return rule_data[name_field]
+    
+    # For different rule types, try to construct a meaningful name
+    if rule_type == RULE_TYPE_PORT_FORWARD:
+        if "dst_port" in rule_data and "fwd" in rule_data:
+            return f"Port Forward {rule_data.get('dst_port', '')} → {rule_data.get('fwd', '')}"
+        elif "name" not in rule_data:
+            return f"Port Forward {rule_id[:8]}"
+    
+    elif rule_type == RULE_TYPE_FIREWALL_POLICY:
+        if "action" in rule_data:
+            action = rule_data["action"].upper() if isinstance(rule_data["action"], str) else str(rule_data["action"])
+            return f"Firewall {action} Rule {rule_id[:8]}"
+    
+    elif rule_type == RULE_TYPE_QOS_RULE:
+        # QoS rules often have different name fields - try more options
+        qos_name_fields = ["name", "description", "label", "title", "target", "app", "category"]
+        for field in qos_name_fields:
+            if field in rule_data and rule_data[field]:
+                return f"QoS Rule: {rule_data[field]}"
+        
+        # Try to build name from QoS specifics
+        if "bandwidth_limit" in rule_data:
+            bandwidth = rule_data.get('bandwidth_limit', 'N/A')
+            return f"QoS Rule {rule_id[:8]} ({bandwidth})"
+        elif "rate_limit" in rule_data:
+            rate = rule_data.get('rate_limit', 'N/A')
+            return f"QoS Rule {rule_id[:8]} (Rate: {rate})"
+        else:
+            return f"QoS Rule {rule_id[:8]}"
+    
+    elif rule_type == RULE_TYPE_WLAN:
+        if "ssid" in rule_data:
+            return f"WLAN: {rule_data['ssid']}"
+    
+    # For device configuration changes (cfgversion events), extract device info
+    if rule_id.startswith("device_config_"):
+        device_part = rule_id.replace("device_config_", "")
+        return f"Device Config ({device_part[:8]})"
+    
+    # Fallback to a generic name with shortened rule ID
+    return f"Rule {rule_id[:8] if len(rule_id) > 8 else rule_id}"
+
+# Add function to get available triggers (for device automation style integration)
+async def async_get_triggers(hass: HomeAssistant) -> list[dict]:
+    """Return a list of available triggers."""
+    triggers = []
+    
+    for trigger_type in [TRIGGER_RULE_ENABLED, TRIGGER_RULE_DISABLED, TRIGGER_RULE_CHANGED, TRIGGER_RULE_DELETED]:
+        triggers.append({
+            "platform": DOMAIN,
+            "type": trigger_type,
+            "description": TRIGGER_TYPE_DESCRIPTIONS.get(trigger_type, trigger_type),
+            "variables": {
+                "rule_id": "The unique identifier of the rule",
+                "rule_name": "The human-readable name of the rule",
+                "rule_type": "The type of rule (firewall_policies, port_forwards, etc.)",
+                "old_state": "The previous state of the rule (for changes)",
+                "new_state": "The new state of the rule",
+                "trigger_type": "The type of trigger that fired"
+            }
+        })
+    
+    return triggers
+
+async def async_validate_trigger_config(hass: HomeAssistant, config: dict) -> dict:
+    """Validate trigger configuration."""
+    return TRIGGER_SCHEMA(config)
+
+async def async_get_trigger_schema(hass: HomeAssistant, config_entry) -> vol.Schema:
+    """Return the trigger schema with selectors for UI integration."""
+    return vol.Schema({
+        vol.Required(CONF_TYPE): {
+            "selector": {
+                "select": {
+                    "options": [
+                        {"label": "Rule Enabled", "value": TRIGGER_RULE_ENABLED},
+                        {"label": "Rule Disabled", "value": TRIGGER_RULE_DISABLED},
+                        {"label": "Rule Changed", "value": TRIGGER_RULE_CHANGED},
+                        {"label": "Rule Deleted", "value": TRIGGER_RULE_DELETED},
+                    ]
+                }
+            }
+        },
+        vol.Optional("rule_id"): {
+            "selector": {
+                "text": {
+                    "placeholder": "Enter specific rule ID (optional)"
+                }
+            }
+        },
+        vol.Optional("rule_type"): {
+            "selector": {
+                "select": {
+                    "options": [
+                        {"label": "Firewall Policies", "value": RULE_TYPE_FIREWALL_POLICY},
+                        {"label": "Traffic Routes", "value": RULE_TYPE_TRAFFIC_ROUTE},
+                        {"label": "Port Forwards", "value": RULE_TYPE_PORT_FORWARD},
+                        {"label": "QoS Rules", "value": RULE_TYPE_QOS_RULE},
+                        {"label": "VPN Clients", "value": RULE_TYPE_VPN_CLIENT},
+                        {"label": "VPN Servers", "value": RULE_TYPE_VPN_SERVER},
+                        {"label": "Legacy Firewall Rules", "value": RULE_TYPE_LEGACY_FIREWALL_RULE},
+                        {"label": "Traffic Rules", "value": RULE_TYPE_TRAFFIC_RULE},
+                        {"label": "WLANs", "value": RULE_TYPE_WLAN},
+                    ]
+                }
+            }
+        },
+        vol.Optional("name_filter"): {
+            "selector": {
+                "text": {
+                    "placeholder": "Filter by rule name (optional)"
+                }
+            }
+        },
+    })
+
 async def async_attach_trigger(
     hass: HomeAssistant,
     config: dict,
@@ -102,8 +282,8 @@ async def async_attach_trigger(
         trigger_data["name_filter"] = config["name_filter"]
 
     if LOG_TRIGGERS:
-        LOGGER.info("Setting up UniFi trigger: type=%s, rule_type=%s, rule_id=%s", 
-                   config[CONF_TYPE], config.get("rule_type"), config.get("rule_id"))
+        LOGGER.info("🔧 SETTING UP TRIGGER: type=%s, rule_type_filter=%s, rule_id_filter=%s, name_filter=%s", 
+                   config[CONF_TYPE], config.get("rule_type"), config.get("rule_id"), config.get("name_filter"))
     
     trigger = UnifiRuleTrigger(
         hass,
@@ -133,7 +313,19 @@ class UnifiRuleTrigger:
         self.trigger_data = trigger_data
         self.remove_handler: Optional[CALLBACK_TYPE] = None
         self._rule_cache: Dict[str, Dict[str, Any]] = {}
+        # Each trigger instance tracks its own processed cfgversions
         self._processed_cfgversions: set = set()
+        # Global coordinator refresh coordination (prevent multiple simultaneous refreshes)
+        if not hasattr(UnifiRuleTrigger, '_coordinator_refresh_tasks'):
+            UnifiRuleTrigger._coordinator_refresh_tasks = {}
+        # Store old rule states for each cfgversion so all trigger instances can access them
+        if not hasattr(UnifiRuleTrigger, '_cfgversion_old_states'):
+            UnifiRuleTrigger._cfgversion_old_states = {}
+        # Global initial state to prevent empty→populated transitions from firing triggers
+        if not hasattr(UnifiRuleTrigger, '_global_initial_state_captured'):
+            UnifiRuleTrigger._global_initial_state_captured = False
+        if not hasattr(UnifiRuleTrigger, '_global_initial_rule_state'):
+            UnifiRuleTrigger._global_initial_rule_state = {}
 
     async def async_attach(self) -> CALLBACK_TYPE:
         """Attach trigger."""
@@ -149,10 +341,31 @@ class UnifiRuleTrigger:
         @callback
         def _handle_websocket_msg(msg: Dict[str, Any]) -> None:
             """Handle websocket message."""
-            # Only log detailed processing for non-repetitive messages
-            if LOG_TRIGGERS and not msg.get("meta", {}).get("message") == "device:update":
-                LOGGER.info("🎯 TRIGGER PROCESSING MESSAGE: %s", 
-                           str(msg)[:100] + "..." if len(str(msg)) > 100 else str(msg))
+            # Enhanced debug logging for all messages (reduced to prevent rate limiting)
+            if LOG_TRIGGERS:
+                meta = msg.get("meta", {})
+                msg_type = meta.get("message", "")
+                msg_data = msg.get("data", {})
+                
+                # Only log detailed info for messages with actual rule data or specific events
+                has_rule_data = (isinstance(msg_data, dict) and "_id" in msg_data) or \
+                               (isinstance(msg_data, list) and any(isinstance(item, dict) and "_id" in item for item in msg_data))
+                
+                if has_rule_data:
+                    LOGGER.info("🎯 RULE MSG: type=%s, data_type=%s", msg_type, type(msg_data))
+                    if isinstance(msg_data, list) and len(msg_data) > 0:
+                        first_item = msg_data[0] if msg_data else {}
+                        LOGGER.info("📋 RULE DATA: count=%d, first_item_keys=%s", 
+                                   len(msg_data),
+                                   list(first_item.keys()) if isinstance(first_item, dict) else "not_dict")
+                    elif isinstance(msg_data, dict):
+                        LOGGER.info("📋 RULE DATA: keys=%s", list(msg_data.keys()))
+                    LOGGER.info("📄 RULE CONTENT: %s", str(msg)[:300] + "..." if len(str(msg)) > 300 else str(msg))
+                elif msg_type == "device:update" and isinstance(msg_data, list):
+                    # Very limited logging for device updates to avoid spam
+                    first_item = msg_data[0] if msg_data else {}
+                    if isinstance(first_item, dict) and "cfgversion" in first_item:
+                        LOGGER.debug("📱 CFGVERSION UPDATE: %s", first_item.get("cfgversion"))
             try:
                 # Extract message type and data from UniFi OS websocket structure
                 meta = msg.get("meta", {})
@@ -160,65 +373,15 @@ class UnifiRuleTrigger:
                 msg_data = msg.get("data", {})
                 
                 if not msg_type or not msg_data:
+                    if LOG_TRIGGERS:
+                        LOGGER.debug("❌ SKIP: No msg_type (%s) or msg_data (%s)", msg_type, bool(msg_data))
                     return
 
                 # Determine rule type based on message content and keywords
                 detected_rule_type = None
                 rule_data = None
 
-                # Handle UniFi OS device:update messages with cfgversion changes
-                if msg_type == "device:update" and isinstance(msg_data, list):
-                    # Look for cfgversion changes which indicate rule updates
-                    for item in msg_data:
-                        if isinstance(item, dict) and "cfgversion" in item:
-                            cfgversion = item.get("cfgversion")
-                            # Check if we've already processed this cfgversion to avoid duplicates
-                            if cfgversion in self._processed_cfgversions:
-                                return
-                            self._processed_cfgversions.add(cfgversion)
-                            
-                            # Keep only recent cfgversions (limit memory usage)
-                            if len(self._processed_cfgversions) > 100:
-                                self._processed_cfgversions = set(list(self._processed_cfgversions)[-50:])
-                            
-                            if LOG_TRIGGERS:
-                                LOGGER.info("Trigger: Detected cfgversion change: %s", cfgversion)
-                            # For cfgversion changes, we trigger a general rule_changed event
-                            # since we can't determine the specific rule from device:update messages
-                            if self.config[CONF_TYPE] == TRIGGER_RULE_CHANGED:
-                                # Create a synthetic rule change event
-                                data = {
-                                    "rule_id": f"device_config_{meta.get('mac', 'unknown')}",
-                                    "rule_type": "device_configuration", 
-                                    "old_state": None,
-                                    "new_state": {"cfgversion": cfgversion},
-                                    "trigger_type": TRIGGER_RULE_CHANGED,
-                                    "device_mac": meta.get("mac"),
-                                    "cfgversion": cfgversion
-                                }
-                                if LOG_TRIGGERS:
-                                    LOGGER.info("🔥 TRIGGER FIRING: %s for device config change %s", 
-                                               TRIGGER_RULE_CHANGED, meta.get("mac"))
-                                try:
-                                    trigger_vars = {
-                                        "platform": DOMAIN,
-                                        "type": TRIGGER_RULE_CHANGED,
-                                        "event": data  # Nest the data under 'event' key
-                                    }
-                                    if LOG_TRIGGERS:
-                                        LOGGER.info("Calling action with trigger vars: %s", trigger_vars)
-                                    # Schedule the action execution
-                                    self.hass.async_create_task(
-                                        self.action({"trigger": trigger_vars})
-                                    )
-                                    
-                                    # Also trigger coordinator refresh since config changed
-                                    self._dispatch_coordinator_refresh("Config change detected via cfgversion")
-                                except Exception as err:
-                                    LOGGER.error("Error executing trigger action: %s", err)
-                            return
-                
-                # Check for direct rule data in message (original logic for direct rule messages)
+                # FIXED: Check for actual rule data FIRST (more specific than cfgversion)
                 if isinstance(msg_data, dict) and "_id" in msg_data:
                     rule_data = msg_data
                 elif isinstance(msg_data, list) and len(msg_data) > 0:
@@ -228,33 +391,91 @@ class UnifiRuleTrigger:
                             rule_data = item
                             break
 
-                if not rule_data:
+                # Check for cfgversion changes (but only refresh if we have active rule triggers)
+                has_cfgversion_change = False
+                cfgversion = None
+                if msg_type == "device:update" and isinstance(msg_data, list):
+                    for item in msg_data:
+                        if isinstance(item, dict) and "cfgversion" in item:
+                            cfgversion = item.get("cfgversion")
+                            # Check if this trigger instance has already processed this cfgversion
+                            if cfgversion not in getattr(self, '_processed_cfgversions', set()):
+                                has_cfgversion_change = True
+                                # Track processed cfgversions per trigger instance
+                                if not hasattr(self, '_processed_cfgversions'):
+                                    self._processed_cfgversions = set()
+                                self._processed_cfgversions.add(cfgversion)
+                                # Keep only recent cfgversions (limit memory usage)
+                                if len(self._processed_cfgversions) > 50:
+                                    self._processed_cfgversions = set(list(self._processed_cfgversions)[-25:])
+                                
+                                if LOG_TRIGGERS:
+                                    LOGGER.info("🔄 CFGVERSION CHANGE DETECTED: %s - Will check for rule changes (trigger: %s)", cfgversion, self.config[CONF_TYPE])
+                                break  # Only process one cfgversion per message
+
+                # If we found actual rule data, process it (preferred path)
+                if rule_data:
+                    if LOG_TRIGGERS:
+                        LOGGER.info("🎯 PROCESSING ACTUAL RULE DATA: rule_id=%s, rule_data_keys=%s", 
+                                   rule_data.get("_id"), list(rule_data.keys()))
+                else:
+                    # SIMPLIFIED STATE-DIFF APPROACH: Always refresh and trigger for cfgversion changes
+                    if has_cfgversion_change:
+                        if LOG_TRIGGERS:
+                            LOGGER.info("🧠 SIMPLE PROCESSING: cfgversion change detected, refreshing coordinator and checking for triggers")
+                        
+                        # Schedule state-diff check to run after current message processing  
+                        self.hass.async_create_task(
+                            self._check_rule_changes_and_trigger(cfgversion, meta.get("mac", "unknown"))
+                        )
+                        return
+                    
+                    # No rule data and no cfgversion - nothing to process
+                    if LOG_TRIGGERS:
+                        LOGGER.debug("❌ NO RULE DATA: No _id found and no cfgversion, skipping")
                     return
 
-                # Detect rule type using keyword matching
-                message_str = str(msg).lower()
-                for rule_type, keywords in RULE_TYPE_KEYWORDS.items():
-                    if any(keyword in message_str for keyword in keywords):
-                        detected_rule_type = rule_type
-                        break
-
-                # If we couldn't detect the rule type, try to infer from data structure
+                # FIXED: Detect rule type using data structure FIRST (more reliable)
+                detected_rule_type = None
+                
+                # Primary detection: Check rule data fields (most reliable)
+                if "dst_port" in rule_data or "fwd_port" in rule_data or "fwd" in rule_data:
+                    detected_rule_type = RULE_TYPE_PORT_FORWARD
+                elif "purpose" in rule_data:
+                    purpose = rule_data.get("purpose", "").lower()
+                    if "vpn-client" in purpose:
+                        detected_rule_type = RULE_TYPE_VPN_CLIENT
+                    elif "vpn-server" in purpose:
+                        detected_rule_type = RULE_TYPE_VPN_SERVER
+                elif "objective" in rule_data or "bandwidth_limit" in rule_data or "rate_limit" in rule_data:
+                    detected_rule_type = RULE_TYPE_QOS_RULE
+                elif "action" in rule_data and "ruleset" in rule_data:
+                    detected_rule_type = RULE_TYPE_FIREWALL_POLICY
+                elif "next_hop" in rule_data or "gateway" in rule_data:
+                    detected_rule_type = RULE_TYPE_TRAFFIC_ROUTE
+                elif "ssid" in rule_data:
+                    detected_rule_type = RULE_TYPE_WLAN
+                
+                # Fallback: Keyword matching with SPECIFIC order (most specific first)
                 if not detected_rule_type:
-                    # Check for specific fields that identify rule types
-                    if "purpose" in rule_data:
-                        purpose = rule_data.get("purpose", "").lower()
-                        if "vpn-client" in purpose:
-                            detected_rule_type = RULE_TYPE_VPN_CLIENT
-                        elif "vpn-server" in purpose:
-                            detected_rule_type = RULE_TYPE_VPN_SERVER
-                    elif "objective" in rule_data:
-                        detected_rule_type = RULE_TYPE_QOS_RULE
-                    elif "action" in rule_data and "ruleset" in rule_data:
-                        detected_rule_type = RULE_TYPE_FIREWALL_POLICY
-                    elif "dst_port" in rule_data or "fwd_port" in rule_data:
+                    message_str = str(msg).lower()
+                    rule_data_str = str(rule_data).lower()
+                    
+                    # Check most specific keywords first
+                    if any(keyword in rule_data_str for keyword in ["dst_port", "fwd_port", "port_forward"]):
                         detected_rule_type = RULE_TYPE_PORT_FORWARD
-                    elif "next_hop" in rule_data or "gateway" in rule_data:
+                    elif any(keyword in rule_data_str for keyword in ["objective", "bandwidth", "rate_limit"]):
+                        detected_rule_type = RULE_TYPE_QOS_RULE
+                    elif any(keyword in rule_data_str for keyword in ["vpn-client", "openvpn-client"]):
+                        detected_rule_type = RULE_TYPE_VPN_CLIENT
+                    elif any(keyword in rule_data_str for keyword in ["vpn-server", "openvpn-server"]):
+                        detected_rule_type = RULE_TYPE_VPN_SERVER
+                    elif any(keyword in rule_data_str for keyword in ["firewall", "ruleset"]):
+                        detected_rule_type = RULE_TYPE_FIREWALL_POLICY
+                    elif any(keyword in rule_data_str for keyword in ["route", "gateway"]):
                         detected_rule_type = RULE_TYPE_TRAFFIC_ROUTE
+                    elif any(keyword in rule_data_str for keyword in ["wlan", "ssid"]):
+                        detected_rule_type = RULE_TYPE_WLAN
 
                 if not detected_rule_type:
                     if LOG_TRIGGERS:
@@ -262,49 +483,83 @@ class UnifiRuleTrigger:
                     return
 
                 if LOG_TRIGGERS:
-                    LOGGER.info("Trigger: Detected rule type '%s' for rule %s", detected_rule_type, rule_data.get("_id"))
+                    LOGGER.info("🎯 TRIGGER DETECTION: rule_id=%s, detected_type=%s, trigger_config=%s", 
+                               rule_data.get("_id"), detected_rule_type, self.config[CONF_TYPE])
 
-                # Apply filters
+                # Apply filters with detailed logging
                 if "rule_type" in event_filter and event_filter["rule_type"] != detected_rule_type:
+                    if LOG_TRIGGERS:
+                        LOGGER.info("❌ FILTER BLOCKED: rule_type filter %s != detected %s", 
+                                   event_filter["rule_type"], detected_rule_type)
                     return
                 if "rule_id" in event_filter and event_filter["rule_id"] != rule_data["_id"]:
+                    if LOG_TRIGGERS:
+                        LOGGER.info("❌ FILTER BLOCKED: rule_id filter %s != actual %s", 
+                                   event_filter["rule_id"], rule_data["_id"])
                     return
                 if name_filter:
                     rule_name = rule_data.get("name", "")
                     if not rule_name or name_filter.lower() not in rule_name.lower():
+                        if LOG_TRIGGERS:
+                            LOGGER.info("❌ FILTER BLOCKED: name filter '%s' not in '%s'", name_filter, rule_name)
                         return
 
                 # Get previous state from cache
                 rule_id = rule_data["_id"]
                 old_state = self._rule_cache.get(rule_id)
                 
-                # Handle different trigger types
+                # Handle different trigger types with enhanced logic
                 trigger_type = self.config[CONF_TYPE]
                 should_trigger = False
 
                 if trigger_type in [TRIGGER_RULE_ENABLED, TRIGGER_RULE_DISABLED]:
                     old_enabled = old_state.get("enabled", False) if old_state else False
                     new_enabled = rule_data.get("enabled", False)
+                    
+                    if LOG_TRIGGERS:
+                        LOGGER.info("🔄 ENABLED CHECK: old=%s, new=%s, trigger_type=%s", 
+                                   old_enabled, new_enabled, trigger_type)
+                    
                     if old_enabled != new_enabled:
                         should_trigger = (
                             (trigger_type == TRIGGER_RULE_ENABLED and new_enabled) or
                             (trigger_type == TRIGGER_RULE_DISABLED and not new_enabled)
                         )
+                        if LOG_TRIGGERS:
+                            LOGGER.info("✅ ENABLED TRIGGER: should_trigger=%s", should_trigger)
 
                 elif trigger_type == TRIGGER_RULE_CHANGED:
                     if old_state is not None:
-                        # Compare states excluding metadata
+                        # FIXED: Include enabled field in change detection
                         old_copy = {k: v for k, v in old_state.items() 
-                                  if not k.startswith('_') and k != 'enabled'}
+                                  if not k.startswith('_')}  # Keep enabled field!
                         new_copy = {k: v for k, v in rule_data.items() 
-                                  if not k.startswith('_') and k != 'enabled'}
+                                  if not k.startswith('_')}  # Keep enabled field!
                         should_trigger = old_copy != new_copy
+                        
+                        if LOG_TRIGGERS:
+                            LOGGER.info("🔄 CHANGE CHECK: old_state_exists=%s, should_trigger=%s", 
+                                       True, should_trigger)
+                            if should_trigger:
+                                # Show what changed
+                                changed_fields = []
+                                for key in set(old_copy.keys()) | set(new_copy.keys()):
+                                    if old_copy.get(key) != new_copy.get(key):
+                                        changed_fields.append(f"{key}: {old_copy.get(key)} → {new_copy.get(key)}")
+                                LOGGER.info("📝 CHANGED FIELDS: %s", ", ".join(changed_fields))
+                    else:
+                        # New rule detected
+                        should_trigger = True
+                        if LOG_TRIGGERS:
+                            LOGGER.info("✅ NEW RULE DETECTED: should_trigger=%s", should_trigger)
 
                 elif trigger_type == TRIGGER_RULE_DELETED:
                     if old_state is not None and meta.get('deleted'):
                         should_trigger = True
                         # Remove from cache
                         self._rule_cache.pop(rule_id, None)
+                        if LOG_TRIGGERS:
+                            LOGGER.info("🗑️ DELETE TRIGGER: should_trigger=%s", should_trigger)
 
                 # Update cache unless deleted
                 if trigger_type != TRIGGER_RULE_DELETED:
@@ -312,15 +567,26 @@ class UnifiRuleTrigger:
 
                 # Trigger action if conditions met
                 if should_trigger:
+                    # Extract rule name using helper function
+                    rule_name = get_rule_name_from_data(rule_data, rule_id, detected_rule_type)
+                    
+                    # Debug logging for ALL rule types to understand the data structure
+                    if LOG_TRIGGERS:
+                        LOGGER.info("🏷️ RULE NAME EXTRACTION: rule_id=%s, detected_type=%s, extracted_name='%s'", 
+                                   rule_id, detected_rule_type, rule_name)
+                        LOGGER.info("📊 RULE DATA FIELDS: %s", 
+                                   {k: v for k, v in rule_data.items() if k in ['name', 'description', 'label', 'title', 'dst_port', 'fwd_port', 'fwd', 'enabled']})
+                    
                     data = {
                         "rule_id": rule_id,
+                        "rule_name": rule_name,
                         "rule_type": detected_rule_type,
                         "old_state": old_state,
                         "new_state": rule_data if trigger_type != TRIGGER_RULE_DELETED else None,
                         "trigger_type": trigger_type
                     }
                     if LOG_TRIGGERS:
-                        LOGGER.info("🔥 TRIGGER FIRING: %s for rule %s (%s)", trigger_type, rule_id, detected_rule_type)
+                        LOGGER.info("🔥 TRIGGER FIRING: %s for rule %s (%s) - '%s'", trigger_type, rule_id, detected_rule_type, rule_name)
                     try:
                         trigger_vars = {
                             "platform": DOMAIN,
@@ -359,6 +625,15 @@ class UnifiRuleTrigger:
                 coordinator = entry_data["coordinator"]
                 if coordinator and coordinator.data:
                     self._update_rule_cache(coordinator.data)
+                    
+                    # Capture global initial state ONCE to prevent empty→populated false triggers
+                    if not UnifiRuleTrigger._global_initial_state_captured:
+                        UnifiRuleTrigger._global_initial_rule_state = self._capture_rule_state(coordinator.data)
+                        UnifiRuleTrigger._global_initial_state_captured = True
+                        if LOG_TRIGGERS:
+                            total_rules = sum(len(rules) for rules in UnifiRuleTrigger._global_initial_rule_state.values())
+                            LOGGER.info("🌍 GLOBAL INITIAL STATE CAPTURED: %d rules across %d types", 
+                                       total_rules, len(UnifiRuleTrigger._global_initial_rule_state))
 
             if "websocket" in entry_data:
                 websocket = entry_data["websocket"]
@@ -446,6 +721,19 @@ class UnifiRuleTrigger:
                     elif hasattr(rule, "raw") and isinstance(rule.raw, dict) and "_id" in rule.raw:
                         self._rule_cache[rule.raw["_id"]] = rule.raw
 
+    def _capture_rule_state(self, data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        """Capture current rule state for comparison."""
+        rule_state = {}
+        for rule_type, rules in data.items():
+            if rule_type in RULE_TYPE_KEYWORDS:
+                rule_state[rule_type] = {}
+                for rule in rules:
+                    if isinstance(rule, dict) and "_id" in rule:
+                        rule_state[rule_type][rule["_id"]] = rule.copy()
+                    elif hasattr(rule, "raw") and isinstance(rule.raw, dict) and "_id" in rule.raw:
+                        rule_state[rule_type][rule.raw["_id"]] = rule.raw.copy()
+        return rule_state
+
     def _dispatch_coordinator_refresh(self, reason: str) -> None:
         """Dispatch a coordinator refresh when triggers detect changes."""
         if not self._coordinator:
@@ -464,8 +752,258 @@ class UnifiRuleTrigger:
         except Exception as err:
             LOGGER.error("Error dispatching coordinator refresh: %s", err)
 
+    async def _check_rule_changes_and_trigger(self, cfgversion: str, device_mac: str) -> None:
+        """Simplified state-diff approach: Check for actual rule changes and fire appropriate triggers."""
+        if not self._coordinator:
+            if LOG_TRIGGERS:
+                LOGGER.debug("No coordinator available for state-diff check")
+            return
+            
+        try:
+            # Coordinate coordinator refresh across all trigger instances for this cfgversion
+            refresh_task = None
+            
+            # Check if a refresh is already in progress for this cfgversion
+            if cfgversion in UnifiRuleTrigger._coordinator_refresh_tasks:
+                refresh_task = UnifiRuleTrigger._coordinator_refresh_tasks[cfgversion]
+                if LOG_TRIGGERS:
+                    LOGGER.info("🔄 COORDINATOR REFRESH: Waiting for existing refresh of cfgversion %s (trigger: %s)", cfgversion, self.config[CONF_TYPE])
+            else:
+                # This trigger instance will handle the coordinator refresh
+                if LOG_TRIGGERS:
+                    LOGGER.info("🔄 COORDINATOR REFRESH: Starting refresh for cfgversion %s (trigger: %s)", cfgversion, self.config[CONF_TYPE])
+                
+                # Use current coordinator state as old_rules_state 
+                old_rules_state = {}
+                if self._coordinator.data:
+                    if LOG_TRIGGERS:
+                        LOGGER.info("🔍 COORDINATOR DATA KEYS: %s", list(self._coordinator.data.keys())) 
+                    old_rules_state = self._capture_rule_state(self._coordinator.data)
+                    if LOG_TRIGGERS:
+                        total_rules = sum(len(rules) for rules in old_rules_state.values())
+                        LOGGER.info("📊 CAPTURED CURRENT STATE: %d rules across %d types", total_rules, len(old_rules_state))
+                
+                # Store old state for all trigger instances to access
+                UnifiRuleTrigger._cfgversion_old_states[cfgversion] = old_rules_state
+                
+                # Create and start the refresh task
+                async def _do_coordinator_refresh():
+                    # Always perform coordinator refresh for consistency
+                    await self._coordinator.async_refresh()
+                    # Wait a bit for API calls to complete
+                    await asyncio.sleep(0.5)
+                    return old_rules_state
+                
+                refresh_task = self.hass.async_create_task(_do_coordinator_refresh())
+                UnifiRuleTrigger._coordinator_refresh_tasks[cfgversion] = refresh_task
+            
+            # Wait for the coordinator refresh to complete and get the old state
+            await refresh_task
+            old_rules_state = UnifiRuleTrigger._cfgversion_old_states.get(cfgversion, {})
+            
+            # CRITICAL FIX: If no cfgversion-specific old state exists, wait a bit for other triggers to complete
+            # then skip processing to avoid false triggers from stale state comparisons
+            if not old_rules_state:
+                if LOG_TRIGGERS:
+                    LOGGER.info("⚠️  NO CFGVERSION STATE: Old state not available, skipping to avoid false triggers (trigger: %s)", self.config[CONF_TYPE])
+                return  # Skip processing this cfgversion for this trigger to avoid false triggers
+            
+            if LOG_TRIGGERS:
+                LOGGER.info("✅ Coordinator refresh completed, comparing states... (trigger: %s)", self.config[CONF_TYPE])
+            
+            # Compare new state with old state to detect actual changes
+            new_rules_state = {}
+            if self._coordinator.data:
+                new_rules_state = self._capture_rule_state(self._coordinator.data)
+                if LOG_TRIGGERS:
+                    for rule_type in new_rules_state:
+                        LOGGER.info("🔍 AFTER REFRESH - RULE TYPE: %s with %d rules (trigger: %s)", rule_type, len(new_rules_state[rule_type]), self.config[CONF_TYPE])
+                
+                # Log comparison summary
+                if LOG_TRIGGERS:
+                    for rule_type in set(old_rules_state.keys()) | set(new_rules_state.keys()):
+                        old_count = len(old_rules_state.get(rule_type, {}))
+                        new_count = len(new_rules_state.get(rule_type, {}))
+                        if old_count != new_count:
+                            LOGGER.info("📊 COUNT CHANGE: %s rules: %d → %d (trigger: %s)", rule_type, old_count, new_count, self.config[CONF_TYPE])
+                        else:
+                            LOGGER.debug("📊 COUNT SAME: %s rules: %d (trigger: %s)", rule_type, old_count, self.config[CONF_TYPE])
+            
+            # Detect actual changes and fire appropriate triggers for THIS trigger instance
+            changes_detected = await self._detect_and_fire_rule_changes(old_rules_state, new_rules_state, cfgversion, device_mac)
+            
+            if LOG_TRIGGERS:
+                if changes_detected:
+                    LOGGER.info("🎯 STATE-DIFF COMPLETE: Rule changes detected and appropriate triggers fired (trigger: %s)", self.config[CONF_TYPE])
+                else:
+                    LOGGER.info("📭 STATE-DIFF COMPLETE: No rule changes detected (cfgversion was likely non-rule related) (trigger: %s)", self.config[CONF_TYPE])
+                    
+        except Exception as err:
+            LOGGER.error("Error in state-diff check (trigger: %s): %s", self.config[CONF_TYPE], err)
+        finally:
+            # Clean up the refresh task but KEEP old state data for other trigger instances
+            if cfgversion in UnifiRuleTrigger._coordinator_refresh_tasks:
+                task = UnifiRuleTrigger._coordinator_refresh_tasks[cfgversion]
+                if task.done():
+                    del UnifiRuleTrigger._coordinator_refresh_tasks[cfgversion]
+                    
+                    # Schedule cleanup of old state data after a delay to allow other triggers to access it
+                    async def cleanup_old_state():
+                        await asyncio.sleep(2.0)  # Give other triggers time to complete
+                        if cfgversion in UnifiRuleTrigger._cfgversion_old_states:
+                            del UnifiRuleTrigger._cfgversion_old_states[cfgversion]
+                            if LOG_TRIGGERS:
+                                LOGGER.debug("🗑️ Cleaned up old state data for cfgversion %s", cfgversion)
+                    
+                    # Don't await this - let it run in background
+                    self.hass.async_create_task(cleanup_old_state())
+
+    async def _detect_and_fire_rule_changes(self, old_state: Dict, new_state: Dict, cfgversion: str, device_mac: str) -> bool:
+        """Detect specific rule changes and fire appropriate triggers with accurate data."""
+        changes_detected = False
+        
+        try:
+            # Check all rule types for changes
+            all_rule_types = set(old_state.keys()) | set(new_state.keys())
+            
+            for rule_type in all_rule_types:
+                old_rules = old_state.get(rule_type, {})
+                new_rules = new_state.get(rule_type, {})
+                
+                # Check for deleted rules
+                for rule_id in old_rules:
+                    if rule_id not in new_rules:
+                        if LOG_TRIGGERS:
+                            LOGGER.info("🗑️ DETECTED DELETION: %s rule %s", rule_type, rule_id)
+                        
+                        changes_detected = True  # Mark changes detected regardless of trigger firing
+                        
+                        # Fire rule_deleted trigger if this trigger instance matches
+                        if self.config[CONF_TYPE] == TRIGGER_RULE_DELETED:
+                            if self._matches_filters(rule_type, rule_id, old_rules[rule_id]):
+                                await self._fire_trigger(TRIGGER_RULE_DELETED, rule_id, rule_type, old_rules[rule_id], old_rules[rule_id], None)
+                
+                # Check for new rules  
+                for rule_id in new_rules:
+                    if rule_id not in old_rules:
+                        if LOG_TRIGGERS:
+                            LOGGER.info("🆕 DETECTED NEW RULE: %s rule %s", rule_type, rule_id)
+                        
+                        changes_detected = True  # Mark changes detected regardless of trigger firing
+                        
+                        # Fire rule_changed trigger for new rules if this trigger instance matches
+                        if self.config[CONF_TYPE] == TRIGGER_RULE_CHANGED:
+                            if self._matches_filters(rule_type, rule_id, new_rules[rule_id]):
+                                await self._fire_trigger(TRIGGER_RULE_CHANGED, rule_id, rule_type, new_rules[rule_id], None, new_rules[rule_id])
+                
+                # Check for modified rules
+                for rule_id in old_rules:
+                    if rule_id in new_rules:
+                        old_rule = old_rules[rule_id]
+                        new_rule = new_rules[rule_id]
+                        
+                        # Check for enabled/disabled changes
+                        old_enabled = old_rule.get("enabled", False)
+                        new_enabled = new_rule.get("enabled", False)
+                        
+                        # Check for ANY changes first (including enabled field)
+                        old_copy = {k: v for k, v in old_rule.items() if not k.startswith('_')}
+                        new_copy = {k: v for k, v in new_rule.items() if not k.startswith('_')}
+                        
+                        rule_has_changes = old_copy != new_copy
+                        enabled_changed = old_rule.get("enabled", False) != new_rule.get("enabled", False)
+                        
+                        if enabled_changed:
+                            new_enabled = new_rule.get("enabled", False)
+                            if LOG_TRIGGERS:
+                                LOGGER.info("🔄 DETECTED ENABLE/DISABLE: %s rule %s (%s → %s)", 
+                                           rule_type, rule_id, old_rule.get("enabled", False), new_enabled)
+                            
+                            changes_detected = True  # Mark changes detected regardless of trigger firing
+                            
+                            # Fire appropriate enabled/disabled trigger if this trigger instance matches
+                            trigger_type = TRIGGER_RULE_ENABLED if new_enabled else TRIGGER_RULE_DISABLED
+                            if self.config[CONF_TYPE] == trigger_type:
+                                if self._matches_filters(rule_type, rule_id, new_rule):
+                                    await self._fire_trigger(trigger_type, rule_id, rule_type, new_rule, old_rule, new_rule)
+                        
+                        if rule_has_changes:
+                            if LOG_TRIGGERS:
+                                changed_fields = []
+                                for key in set(old_copy.keys()) | set(new_copy.keys()):
+                                    if old_copy.get(key) != new_copy.get(key):
+                                        changed_fields.append(f"{key}: {old_copy.get(key)} → {new_copy.get(key)}")
+                                LOGGER.info("📝 DETECTED CHANGE: %s rule %s modified (%s)", 
+                                           rule_type, rule_id, ", ".join(changed_fields[:3]) + ("..." if len(changed_fields) > 3 else ""))
+                            
+                            changes_detected = True  # Mark changes detected regardless of trigger firing
+                            
+                            # Fire rule_changed trigger if this trigger instance matches
+                            if self.config[CONF_TYPE] == TRIGGER_RULE_CHANGED:
+                                if self._matches_filters(rule_type, rule_id, new_rule):
+                                    await self._fire_trigger(TRIGGER_RULE_CHANGED, rule_id, rule_type, new_rule, old_rule, new_rule)
+            
+            return changes_detected
+            
+        except Exception as err:
+            LOGGER.error("Error detecting rule changes: %s", err)
+            return False
+
+    def _matches_filters(self, rule_type: str, rule_id: str, rule_data: Dict) -> bool:
+        """Check if rule matches the trigger's filters."""
+        # Check rule_type filter
+        if "rule_type" in self.config and self.config["rule_type"] != rule_type:
+            return False
+            
+        # Check rule_id filter
+        if "rule_id" in self.config and self.config["rule_id"] != rule_id:
+            return False
+            
+        # Check name filter
+        if "name_filter" in self.config:
+            name_filter = self.config["name_filter"]
+            rule_name = rule_data.get("name", "")
+            if not rule_name or name_filter.lower() not in rule_name.lower():
+                return False
+        
+        return True
+
+    async def _fire_trigger(self, trigger_type: str, rule_id: str, rule_type: str, rule_data: Dict, old_state: Dict, new_state: Dict) -> None:
+        """Fire a trigger with accurate rule information."""
+        try:
+            # Extract rule name using helper function
+            rule_name = get_rule_name_from_data(rule_data, rule_id, rule_type)
+            
+            data = {
+                "rule_id": rule_id,
+                "rule_name": rule_name,
+                "rule_type": rule_type,
+                "old_state": old_state,
+                "new_state": new_state,
+                "trigger_type": trigger_type
+            }
+            
+            if LOG_TRIGGERS:
+                LOGGER.info("🔥 ACCURATE TRIGGER FIRING: %s for %s rule %s - '%s'", 
+                           trigger_type, rule_type, rule_id, rule_name)
+            
+            trigger_vars = {
+                "platform": DOMAIN,
+                "type": trigger_type,
+                "event": data
+            }
+            
+            # Schedule the action execution
+            await self.action({"trigger": trigger_vars})
+            
+        except Exception as err:
+            LOGGER.error("Error firing trigger: %s", err)
+
     def async_detach(self) -> None:
         """Detach trigger."""
         if self.remove_handler:
             self.remove_handler()
             self.remove_handler = None
+            
+        if LOG_TRIGGERS:
+            LOGGER.info("🧹 TRIGGER DETACHED: %s", self.config[CONF_TYPE])

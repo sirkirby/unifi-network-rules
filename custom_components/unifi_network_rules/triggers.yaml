@@ -6,6 +6,10 @@ rule_enabled:
       name: "Rule ID"
       description: "The unique identifier of the rule"
       example: "5f4a7b2c8d9e1a3b4c5d6e7f"
+    rule_name:
+      name: "Rule Name"
+      description: "The human-readable name of the rule"
+      example: "Guest Network Access"
     rule_type:
       name: "Rule type"
       description: "The type of rule that was enabled"
@@ -29,6 +33,10 @@ rule_disabled:
       name: "Rule ID"
       description: "The unique identifier of the rule"
       example: "5f4a7b2c8d9e1a3b4c5d6e7f"
+    rule_name:
+      name: "Rule Name"
+      description: "The human-readable name of the rule"
+      example: "Block Kids Internet"
     rule_type:
       name: "Rule type"
       description: "The type of rule that was disabled"
@@ -52,6 +60,10 @@ rule_changed:
       name: "Rule ID"
       description: "The unique identifier of the rule"
       example: "5f4a7b2c8d9e1a3b4c5d6e7f"
+    rule_name:
+      name: "Rule Name"
+      description: "The human-readable name of the rule"
+      example: "QoS Gaming Priority"
     rule_type:
       name: "Rule type"
       description: "The type of rule that was changed (firewall_policies, traffic_routes, port_forwards, qos_rules, vpn_clients, vpn_servers, legacy_firewall_rules, traffic_rules, wlans)"
@@ -75,6 +87,10 @@ rule_deleted:
       name: "Rule ID"
       description: "The unique identifier of the rule"
       example: "5f4a7b2c8d9e1a3b4c5d6e7f"
+    rule_name:
+      name: "Rule Name"
+      description: "The human-readable name of the rule"
+      example: "Temporary VPN Access"
     rule_type:
       name: "Rule type"
       description: "The type of rule that was deleted (firewall_policies, traffic_routes, port_forwards, qos_rules, vpn_clients, vpn_servers, legacy_firewall_rules, traffic_rules, wlans)"
