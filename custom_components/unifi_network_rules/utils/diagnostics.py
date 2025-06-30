@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
-from ..const import LOGGER
+from ..const import LOGGER, DOMAIN
 
 def analyze_controller(controller: Any) -> Dict[str, Any]:
     """Analyze controller object structure for diagnostics.

@@ -57,6 +57,7 @@ LOG_WEBSOCKET: Final = False  # WebSocket connection/reconnection logs
 LOG_API_CALLS: Final = False  # API requests and responses
 LOG_DATA_UPDATES: Final = False  # Data refresh and update cycles 
 LOG_ENTITY_CHANGES: Final = False  # Entity addition/removal/state changes
+LOG_TRIGGERS: Final = False  # Trigger detection and firing logs - ENABLED FOR STATE-DIFF DEBUGGING
 
 # For backwards compatibility - will be removed in a future update
 # Use LOG_WEBSOCKET instead

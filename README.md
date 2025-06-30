@@ -19,6 +19,7 @@ UniFi Network Rules is a custom integration for Home Assistant that integrates w
 - Service actions for full backup and restore of all rules that are managed by this integration.
 - Service actions for batch enabling and disabling rules by pattern matching rule names or IDs.
 - Service actions for deleting rules by ID.
+- LED toggle switch for UniFi access points and other LED capable devices to control LED on/off.
 
 Request a feature [here](https://github.com/sirkirby/unifi-network-rules/issues).
 
@@ -154,7 +155,324 @@ icon: mdi:cloud-upload
 
 > **Note**: For `rule_types` parameter, you can specify one or more of: `policy` (zone-based firewall rules), `port_forward` (port forwarding rules), `route` (traffic routes), or `qos_rule` (quality of service rules). See the "Understanding Rule Types" section for more details.
 
-## Automation Examples
+## Real-Time Triggers 🔔
+
+UniFi Network Rules provides a **sophisticated trigger system** that gives you real-time notifications when network rules change, regardless of whether the changes originate from Home Assistant or directly from the UniFi console. This bi-directional monitoring enables powerful automations and monitoring scenarios.
+
+### Key Features
+
+- **🔄 Bi-Directional Monitoring**: Triggers fire for changes made both from Home Assistant and directly from the UniFi console
+- **⚡ Real-Time Updates**: Uses UniFi OS websocket connections for instant notifications
+- **🎯 Granular Filtering**: Filter triggers by rule type, specific rule IDs, or rule name patterns
+- **📊 Rich Data**: Each trigger includes rule names, old/new states, and change details
+- **🛡️ Reliable Detection**: Smart state-diff approach ensures accurate change detection
+
+### Trigger Types
+
+| Trigger Type | Description | When It Fires |
+|--------------|-------------|---------------|
+| `rule_enabled` | Rule is enabled/activated | When a rule's enabled state changes from false to true |
+| `rule_disabled` | Rule is disabled/deactivated | When a rule's enabled state changes from true to false |
+| `rule_changed` | Rule configuration is modified | When any rule settings change (ports, IPs, names, etc.) |
+| `rule_deleted` | Rule is completely removed | When a rule is deleted from UniFi |
+
+### Supported Rule Types
+
+- **Firewall Policies** (`firewall_policies`): Zone-based firewall rules
+- **Port Forwards** (`port_forwards`): Port forwarding rules
+- **Traffic Routes** (`traffic_routes`): Network routing rules
+- **QoS Rules** (`qos_rules`): Quality of Service rules
+- **VPN Clients** (`vpn_clients`): VPN client configurations
+- **VPN Servers** (`vpn_servers`): VPN server configurations
+- **WLANs** (`wlans`): Wireless network configurations
+
+### Setting Up Triggers
+
+#### Using the Automation UI
+
+**Note:** UI support is currently limited to Device Triggers. Triggers will appear as "unknown" in the automation UI. For now, we recommend using YAML configuration.
+
+1. Go to Settings → Automations & Scenes → Create Automation
+2. Choose "When" → Manual trigger
+3. Click "Edit in YAML" and use the YAML format shown below
+4. Configure your automation actions in the UI or YAML
+
+#### YAML Configuration
+
+```yaml
+triggers:
+  - type: rule_enabled
+    trigger: unifi_network_rules
+    rule_type: port_forwards  # Optional: filter by rule type
+    name_filter: "Minecraft"  # Optional: filter by rule name
+```
+
+### Available Trigger Data
+
+Each trigger provides rich data you can use in conditions and actions:
+
+```yaml
+# Available in automations as trigger.event.*
+rule_id: "64f1a2b3c4d5e6f7g8h9i0j1"  # Unique rule identifier
+rule_name: "Minecraft Server Access"    # Human-readable rule name
+rule_type: "port_forwards"              # Type of rule that changed
+old_state: { ... }                      # Previous rule configuration
+new_state: { ... }                      # New rule configuration (null for deletions)
+trigger_type: "rule_enabled"            # Which trigger fired
+```
+
+## Trigger Automation Examples
+
+### 1. Security Monitoring - Alert on Unexpected Rule Changes
+
+Get notified when someone makes firewall changes outside of Home Assistant:
+
+```yaml
+alias: Security Alert - Firewall Changes
+description: Alert when firewall rules are modified outside of HA
+triggers:
+  - type: rule_changed
+    trigger: unifi_network_rules
+    rule_type: firewall_policies
+  - type: rule_deleted
+    trigger: unifi_network_rules
+    rule_type: firewall_policies
+condition:
+  # Add conditions to filter out expected changes if needed
+action:
+  - action: notify.mobile_app_admin_phone
+    data:
+      title: "🚨 Network Security Alert"
+      message: >
+        Firewall rule "{{ trigger.event.rule_name }}" was {{ trigger.event.trigger_type.replace('rule_', '') }}
+        Rule ID: {{ trigger.event.rule_id }}
+      data:
+        priority: high
+        category: security
+mode: single
+```
+
+### 2. Game Server Management - Auto-Disable After Hours
+
+Automatically disable game server access when enabled outside of allowed hours:
+
+```yaml
+alias: Game Server Auto-Disable
+description: Disable Minecraft server if enabled during school hours
+triggers:
+  - type: rule_enabled
+    trigger: unifi_network_rules
+    name_filter: "Minecraft"
+condition:
+  - condition: time
+    after: "08:00:00"
+    before: "15:30:00"
+  - condition: time
+    weekday:
+      - mon
+      - tue
+      - wed
+      - thu
+      - fri
+action:
+  - delay:
+      minutes: 5  # Give a 5-minute grace period
+  - action: switch.turn_off
+    target:
+      entity_id: >
+        {% set rule_id = trigger.event.rule_id %}
+        {% set entities = states.switch | selectattr('attributes.rule_id', 'eq', rule_id) | map(attribute='entity_id') | list %}
+        {{ entities[0] if entities else none }}
+  - action: notify.family_devices
+    data:
+      title: "🎮 Game Server Disabled"
+      message: "Minecraft server was automatically disabled during school hours"
+mode: single
+```
+
+### 3. Backup Trigger - Save Config on Important Changes
+
+Automatically backup network rules when critical changes are made by combining triggers and services:
+
+```yaml
+alias: Auto-Backup on Critical Changes
+description: Backup rules when important firewall or VPN changes occur
+triggers:
+  - type: rule_changed
+    trigger: unifi_network_rules
+    rule_type: firewall_policies
+  - type: rule_deleted
+    trigger: unifi_network_rules
+    rule_type: firewall_policies
+  - type: rule_changed
+    trigger: unifi_network_rules
+    rule_type: vpn_servers
+condition:
+  # Only backup if it's been more than 1 hour since last backup
+  - condition: template
+    value_template: >
+      {{ (now() - states.automation.auto_backup_on_critical_changes.attributes.last_triggered).total_seconds() > 3600 }}
+action:
+  - action: unifi_network_rules.backup_rules
+    data:
+      filename: "auto_backup_{{ now().strftime('%Y%m%d_%H%M') }}.json"
+  - action: persistent_notification.create
+    data:
+      title: "📁 Network Rules Backed Up"
+      message: >
+        Automatic backup created due to {{ trigger.event.trigger_type.replace('rule_', '') }} 
+        of {{ trigger.event.rule_type.replace('_', ' ').title() }}: "{{ trigger.event.rule_name }}"
+mode: single
+```
+
+### 4. VPN Connection Monitoring
+
+Monitor VPN client connections and send notifications:
+
+```yaml
+alias: VPN Connection Monitoring
+description: Monitor when VPN clients connect or disconnect
+triggers:
+  - type: rule_enabled
+    trigger: unifi_network_rules
+    rule_type: vpn_clients
+  - type: rule_disabled
+    trigger: unifi_network_rules
+    rule_type: vpn_clients
+action:
+  actions:
+  - action: persistent_notification.create
+    data:
+      title: 🔒 VPN Status Change
+      message: >-
+        VPN "{{ trigger.event.rule_name }}" was {{ 'connected' if
+        trigger.event.trigger_type == 'rule_enabled' else 'disconnected'
+        }}         {% if trigger.event.trigger_type == 'rule_enabled' %}        
+        🟢 Secure connection established         {% else %}         🔴
+        Connection terminated         {% endif %}
+mode: parallel
+```
+
+### 5. Kids' Device Management with Notifications
+
+Monitor and log when parental control rules change:
+
+```yaml
+alias: Parental Control Monitor
+description: Track changes to kids' internet access rules
+triggers:
+  - type: rule_enabled
+    trigger: unifi_network_rules
+    name_filter: "Kid"
+  - type: rule_disabled
+    trigger: unifi_network_rules
+    name_filter: "Kid"
+  - type: rule_changed
+    trigger: unifi_network_rules
+    name_filter: "Block"
+action:
+  - action: logbook.log
+    data:
+      name: "Parental Controls"
+      message: >
+        {{ trigger.event.rule_name }} was {{ trigger.event.trigger_type.replace('rule_', '') }}
+        {% if trigger.event.trigger_type == 'rule_enabled' %}
+        ✅ Internet access restored
+        {% elif trigger.event.trigger_type == 'rule_disabled' %}
+        🚫 Internet access blocked
+        {% else %}
+        🔧 Settings modified
+        {% endif %}
+      entity_id: automation.parental_control_monitor
+  - action: notify.parents_devices
+    data:
+      title: "👨‍👩‍👧‍👦 Parental Control Update"
+      message: "{{ trigger.event.rule_name }} - {{ trigger.event.trigger_type.replace('rule_', '').title() }}"
+mode: parallel
+```
+
+### 6. Network Health Dashboard
+
+Create input helpers to track network rule changes on your dashboard:
+
+```yaml
+alias: Update Network Stats
+description: Update dashboard counters for network changes
+triggers:
+  - type: rule_enabled
+    trigger: unifi_network_rules
+  - type: rule_disabled
+    trigger: unifi_network_rules
+  - type: rule_changed
+    trigger: unifi_network_rules
+action:
+  - action: counter.increment
+    target:
+      entity_id: counter.network_rule_changes
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.last_network_change
+    data:
+      value: >
+        {{ now().strftime('%H:%M') }}: {{ trigger.event.rule_name }} ({{ trigger.event.trigger_type.replace('rule_', '') }})
+  - action: input_datetime.set_datetime
+    target:
+      entity_id: input_datetime.last_rule_change
+    data:
+      datetime: "{{ now() }}"
+mode: parallel
+```
+
+### Advanced Filtering Examples
+
+#### Filter by Multiple Rule Types
+
+```yaml
+triggers:
+  - type: rule_changed
+    trigger: unifi_network_rules
+    rule_type: port_forwards
+  - type: rule_changed
+    trigger: unifi_network_rules
+    rule_type: vpn_clients
+```
+
+#### Filter by Specific Rule Names
+
+```yaml
+triggers:
+  - type: rule_enabled
+    trigger: unifi_network_rules
+    name_filter: "Gaming"  # Matches any rule containing "Gaming"
+```
+
+#### Monitor Specific Rule ID
+
+```yaml
+triggers:
+  - type: rule_changed
+    trigger: unifi_network_rules
+    rule_id: "64f1a2b3c4d5e6f7g8h9i0j1"  # Monitor one specific rule
+```
+
+### Best Practices for Triggers
+
+1. **Use Specific Filters**: Filter triggers to avoid unnecessary automation runs
+2. **Add Conditions**: Use time, state, or template conditions to refine when automations run
+3. **Set Appropriate Modes**: Use `single`, `parallel`, or `queued` based on your needs
+4. **Log Important Changes**: Use logbook entries for audit trails
+5. **Test Thoroughly**: Test triggers with both HA-initiated and console-initiated changes
+6. **Monitor Performance**: Triggers are real-time, so ensure your automations are efficient
+
+### Troubleshooting Triggers
+
+- **UI Shows "Unknown"**: Currently, trigger UI support is limited. Use YAML configuration instead
+- **Enable Debug Logging**: Set `LOG_TRIGGERS = True` in `const.py` for detailed trigger logs
+- **Check WebSocket Connection**: Triggers require active WebSocket connection to UniFi OS
+- **Verify Permissions**: Ensure your UniFi user has admin access to receive all rule change events
+- **Test Both Sources**: Verify triggers work for both HA-initiated and console-initiated changes
+
+## Service Automation Examples
 
 ### Automated Daily Backup
 
@@ -360,6 +678,7 @@ For more focused debugging of specific subsystems, you can enable only what you 
 - `LOG_API_CALLS`: Log API requests and responses
 - `LOG_DATA_UPDATES`: Log data refresh and update cycles
 - `LOG_ENTITY_CHANGES`: Log entity addition, removal, and state changes
+- `LOG_TRIGGERS`: Log trigger detection and firing
 
 These targeted flags help reduce log noise when troubleshooting specific issues.
 
