@@ -10,6 +10,7 @@ from aiounifi.models.traffic_rule import TrafficRule
 from aiounifi.models.port_forward import PortForward
 from aiounifi.models.firewall_zone import FirewallZone
 from aiounifi.models.wlan import Wlan
+from aiounifi.models.device import Device
 
 # Import our custom models
 from ..models.firewall_rule import FirewallRule
@@ -34,6 +35,16 @@ def get_rule_enabled(rule: Any) -> bool:
     # Check different rule types and return appropriate enabled status
     if isinstance(rule, (PortForward, TrafficRoute, FirewallPolicy, TrafficRule, Wlan, QoSRule, VPNConfig)):
         return getattr(rule, "enabled", False)
+    
+    # Special handling for Device LED state
+    if isinstance(rule, Device):
+        # For devices, "enabled" means LED is not overridden (default state)
+        # When led_override is "default", the LED follows normal behavior (enabled)
+        # When led_override is "off", the LED is disabled
+        if hasattr(rule, 'raw') and 'led_override' in rule.raw:
+            led_state = rule.raw.get('led_override')
+            return led_state != 'off'  # True if not explicitly turned off
+        return True  # Default to enabled if no override info
     
     # For dictionaries, try common enabled attributes
     if isinstance(rule, dict):
@@ -63,6 +74,7 @@ def get_rule_id(rule: Any) -> str | None:
     Examples: 
         - unr_policy_123456
         - unr_route_abcdef
+        - unr_device_abc123_led
     """
     # Access different rule types and return appropriate ID with type prefix
     if isinstance(rule, PortForward):
@@ -134,6 +146,14 @@ def get_rule_id(rule: Any) -> str | None:
             LOGGER.warning("VPNConfig without id: %s", rule)
             return None
     
+    # Handle Device objects for LED switches
+    if isinstance(rule, Device):
+        if hasattr(rule, 'mac') and rule.mac:
+            return f"unr_device_{rule.mac}_led"
+        else:
+            LOGGER.warning("Device without mac attribute: %s", rule)
+            return None
+    
     # Dictionary fallback - this should not happen with properly typed data
     if isinstance(rule, dict):
         _id = rule.get("_id") or rule.get("id")
@@ -165,7 +185,8 @@ def get_rule_prefix(rule_type: str) -> str:
         "traffic_rules": "Traffic Rule",
         "legacy_firewall_rules": "Legacy Rule",
         "qos_rules": "QoS",
-        "wlans": "WLAN"
+        "wlans": "WLAN",
+        "devices": "Device"
     }
     
     return rule_types.get(rule_type, "Rule")
@@ -312,6 +333,16 @@ def extract_descriptive_name(rule: Any, coordinator=None) -> str | None:
         
         return None
         
+    elif isinstance(rule, Device):
+        # For devices, return the device name for LED switches
+        if hasattr(rule, 'name') and rule.name:
+            return f"{rule.name}"
+        elif hasattr(rule, 'raw') and 'name' in rule.raw:
+            return f"{rule.raw['name']}"
+        elif hasattr(rule, 'mac') and rule.mac:
+            return f"Device {rule.mac}"
+        return "Device"
+        
     elif isinstance(rule, dict):
         # For dictionaries, try common name attributes
         return rule.get("name") or rule.get("description")
@@ -341,6 +372,8 @@ def get_rule_name(rule: Any, coordinator=None) -> str | None:
         rule_type = "wlans"
     elif isinstance(rule, QoSRule):
         rule_type = "qos_rules"
+    elif isinstance(rule, Device):
+        rule_type = "devices"
     elif isinstance(rule, dict) and "type" in rule:
         rule_type = rule.get("type")
     

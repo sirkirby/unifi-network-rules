@@ -20,6 +20,7 @@ from aiounifi.models.traffic_rule import TrafficRule
 from aiounifi.models.port_forward import PortForward
 from aiounifi.models.firewall_zone import FirewallZone
 from aiounifi.models.wlan import Wlan
+from aiounifi.models.device import Device
 
 from .const import DOMAIN, LOGGER, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DEBUG_WEBSOCKET
 from .udm import UDMAPI
@@ -83,6 +84,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self._update_in_progress = False
         self._has_data = False
         
+        # Websocket processing is now handled by trigger system
+        
         # Track entities we added or removed
         # By unique ID rather than the objects themselves
         self.known_unique_ids: Set[str] = set()
@@ -101,6 +104,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self.qos_rules: List[QoSRule] = []
         self.vpn_clients: List[VPNConfig] = []
         self.vpn_servers: List[VPNConfig] = []
+        self.devices: List[Device] = []  # For LED toggle switches
 
         # For dynamic entity creation
         self.async_add_entities_callback: AddEntitiesCallback | None = None
@@ -172,6 +176,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     "qos_rules": [],
                     "vpn_clients": [],
                     "vpn_servers": [],
+                    "devices": [],
                 }
 
                 # Store the previous data to detect deletions and protect against API failures
@@ -265,6 +270,10 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 
                 # Then VPN servers
                 await self._update_vpn_servers_in_dict(rules_data)
+                await asyncio.sleep(api_call_delay)
+                
+                # Then devices (for LED switches)
+                await self._update_devices_in_dict(rules_data)
 
                 # Verify the data is valid - check if we have at least some data in key categories
                 # This helps prevent entity removal during temporary API errors
@@ -376,8 +385,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     self.qos_rules = rules_data.get("qos_rules", [])
                     self.vpn_clients = rules_data.get("vpn_clients", [])
                     self.vpn_servers = rules_data.get("vpn_servers", [])
+                    self.devices = rules_data.get("devices", [])
 
-                    LOGGER.info("Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d, QoS Rules=%d, VPN Clients=%d, VPN Servers=%d", 
+                    LOGGER.info("Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d, QoS Rules=%d, VPN Clients=%d, VPN Servers=%d, Devices=%d", 
                                len(self.port_forwards),
                                len(self.traffic_routes),
                                len(self.firewall_policies),
@@ -386,7 +396,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                                len(self.wlans),
                                len(self.qos_rules),
                                len(self.vpn_clients),
-                               len(self.vpn_servers))
+                               len(self.vpn_servers),
+                               len(self.devices))
 
                 return rules_data
 
@@ -468,6 +479,15 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                                  all_current_unique_ids.add(kill_switch_id)
                      except Exception as e:
                           LOGGER.warning("Error getting ID during deletion check for %s: %s", rule_type, e)
+
+        # Special handling for device LED switches in deletion check
+        devices = new_data.get("devices", [])
+        for device in devices:
+            try:
+                device_unique_id = f"unr_device_{device.mac}_led"
+                all_current_unique_ids.add(device_unique_id)
+            except Exception as e:
+                LOGGER.warning("Error getting device ID during deletion check: %s", e)
 
         # Find IDs that are known but NOT in the current data
         deleted_unique_ids = current_known_ids - all_current_unique_ids
@@ -596,6 +616,64 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
     async def _update_vpn_servers_in_dict(self, data: Dict[str, List[Any]]) -> None:
         """Update VPN servers in the given data dictionary."""
         await self._update_rule_type_in_dict(data, "vpn_servers", self.api.get_vpn_servers)
+        
+    async def _update_devices_in_dict(self, data: Dict[str, List[Any]]) -> None:
+        """Update devices in the data dictionary."""
+        try:
+            LOGGER.info("Fetching devices for LED switches...")
+            
+            # Get LED states from the stat/device endpoint (has comprehensive device data including LED states)
+            led_states = await self.api.get_device_led_states()
+            LOGGER.info("Retrieved LED states for %d devices from stat/device", len(led_states))
+            
+            # Debug: Print LED states found
+            if led_states:
+                LOGGER.info("LED-capable devices found:")
+                for mac, led_info in led_states.items():
+                    LOGGER.info("  %s (%s): LED=%s, Model=%s", 
+                              led_info['name'], mac, led_info.get('led_override', 'unknown'), led_info['model'])
+            
+            # Create Device objects directly from the comprehensive LED states data
+            # This avoids the issue where v2 /device endpoint may not return all devices
+            led_capable_devices = []
+            for mac, led_info in led_states.items():
+                try:
+                    # Create a device data structure from the LED info
+                    device_data = {
+                        'mac': mac,
+                        '_id': led_info.get('_id', mac),  # Use _id if available, fallback to mac
+                        'device_id': led_info.get('_id', mac),   # Device ID field expected by Device class
+                        'name': led_info['name'],
+                        'model': led_info['model'],
+                        'type': led_info['type'],
+                        'is_access_point': led_info['is_access_point'],
+                        'led_override': led_info.get('led_override'),
+                        'led_override_color': led_info.get('led_override_color'),
+                        'led_override_color_brightness': led_info.get('led_override_color_brightness'),
+                        'state': led_info.get('state', 1),  # Device connection state
+                    }
+                    
+                    # Create Device object from this data
+                    device = Device(device_data)
+                    led_capable_devices.append(device)
+                    LOGGER.info("Created LED-capable device: %s (%s) - LED state: %s", 
+                              led_info['name'], mac, led_info.get('led_override', 'unknown'))
+                    
+                except Exception as device_err:
+                    LOGGER.warning("Error creating device object for %s (%s): %s", 
+                                 led_info.get('name', 'unknown'), mac, str(device_err))
+                    continue
+            
+            data["devices"] = led_capable_devices
+            self.devices = led_capable_devices
+            LOGGER.info("Updated %d LED-capable devices with current LED states", len(led_capable_devices))
+            
+        except Exception as err:
+            LOGGER.error("Failed to update devices: %s", str(err))
+            LOGGER.exception("Device update exception details:")
+            data["devices"] = []
+            if not hasattr(self, 'devices'):
+                self.devices = []
 
     async def _update_rule_type(self, rule_type: str, fetch_method: Callable) -> None:
         """Update a specific rule type in self.data.
@@ -704,193 +782,17 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
 
     @callback
     def _handle_websocket_message(self, message: dict[str, Any]) -> None:
-        """Handle a message from the WebSocket connection."""
-        try:
-            if not message:
-                return
+        """Handle a message from the WebSocket connection.
+        
+        NOTE: This method is now primarily handled by the trigger system.
+        Triggers detect config changes and dispatch refreshes directly via _dispatch_coordinator_refresh().
+        This keeps the detection logic DRY and centralized in one place.
+        """
+        # The trigger system now handles all websocket message detection and dispatches
+        # coordinator refreshes when config changes are detected. This method is kept
+        # for backward compatibility but should only be called as a fallback.
+        pass
 
-            # Get message meta data if available
-            meta = message.get("meta", {})
-            msg_type = meta.get("message", "")
-            msg_data = message.get("data", {})
-                
-            # Use string representation of message to quickly determine the message type
-            message_str = str(message).lower()
-            
-            # Process delete events first
-            if "delete" in message_str and ("event" in message or "events" in message_str):
-                # This looks like a deletion event, check for IDs being removed
-                LOGGER.debug("WebSocket deletion event: %s", message)
-                
-                # Attempt to match deletion events to entities
-                pass
-            
-            # Check if any key event data exists (log even if we don't process it)
-            if any(key in message_str for key in ["rule", "policy", "route", "forward", "nat", "traffic", "port"]):
-                # These keywords might indicate a rule-related event
-                LOGGER.debug("WebSocket rule event: %s", message)
-                
-                # Map keywords to rule types
-                rule_type_keywords = {
-                    "firewall_policies": ["policy", "security", "firewall"],
-                    "traffic_rules": ["traffic", "traffic_rules"],
-                    "port_forwards": ["port", "forward", "nat"],
-                    "traffic_routes": ["route", "traffic"],
-                    "legacy_firewall_rules": ["firewall", "rule", "allow", "deny"],
-                    "qos_rules": ["qos", "quality", "service"],
-                    "vpn_clients": ["vpn", "client"],
-                    "vpn_servers": ["vpn", "server"],
-                }
-                
-                # Check if this message might relate to rule changes
-                should_refresh = False
-                refresh_reason = None
-                rule_type_affected = None
-                
-                # Configuration changes and provisioning often relate to rule updates
-                if "cfgversion" in str(message).lower() or "provisioned" in str(message).lower():
-                    should_refresh = True
-                    refresh_reason = "Configuration version change detected"
-                
-                # Direct rule-related events
-                elif any(word in msg_type.lower() for word in ["firewall", "rule", "policy", "route", "forward", "qos"]):
-                    should_refresh = True
-                    refresh_reason = f"Rule-related event type: {msg_type}"
-                    
-                    # Try to determine the specific rule type affected
-                    for rule_type, keywords in rule_type_keywords.items():
-                        if any(keyword in msg_type.lower() for keyword in keywords):
-                            rule_type_affected = rule_type
-                            break
-                
-                # General CRUD operations that might indicate rule changes
-                elif any(op in msg_type.lower() for op in ["add", "delete", "update", "remove"]):
-                    # Check if the operation relates to any rule types
-                    message_str = str(message).lower()
-                    
-                    # Special handling for port forwards vs device port tables
-                    if "port" in message_str:
-                        # Check if this is a device port_table update (which is distinct from port forwards)
-                        if "port_table" in message_str and not any(kw in message_str for kw in ["port_forward", "portforward", "nat"]):
-                            # Skip false positive port_table updates that aren't related to port forwarding
-                            log_websocket("Skipping CRUD operation for port_table (not related to port forwards)")
-                            return
-                    
-                    for rule_type, keywords in rule_type_keywords.items():
-                        if any(keyword in message_str for keyword in keywords):
-                            # For port_forwards, require more specific keywords to avoid false positives
-                            if rule_type == "port_forwards" and not any(kw in message_str for kw in ["port_forward", "portforward", "nat"]):
-                                continue
-                                
-                            should_refresh = True
-                            rule_type_affected = rule_type
-                            refresh_reason = f"CRUD operation detected for {rule_type}"
-                            break
-                
-                # Device updates - only process if they contain config changes
-                elif "device" in msg_type.lower() and "update" in msg_type.lower():
-                    # Only refresh for specific configuration changes
-                    message_str = str(message).lower()
-                    config_keywords = ["config", "firewall", "rule", "policy", "route", "qos"]
-                    
-                    # Skip updating for commonly noisy device state update patterns
-                    if isinstance(msg_data, list) and len(msg_data) == 1:
-                        # Skip purely device state updates - these don't affect configurations
-                        if set(msg_data[0].keys()).issubset({"state", "upgrade_state", "provisioned_at"}):
-                            log_websocket("Skipping refresh for routine device state update: %s", 
-                                          set(msg_data[0].keys()))
-                            return
-                    
-                    # Check if this is specifically a port_table update (which is not related to port forwards)
-                    if "port_table" in message_str and not any(kw in message_str for kw in ["port_forward", "portforward", "nat"]):
-                        # Skip device updates that only contain port_table information without port forwarding references
-                        log_websocket("Skipping refresh for device update with port_table (not related to port forwards)")
-                        return
-                    
-                    # Check if this contains configuration version changes (accept these)
-                    if "cfgversion" in message_str:
-                        should_refresh = True
-                        refresh_reason = "Device update with configuration version change"
-                    # Otherwise, be more selective about what triggers refreshes
-                    elif any(keyword in message_str for keyword in config_keywords):
-                        should_refresh = True
-                        refresh_reason = "Device update with potential rule changes"
-                    else:
-                        # Not all device updates need a refresh - skip ones without config changes
-                        log_websocket("Skipping refresh for device update without rule-related changes")
-                        return
-                
-                # Check for QoS-specific event patterns that might not be caught by other checks
-                if not should_refresh and "qos" in str(message).lower():
-                    should_refresh = True
-                    rule_type_affected = "qos_rules"
-                    refresh_reason = "QoS-related event detected"
-                    log_websocket("QoS-specific event detected: %s", msg_type)
-                
-                if should_refresh:
-                    # Use a semaphore to prevent multiple concurrent refreshes
-                    if not hasattr(self, '_refresh_semaphore'):
-                        self._refresh_semaphore = asyncio.Semaphore(1)
-                    
-                    # Only proceed if we can acquire the semaphore
-                    if self._refresh_semaphore.locked():
-                        log_websocket("Skipping refresh as one is already in progress")
-                        return
-                    
-                    # Should prevent rapid-fire refreshes during switch operations
-                    if not hasattr(self, '_min_ws_refresh_interval'):
-                        self._min_ws_refresh_interval = 1.5
-                    
-                    if not hasattr(self, '_last_ws_refresh'):
-                        self._last_ws_refresh = 0
-                    
-                    if not hasattr(self, '_pending_ws_refresh'):
-                        self._pending_ws_refresh = False
-                    
-                    if not hasattr(self, '_ws_refresh_task'):
-                        self._ws_refresh_task = None
-                    
-                    current_time = time.time()
-                    if current_time - self._last_ws_refresh < self._min_ws_refresh_interval:
-                        log_websocket(
-                            "Debouncing refresh request (last refresh was %0.1f seconds ago)",
-                            current_time - self._last_ws_refresh
-                        )
-                        
-                        # Cancel any pending refresh task
-                        if self._ws_refresh_task and not self._ws_refresh_task.done():
-                            self._ws_refresh_task.cancel()
-                        
-                        # Schedule a delayed refresh if one isn't already pending
-                        if not self._pending_ws_refresh:
-                            self._pending_ws_refresh = True
-                            delay = self._min_ws_refresh_interval - (current_time - self._last_ws_refresh)
-                            
-                            async def delayed_refresh():
-                                await asyncio.sleep(delay)
-                                self._pending_ws_refresh = False
-                                log_websocket("Executing delayed refresh after debounce period")
-                                # Use the standard refresh workflow for all rule types
-                                await self._controlled_refresh_wrapper()
-                            
-                            self._ws_refresh_task = self.hass.async_create_task(delayed_refresh())
-                        return
-                    
-                    # Update last refresh timestamp
-                    self._last_ws_refresh = current_time
-                    
-                    # Log refresh events at INFO level for visibility
-                    LOGGER.info("Refreshing data due to: %s (rule type: %s)", 
-                               refresh_reason, rule_type_affected or "unknown")
-                    
-                    # Use the standard refresh workflow for all rule types
-                    self.hass.async_create_task(self._controlled_refresh_wrapper())
-                elif DEBUG_WEBSOCKET:
-                    # Only log non-refreshing messages when debug is enabled
-                    log_websocket("No refresh triggered for message type: %s", msg_type)
-        except Exception as err:
-            LOGGER.error("Error handling websocket message: %s", err)
-    
     async def _controlled_refresh_wrapper(self):
         """Wrapper for the controlled refresh process to ensure proper semaphore handling."""
         # Acquire semaphore before starting refresh
@@ -1238,8 +1140,11 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
 
     async def _discover_and_add_new_entities(self, new_data: Dict[str, List[Any]]) -> None:
         """Discover new rules from fetched data and dynamically add corresponding entities."""
+        LOGGER.debug("Entity discovery called - callback set: %s, initial_update_done: %s", 
+                    bool(self.async_add_entities_callback), self._initial_update_done)
+        
         if not self.async_add_entities_callback:
-            LOGGER.warning("Cannot add entities: callback not set")
+            LOGGER.warning("Cannot add entities: callback not set (this is normal during initial setup)")
             return
         
         # Import local reference to the entities to avoid circular imports
@@ -1253,7 +1158,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             UnifiWlanSwitch,
             UnifiTrafficRouteKillSwitch,
             UnifiVPNClientSwitch,
-            UnifiVPNServerSwitch
+            UnifiVPNServerSwitch,
+            UnifiLedToggleSwitch
         )
 
         # Define mappings from rule types to entities
@@ -1307,6 +1213,24 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                             LOGGER.debug("Coordinator: Discovered potential new kill switch: %s (for parent %s)", kill_switch_id, rule_id)
                 except Exception as err:
                     LOGGER.warning("Coordinator: Error processing rule during dynamic discovery: %s", err)
+
+        # Special handling for LED-capable devices
+        devices = new_data.get("devices", [])
+        if devices:
+            for device in devices:
+                try:
+                    device_unique_id = f"unr_device_{device.mac}_led"
+                    all_current_unique_ids.add(device_unique_id)
+                    
+                    if device_unique_id not in self.known_unique_ids:
+                        potential_entities_data[device_unique_id] = {
+                            "rule_data": device,
+                            "rule_type": "devices",
+                            "entity_class": UnifiLedToggleSwitch,
+                        }
+                        LOGGER.debug("Coordinator: Discovered potential new LED switch: %s", device_unique_id)
+                except Exception as err:
+                    LOGGER.warning("Coordinator: Error processing device during dynamic discovery: %s", err)
 
         # Find IDs that are known but no longer present in the current data (should be handled by deletion logic, but double-check)
         stale_known_ids = self.known_unique_ids - all_current_unique_ids

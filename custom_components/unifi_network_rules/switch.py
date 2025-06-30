@@ -28,8 +28,10 @@ from aiounifi.models.traffic_rule import TrafficRule
 from aiounifi.models.port_forward import PortForward
 from aiounifi.models.firewall_zone import FirewallZone
 from aiounifi.models.wlan import Wlan
+from aiounifi.models.device import Device  # For LED toggle
 
 from .const import DOMAIN, MANUFACTURER
+from .helpers.rule import sanitize_entity_id
 from .coordinator import UnifiRuleUpdateCoordinator
 from .helpers.rule import (
     get_rule_id, 
@@ -95,8 +97,9 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     
     # --- Trigger an immediate refresh after initial known_ids population ---
     # This ensures the first deletion check runs with IDs from the registry
+    LOGGER.debug("Requesting coordinator refresh to populate initial data...")
     await coordinator.async_request_refresh()
-    LOGGER.debug("Requested coordinator refresh after switch setup")
+    LOGGER.debug("Initial coordinator refresh completed")
 
     # Initialize as empty, coordinator will manage it
     # if not hasattr(coordinator, 'known_unique_ids'): # Initialize only if it doesn't exist (e.g. first load)
@@ -104,6 +107,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     # Do NOT clear on reload, let coordinator handle sync
 
     # --- Store add_entities callback --- 
+    LOGGER.debug("Setting async_add_entities callback on coordinator")
     coordinator.async_add_entities_callback = async_add_entities
 
     # --- Step 1: Gather all potential entities and their data ---
@@ -155,7 +159,25 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
             except Exception as err:
                 LOGGER.exception("Error processing rule during gathering phase: %s", str(err))
 
-    # --- Step 2: Create entity instances for unique IDs ---
+    # --- LED toggle switches ---
+    LOGGER.debug("Checking for LED-capable devices...")
+    if hasattr(coordinator, 'devices') and coordinator.devices:
+        LOGGER.info("Found %d LED-capable devices in coordinator", len(coordinator.devices))
+        for device in coordinator.devices:
+            # Devices are already filtered by coordinator for LED capability
+            unique_id = f"unr_device_{device.mac}_led"
+            if unique_id not in potential_entities_data:
+                potential_entities_data[unique_id] = {
+                    "rule_data": device,
+                    "rule_type": "devices",
+                    "entity_class": UnifiLedToggleSwitch,
+                }
+                LOGGER.info("Gathered potential LED switch: %s for device %s", unique_id, getattr(device, 'name', device.mac))
+    else:
+        LOGGER.warning("No LED-capable devices found in coordinator. Coordinator devices: %s", 
+                      getattr(coordinator, 'devices', 'NOT_SET'))
+
+        # --- Step 2: Create entity instances for unique IDs ---
     switches_to_add = []
     processed_unique_ids = set()
 
@@ -590,9 +612,6 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
 
         rule = self._get_current_rule()
         if rule is None:
-            # Add log for debugging is_on when rule is None
-            # entity_id_for_log = self.entity_id or self.unique_id
-            # LOGGER.debug("%s(%s): is_on check - rule is None, returning False.", type(self).__name__, entity_id_for_log)
             return False
 
         return get_rule_enabled(rule)
@@ -771,11 +790,22 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                 toggle_func = self.coordinator.api.toggle_vpn_client
             elif self._rule_type == "vpn_servers":
                 toggle_func = self.coordinator.api.toggle_vpn_server
+            elif self._rule_type == "devices":
+                # For device LED toggles, use a special wrapper function
+                async def led_toggle_wrapper(device, state):
+                    """Wrapper to make LED toggle compatible with queue system."""
+                    return await self.coordinator.api.set_device_led(device, state)
+                toggle_func = led_toggle_wrapper
             else:
                 raise ValueError(f"Unknown rule type: {self._rule_type}")
             
-            # Queue the operation
-            future = await self.coordinator.api.queue_api_operation(toggle_func, current_rule)
+            # Queue the operation (special handling for devices)
+            if self._rule_type == "devices":
+                # For LED toggles, pass the enable state as the second parameter
+                future = await self.coordinator.api.queue_api_operation(toggle_func, current_rule, enable)
+            else:
+                # For regular rules, pass just the rule object
+                future = await self.coordinator.api.queue_api_operation(toggle_func, current_rule)
             
             # Add the completion callback
             future.add_done_callback(
@@ -1453,7 +1483,123 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
             
             raise HomeAssistantError(f"Error toggling kill switch for {self.name}: {error}")
 
-# Define QoS rule switch class
+class UnifiLedToggleSwitch(UnifiRuleSwitch):
+    """Switch to toggle UniFi device LED - inherits resilient patterns from UnifiRuleSwitch."""
+    
+    def __init__(self, coordinator: UnifiRuleUpdateCoordinator, rule_data: Device, rule_type: str, entry_id: str = None) -> None:
+        """Initialize LED toggle switch using the base UnifiRuleSwitch."""
+        # Call parent constructor with device data
+        super().__init__(coordinator, rule_data, rule_type, entry_id)
+        
+        # Store device reference for LED-specific operations
+        self._device = rule_data
+        
+        # Get device identifiers safely from raw data
+        raw_data = getattr(rule_data, 'raw', {}) if hasattr(rule_data, 'raw') else {}
+        device_mac = raw_data.get('mac', raw_data.get('serial', 'unknown'))
+        device_name = raw_data.get('name', raw_data.get('device_id', device_mac))
+        
+        # Override name to be LED-specific
+        self._attr_name = f"{device_name} LED"
+        
+        # Set appropriate device class and entity category for LED
+        self._attr_entity_category = EntityCategory.CONFIG
+        self._attr_device_class = SwitchDeviceClass.SWITCH
+        
+        # Set up device info with more details
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device_mac)},
+            name=device_name,
+            manufacturer=MANUFACTURER,
+            model=raw_data.get('model', raw_data.get('type', 'UniFi Device')),
+            sw_version=raw_data.get('version'),
+            hw_version=raw_data.get('hw_rev'),
+        )
+        
+        # Icon will be set dynamically based on state
+        self._update_icon()
+
+    def _update_icon(self) -> None:
+        """Update icon based on current state."""
+        if self.is_on:
+            self._attr_icon = "mdi:led-on"
+        else:
+            self._attr_icon = "mdi:led-off"
+    
+    def _get_actual_state_from_rule(self, rule: Any) -> Optional[bool]:
+        """Helper to get the actual LED state from the device object."""
+        if not isinstance(rule, Device):
+            return None
+            
+        # Check device LED state from raw data
+        if hasattr(rule, 'raw') and 'led_override' in rule.raw:
+            led_state = rule.raw.get('led_override')
+            # LED is "on" when not overridden to "off"
+            return led_state != 'off'
+        
+        # Default to True (LEDs are typically on by default)
+        return True
+    
+    def _get_current_rule(self) -> Device | None:
+        """Override to get current device from coordinator."""
+        try:
+            if not self.coordinator or not self.coordinator.data or "devices" not in self.coordinator.data:
+                return None
+
+            devices = self.coordinator.data.get("devices", [])
+            device_mac = getattr(self._device, 'mac', None)
+            
+            for device in devices:
+                if hasattr(device, 'mac') and device.mac == device_mac:
+                    return device
+                    
+            return None
+        except Exception as err:
+            LOGGER.error("Error getting device data: %s", err)
+            return None
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        # Update icon based on current state
+        self._update_icon()
+        
+        # Call parent update (handles optimistic state and availability)
+        super()._handle_coordinator_update()
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Return entity specific state attributes."""
+        attributes = {}
+        
+        device = self._get_current_rule()  # Use base method now
+        if device and hasattr(device, 'raw'):
+            raw_data = device.raw
+            
+            # Add device information
+            attributes["device_mac"] = raw_data.get('mac', 'unknown')
+            attributes["device_model"] = raw_data.get('model', 'Unknown')
+            attributes["device_type"] = raw_data.get('type', 'Unknown')
+            
+            # Add LED-specific information
+            if 'led_override' in raw_data:
+                attributes["led_override"] = raw_data['led_override']
+            if 'led_override_color' in raw_data:
+                attributes["led_override_color"] = raw_data['led_override_color']
+            if 'led_override_color_brightness' in raw_data:
+                attributes["led_brightness"] = raw_data['led_override_color_brightness']
+            
+            # Add connection state
+            if 'state' in raw_data:
+                attributes["connection_state"] = raw_data['state']
+        
+        # Add optimistic state info for debugging
+        if self._optimistic_state is not None:
+            attributes["optimistic_state"] = self._optimistic_state
+            attributes["optimistic_age"] = round(time.time() - self._optimistic_timestamp, 1)
+        
+        return attributes
+
 class UnifiQoSRuleSwitch(UnifiRuleSwitch):
     """Switch to enable/disable a UniFi QoS rule."""
     
