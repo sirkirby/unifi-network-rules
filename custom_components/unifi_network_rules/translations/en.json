@@ -46,19 +46,23 @@
   "triggers": {
     "rule_enabled": {
       "name": "UniFi rule enabled",
-      "description": "Triggered when a UniFi Network rule is enabled"
+      "description": "Triggered when a UniFi Network rule is enabled",
+      "description_configured": "UniFi rule enabled"
     },
     "rule_disabled": {
       "name": "UniFi rule disabled",
-      "description": "Triggered when a UniFi Network rule is disabled"
+      "description": "Triggered when a UniFi Network rule is disabled",
+      "description_configured": "UniFi rule disabled"
     },
     "rule_changed": {
       "name": "UniFi rule changed",
-      "description": "Triggered when a UniFi Network rule configuration is modified"
+      "description": "Triggered when a UniFi Network rule configuration is modified",
+      "description_configured": "UniFi rule changed"
     },
     "rule_deleted": {
       "name": "UniFi rule deleted",
-      "description": "Triggered when a UniFi Network rule is deleted"
+      "description": "Triggered when a UniFi Network rule is deleted",
+      "description_configured": "UniFi rule deleted"
     }
   },
   "services": {

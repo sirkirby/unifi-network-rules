@@ -190,7 +190,7 @@ UniFi Network Rules provides a **sophisticated trigger system** that gives you r
 
 #### Using the Automation UI
 
-**Note:** UI support is currently limited. Triggers may appear as "unknown" in the automation UI. For now, we recommend using YAML configuration.
+**Note:** UI support is currently limited to Device Triggers. Triggers will appear as "unknown" in the automation UI. For now, we recommend using YAML configuration.
 
 1. Go to Settings → Automations & Scenes → Create Automation
 2. Choose "When" → Manual trigger
