@@ -84,6 +84,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self._update_in_progress = False
         self._has_data = False
         
+        # Websocket processing is now handled by trigger system
+        
         # Track entities we added or removed
         # By unique ID rather than the objects themselves
         self.known_unique_ids: Set[str] = set()
@@ -780,193 +782,17 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
 
     @callback
     def _handle_websocket_message(self, message: dict[str, Any]) -> None:
-        """Handle a message from the WebSocket connection."""
-        try:
-            if not message:
-                return
+        """Handle a message from the WebSocket connection.
+        
+        NOTE: This method is now primarily handled by the trigger system.
+        Triggers detect config changes and dispatch refreshes directly via _dispatch_coordinator_refresh().
+        This keeps the detection logic DRY and centralized in one place.
+        """
+        # The trigger system now handles all websocket message detection and dispatches
+        # coordinator refreshes when config changes are detected. This method is kept
+        # for backward compatibility but should only be called as a fallback.
+        pass
 
-            # Get message meta data if available
-            meta = message.get("meta", {})
-            msg_type = meta.get("message", "")
-            msg_data = message.get("data", {})
-                
-            # Use string representation of message to quickly determine the message type
-            message_str = str(message).lower()
-            
-            # Process delete events first
-            if "delete" in message_str and ("event" in message or "events" in message_str):
-                # This looks like a deletion event, check for IDs being removed
-                LOGGER.debug("WebSocket deletion event: %s", message)
-                
-                # Attempt to match deletion events to entities
-                pass
-            
-            # Check if any key event data exists (log even if we don't process it)
-            if any(key in message_str for key in ["rule", "policy", "route", "forward", "nat", "traffic", "port"]):
-                # These keywords might indicate a rule-related event
-                LOGGER.debug("WebSocket rule event: %s", message)
-                
-                # Map keywords to rule types
-                rule_type_keywords = {
-                    "firewall_policies": ["policy", "security", "firewall"],
-                    "traffic_rules": ["traffic", "traffic_rules"],
-                    "port_forwards": ["port", "forward", "nat"],
-                    "traffic_routes": ["route", "traffic"],
-                    "legacy_firewall_rules": ["firewall", "rule", "allow", "deny"],
-                    "qos_rules": ["qos", "quality", "service"],
-                    "vpn_clients": ["vpn", "client"],
-                    "vpn_servers": ["vpn", "server"],
-                }
-                
-                # Check if this message might relate to rule changes
-                should_refresh = False
-                refresh_reason = None
-                rule_type_affected = None
-                
-                # Configuration changes and provisioning often relate to rule updates
-                if "cfgversion" in str(message).lower() or "provisioned" in str(message).lower():
-                    should_refresh = True
-                    refresh_reason = "Configuration version change detected"
-                
-                # Direct rule-related events
-                elif any(word in msg_type.lower() for word in ["firewall", "rule", "policy", "route", "forward", "qos"]):
-                    should_refresh = True
-                    refresh_reason = f"Rule-related event type: {msg_type}"
-                    
-                    # Try to determine the specific rule type affected
-                    for rule_type, keywords in rule_type_keywords.items():
-                        if any(keyword in msg_type.lower() for keyword in keywords):
-                            rule_type_affected = rule_type
-                            break
-                
-                # General CRUD operations that might indicate rule changes
-                elif any(op in msg_type.lower() for op in ["add", "delete", "update", "remove"]):
-                    # Check if the operation relates to any rule types
-                    message_str = str(message).lower()
-                    
-                    # Special handling for port forwards vs device port tables
-                    if "port" in message_str:
-                        # Check if this is a device port_table update (which is distinct from port forwards)
-                        if "port_table" in message_str and not any(kw in message_str for kw in ["port_forward", "portforward", "nat"]):
-                            # Skip false positive port_table updates that aren't related to port forwarding
-                            log_websocket("Skipping CRUD operation for port_table (not related to port forwards)")
-                            return
-                    
-                    for rule_type, keywords in rule_type_keywords.items():
-                        if any(keyword in message_str for keyword in keywords):
-                            # For port_forwards, require more specific keywords to avoid false positives
-                            if rule_type == "port_forwards" and not any(kw in message_str for kw in ["port_forward", "portforward", "nat"]):
-                                continue
-                                
-                            should_refresh = True
-                            rule_type_affected = rule_type
-                            refresh_reason = f"CRUD operation detected for {rule_type}"
-                            break
-                
-                # Device updates - only process if they contain config changes
-                elif "device" in msg_type.lower() and "update" in msg_type.lower():
-                    # Only refresh for specific configuration changes
-                    message_str = str(message).lower()
-                    config_keywords = ["config", "firewall", "rule", "policy", "route", "qos"]
-                    
-                    # Skip updating for commonly noisy device state update patterns
-                    if isinstance(msg_data, list) and len(msg_data) == 1:
-                        # Skip purely device state updates - these don't affect configurations
-                        if set(msg_data[0].keys()).issubset({"state", "upgrade_state", "provisioned_at"}):
-                            log_websocket("Skipping refresh for routine device state update: %s", 
-                                          set(msg_data[0].keys()))
-                            return
-                    
-                    # Check if this is specifically a port_table update (which is not related to port forwards)
-                    if "port_table" in message_str and not any(kw in message_str for kw in ["port_forward", "portforward", "nat"]):
-                        # Skip device updates that only contain port_table information without port forwarding references
-                        log_websocket("Skipping refresh for device update with port_table (not related to port forwards)")
-                        return
-                    
-                    # Check if this contains configuration version changes (accept these)
-                    if "cfgversion" in message_str:
-                        should_refresh = True
-                        refresh_reason = "Device update with configuration version change"
-                    # Otherwise, be more selective about what triggers refreshes
-                    elif any(keyword in message_str for keyword in config_keywords):
-                        should_refresh = True
-                        refresh_reason = "Device update with potential rule changes"
-                    else:
-                        # Not all device updates need a refresh - skip ones without config changes
-                        log_websocket("Skipping refresh for device update without rule-related changes")
-                        return
-                
-                # Check for QoS-specific event patterns that might not be caught by other checks
-                if not should_refresh and "qos" in str(message).lower():
-                    should_refresh = True
-                    rule_type_affected = "qos_rules"
-                    refresh_reason = "QoS-related event detected"
-                    log_websocket("QoS-specific event detected: %s", msg_type)
-                
-                if should_refresh:
-                    # Use a semaphore to prevent multiple concurrent refreshes
-                    if not hasattr(self, '_refresh_semaphore'):
-                        self._refresh_semaphore = asyncio.Semaphore(1)
-                    
-                    # Only proceed if we can acquire the semaphore
-                    if self._refresh_semaphore.locked():
-                        log_websocket("Skipping refresh as one is already in progress")
-                        return
-                    
-                    # Should prevent rapid-fire refreshes during switch operations
-                    if not hasattr(self, '_min_ws_refresh_interval'):
-                        self._min_ws_refresh_interval = 1.5
-                    
-                    if not hasattr(self, '_last_ws_refresh'):
-                        self._last_ws_refresh = 0
-                    
-                    if not hasattr(self, '_pending_ws_refresh'):
-                        self._pending_ws_refresh = False
-                    
-                    if not hasattr(self, '_ws_refresh_task'):
-                        self._ws_refresh_task = None
-                    
-                    current_time = time.time()
-                    if current_time - self._last_ws_refresh < self._min_ws_refresh_interval:
-                        log_websocket(
-                            "Debouncing refresh request (last refresh was %0.1f seconds ago)",
-                            current_time - self._last_ws_refresh
-                        )
-                        
-                        # Cancel any pending refresh task
-                        if self._ws_refresh_task and not self._ws_refresh_task.done():
-                            self._ws_refresh_task.cancel()
-                        
-                        # Schedule a delayed refresh if one isn't already pending
-                        if not self._pending_ws_refresh:
-                            self._pending_ws_refresh = True
-                            delay = self._min_ws_refresh_interval - (current_time - self._last_ws_refresh)
-                            
-                            async def delayed_refresh():
-                                await asyncio.sleep(delay)
-                                self._pending_ws_refresh = False
-                                log_websocket("Executing delayed refresh after debounce period")
-                                # Use the standard refresh workflow for all rule types
-                                await self._controlled_refresh_wrapper()
-                            
-                            self._ws_refresh_task = self.hass.async_create_task(delayed_refresh())
-                        return
-                    
-                    # Update last refresh timestamp
-                    self._last_ws_refresh = current_time
-                    
-                    # Log refresh events at INFO level for visibility
-                    LOGGER.info("Refreshing data due to: %s (rule type: %s)", 
-                               refresh_reason, rule_type_affected or "unknown")
-                    
-                    # Use the standard refresh workflow for all rule types
-                    self.hass.async_create_task(self._controlled_refresh_wrapper())
-                elif DEBUG_WEBSOCKET:
-                    # Only log non-refreshing messages when debug is enabled
-                    log_websocket("No refresh triggered for message type: %s", msg_type)
-        except Exception as err:
-            LOGGER.error("Error handling websocket message: %s", err)
-    
     async def _controlled_refresh_wrapper(self):
         """Wrapper for the controlled refresh process to ensure proper semaphore handling."""
         # Acquire semaphore before starting refresh
