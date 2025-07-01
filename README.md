@@ -311,7 +311,9 @@ condition:
   # Only backup if it's been more than 1 hour since last backup
   - condition: template
     value_template: >
-      {{ (now() - states.automation.auto_backup_on_critical_changes.attributes.last_triggered).total_seconds() > 3600 }}
+      {% set last = state_attr('automation.auto_backup_on_critical_changes','last_triggered') %}
+      {% set last_ts = last.timestamp() if last else 0 %}
+      {{ (now().timestamp() - last_ts) > 3600 }}
 action:
   - action: unifi_network_rules.backup_rules
     data:

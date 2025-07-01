@@ -30,7 +30,7 @@ from aiounifi.models.firewall_zone import FirewallZone
 from aiounifi.models.wlan import Wlan
 from aiounifi.models.device import Device  # For LED toggle
 
-from .const import DOMAIN, MANUFACTURER
+from .const import DOMAIN, MANUFACTURER, SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS
 from .helpers.rule import sanitize_entity_id
 from .coordinator import UnifiRuleUpdateCoordinator
 from .helpers.rule import (
@@ -708,13 +708,14 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         LOGGER.debug("Adding rule %s to pending operations queue with target state: %s", 
                    self._rule_id, enable)
         
+        # Register the operation with the coordinator to prevent redundant refreshes.
+        self.coordinator.register_ha_initiated_operation(self._rule_id)
+        
         # Define callback to handle operation completion
         async def handle_operation_complete(future):
             """Handle operation completion."""
             try:
                 success = future.result()
-                LOGGER.debug("Operation completed for rule %s with result: %s", 
-                            self._rule_id, success)
                 
                 if not success:
                     # Revert optimistic state if failed
@@ -726,25 +727,23 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                     # On success, refresh the optimistic state timestamp to prevent premature clearing
                     self._optimistic_timestamp = time.time()
                     self.async_write_ha_state()
-                
-                # Request refresh to update state from backend
-                await self.coordinator.async_request_refresh()
-                
-                # Improve rapid toggling experience by reducing delay and adding direct updates
-                if success:
-                    async def delayed_verify():
-                        # Reduced wait time for faster feedback
-                        await asyncio.sleep(1)  # Reduced from 2 seconds
-                        # Request refresh first
-                        await self.coordinator.async_request_refresh()
-                        # Force a state update immediately after refresh
-                        self.async_write_ha_state()
-                        # Also notify on a dispatcher channel for anyone listening
-                        from homeassistant.helpers.dispatcher import async_dispatcher_send
-                        async_dispatcher_send(self.hass, f"{DOMAIN}_entity_update_{self._rule_id}")
-                        LOGGER.debug("Performed verification refresh for rule %s", self._rule_id)
+
+                    # --- Smart Verification Task ---
+                    # This task acts as a safety net. It waits a few seconds and then checks
+                    # if the change was confirmed by the trigger system (which consumes the
+                    # HA-initiated operation flag). If not, it forces a refresh.
+                    async def delayed_verification():
+                        await asyncio.sleep(SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS) # Wait 7 seconds for websocket event
+                        if self.coordinator.check_and_consume_ha_initiated_operation(self._rule_id):
+                            # If the flag was still present, it means the trigger system
+                            # did NOT get a websocket event. We must refresh.
+                            LOGGER.warning("Delayed verification: Trigger did not receive websocket event for %s. Forcing refresh.", self._rule_id)
+                            await self.coordinator.async_request_refresh()
+                        else:
+                            # The flag was already consumed, so the trigger worked correctly.
+                            LOGGER.debug("Delayed verification: Trigger confirmed change for %s. No refresh needed.", self._rule_id)
                     
-                    asyncio.create_task(delayed_verify())
+                    self.hass.async_create_task(delayed_verification())
                 
             except Exception as err:
                 # Check if this is an auth error
@@ -1423,6 +1422,9 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
             kill_switch_operation_id = f"{self._rule_id}_kill_switch"
             self.coordinator._pending_operations[kill_switch_operation_id] = enable
         
+        # Register the operation with the coordinator to prevent redundant refreshes.
+        self.coordinator.register_ha_initiated_operation(self._rule_id)
+        
         # Queue the toggle operation
         try:
             # Get the toggle function from the API client
@@ -1437,8 +1439,18 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
                     result = future.result()
                     if result:
                         LOGGER.debug("Successfully toggled kill switch for %s", self.name)
-                        # Request a data update
-                        await self.coordinator.async_request_refresh()
+                        # --- Smart Verification Task ---
+                        # See parent class for detailed explanation of this safety net.
+                        async def delayed_verification():
+                            await asyncio.sleep(SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS)
+                            kill_switch_id = self._rule_id # The unique ID for the kill switch
+                            if self.coordinator.check_and_consume_ha_initiated_operation(kill_switch_id):
+                                LOGGER.warning("Delayed verification for kill switch %s failed. Forcing refresh.", kill_switch_id)
+                                await self.coordinator.async_request_refresh()
+                            else:
+                                LOGGER.debug("Delayed verification for kill switch %s confirmed.", kill_switch_id)
+
+                        self.hass.async_create_task(delayed_verification())
                     else:
                         LOGGER.error("Failed to toggle kill switch for %s", self.name)
                         # Revert optimistic state on failure

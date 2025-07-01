@@ -82,52 +82,6 @@ TRIGGER_SCHEMA = vol.Schema(
     }
 )
 
-
-
-# Add device automation style schemas for better UI integration
-TRIGGER_SELECTOR_SCHEMA = vol.Schema(
-    {
-        vol.Required("trigger"): "unifi_network_rules",
-        vol.Required("type"): vol.In([
-            TRIGGER_RULE_ENABLED,
-            TRIGGER_RULE_DISABLED,
-            TRIGGER_RULE_CHANGED,
-            TRIGGER_RULE_DELETED,
-        ]),
-        vol.Optional("rule_id"): {
-            "selector": {
-                "text": {
-                    "placeholder": "Enter rule ID (optional)"
-                }
-            }
-        },
-        vol.Optional("rule_type"): {
-            "selector": {
-                "select": {
-                    "options": [
-                        {"label": "Firewall Policies", "value": RULE_TYPE_FIREWALL_POLICY},
-                        {"label": "Traffic Routes", "value": RULE_TYPE_TRAFFIC_ROUTE},
-                        {"label": "Port Forwards", "value": RULE_TYPE_PORT_FORWARD},
-                        {"label": "QoS Rules", "value": RULE_TYPE_QOS_RULE},
-                        {"label": "VPN Clients", "value": RULE_TYPE_VPN_CLIENT},
-                        {"label": "VPN Servers", "value": RULE_TYPE_VPN_SERVER},
-                        {"label": "Legacy Firewall Rules", "value": RULE_TYPE_LEGACY_FIREWALL_RULE},
-                        {"label": "Traffic Rules", "value": RULE_TYPE_TRAFFIC_RULE},
-                        {"label": "WLANs", "value": RULE_TYPE_WLAN},
-                    ]
-                }
-            }
-        },
-        vol.Optional("name_filter"): {
-            "selector": {
-                "text": {
-                    "placeholder": "Filter by rule name (optional)"
-                }
-            }
-        },
-    }
-)
-
 # Add trigger type descriptions for better UI display
 TRIGGER_TYPE_DESCRIPTIONS = {
     TRIGGER_RULE_ENABLED: "When a UniFi rule is enabled",
@@ -754,6 +708,13 @@ class UnifiRuleTrigger:
 
     async def _check_rule_changes_and_trigger(self, cfgversion: str, device_mac: str) -> None:
         """Simplified state-diff approach: Check for actual rule changes and fire appropriate triggers."""
+        # --- CQRS Check ---
+        # Before we refresh, we'll check if this cfgversion change was likely caused by
+        # an operation we initiated. We pass this flag down to the detection logic.
+        ha_operations_pending = hasattr(self._coordinator, "_ha_initiated_operations") and self._coordinator._ha_initiated_operations
+        if ha_operations_pending:
+            LOGGER.debug("[CQRS] State-diff check initiated while HA operations are pending.")
+
         if not self._coordinator:
             if LOG_TRIGGERS:
                 LOGGER.debug("No coordinator available for state-diff check")
@@ -830,7 +791,7 @@ class UnifiRuleTrigger:
                             LOGGER.debug("📊 COUNT SAME: %s rules: %d (trigger: %s)", rule_type, old_count, self.config[CONF_TYPE])
             
             # Detect actual changes and fire appropriate triggers for THIS trigger instance
-            changes_detected = await self._detect_and_fire_rule_changes(old_rules_state, new_rules_state, cfgversion, device_mac)
+            changes_detected = await self._detect_and_fire_rule_changes(old_rules_state, new_rules_state, cfgversion, device_mac, ha_operations_pending)
             
             if LOG_TRIGGERS:
                 if changes_detected:
@@ -858,7 +819,7 @@ class UnifiRuleTrigger:
                     # Don't await this - let it run in background
                     self.hass.async_create_task(cleanup_old_state())
 
-    async def _detect_and_fire_rule_changes(self, old_state: Dict, new_state: Dict, cfgversion: str, device_mac: str) -> bool:
+    async def _detect_and_fire_rule_changes(self, old_state: Dict, new_state: Dict, cfgversion: str, device_mac: str, ha_initiated: bool) -> bool:
         """Detect specific rule changes and fire appropriate triggers with accurate data."""
         changes_detected = False
         
@@ -873,28 +834,30 @@ class UnifiRuleTrigger:
                 # Check for deleted rules
                 for rule_id in old_rules:
                     if rule_id not in new_rules:
-                        if LOG_TRIGGERS:
-                            LOGGER.info("🗑️ DETECTED DELETION: %s rule %s", rule_type, rule_id)
-                        
-                        changes_detected = True  # Mark changes detected regardless of trigger firing
-                        
-                        # Fire rule_deleted trigger if this trigger instance matches
-                        if self.config[CONF_TYPE] == TRIGGER_RULE_DELETED:
-                            if self._matches_filters(rule_type, rule_id, old_rules[rule_id]):
-                                await self._fire_trigger(TRIGGER_RULE_DELETED, rule_id, rule_type, old_rules[rule_id], old_rules[rule_id], None)
+                        changes_detected = True
+                        await self._handle_potential_trigger(
+                            expected_trigger_type=TRIGGER_RULE_DELETED,
+                            rule_id=rule_id,
+                            rule_type=rule_type,
+                            rule_data_for_filter=old_rules[rule_id],
+                            old_state=old_rules[rule_id],
+                            new_state=None,
+                            cqrs_log_message="DELETION"
+                        )
                 
                 # Check for new rules  
                 for rule_id in new_rules:
                     if rule_id not in old_rules:
-                        if LOG_TRIGGERS:
-                            LOGGER.info("🆕 DETECTED NEW RULE: %s rule %s", rule_type, rule_id)
-                        
-                        changes_detected = True  # Mark changes detected regardless of trigger firing
-                        
-                        # Fire rule_changed trigger for new rules if this trigger instance matches
-                        if self.config[CONF_TYPE] == TRIGGER_RULE_CHANGED:
-                            if self._matches_filters(rule_type, rule_id, new_rules[rule_id]):
-                                await self._fire_trigger(TRIGGER_RULE_CHANGED, rule_id, rule_type, new_rules[rule_id], None, new_rules[rule_id])
+                        changes_detected = True
+                        await self._handle_potential_trigger(
+                            expected_trigger_type=TRIGGER_RULE_CHANGED,
+                            rule_id=rule_id,
+                            rule_type=rule_type,
+                            rule_data_for_filter=new_rules[rule_id],
+                            old_state=None,
+                            new_state=new_rules[rule_id],
+                            cqrs_log_message="NEW RULE"
+                        )
                 
                 # Check for modified rules
                 for rule_id in old_rules:
@@ -903,7 +866,6 @@ class UnifiRuleTrigger:
                         new_rule = new_rules[rule_id]
                         
                         # Check for enabled/disabled changes
-                        old_enabled = old_rule.get("enabled", False)
                         new_enabled = new_rule.get("enabled", False)
                         
                         # Check for ANY changes first (including enabled field)
@@ -914,40 +876,70 @@ class UnifiRuleTrigger:
                         enabled_changed = old_rule.get("enabled", False) != new_rule.get("enabled", False)
                         
                         if enabled_changed:
-                            new_enabled = new_rule.get("enabled", False)
-                            if LOG_TRIGGERS:
-                                LOGGER.info("🔄 DETECTED ENABLE/DISABLE: %s rule %s (%s → %s)", 
-                                           rule_type, rule_id, old_rule.get("enabled", False), new_enabled)
-                            
-                            changes_detected = True  # Mark changes detected regardless of trigger firing
-                            
-                            # Fire appropriate enabled/disabled trigger if this trigger instance matches
+                            changes_detected = True
                             trigger_type = TRIGGER_RULE_ENABLED if new_enabled else TRIGGER_RULE_DISABLED
-                            if self.config[CONF_TYPE] == trigger_type:
-                                if self._matches_filters(rule_type, rule_id, new_rule):
-                                    await self._fire_trigger(trigger_type, rule_id, rule_type, new_rule, old_rule, new_rule)
-                        
+                            await self._handle_potential_trigger(
+                                expected_trigger_type=trigger_type,
+                                rule_id=rule_id,
+                                rule_type=rule_type,
+                                rule_data_for_filter=new_rule,
+                                old_state=old_rule,
+                                new_state=new_rule,
+                                cqrs_log_message="ENABLE/DISABLE"
+                            )
+
                         if rule_has_changes:
-                            if LOG_TRIGGERS:
-                                changed_fields = []
-                                for key in set(old_copy.keys()) | set(new_copy.keys()):
-                                    if old_copy.get(key) != new_copy.get(key):
-                                        changed_fields.append(f"{key}: {old_copy.get(key)} → {new_copy.get(key)}")
-                                LOGGER.info("📝 DETECTED CHANGE: %s rule %s modified (%s)", 
-                                           rule_type, rule_id, ", ".join(changed_fields[:3]) + ("..." if len(changed_fields) > 3 else ""))
-                            
-                            changes_detected = True  # Mark changes detected regardless of trigger firing
-                            
-                            # Fire rule_changed trigger if this trigger instance matches
-                            if self.config[CONF_TYPE] == TRIGGER_RULE_CHANGED:
-                                if self._matches_filters(rule_type, rule_id, new_rule):
-                                    await self._fire_trigger(TRIGGER_RULE_CHANGED, rule_id, rule_type, new_rule, old_rule, new_rule)
+                            changes_detected = True
+                            await self._handle_potential_trigger(
+                                expected_trigger_type=TRIGGER_RULE_CHANGED,
+                                rule_id=rule_id,
+                                rule_type=rule_type,
+
+                                rule_data_for_filter=new_rule,
+                                old_state=old_rule,
+                                new_state=new_rule,
+                                cqrs_log_message="CHANGE"
+                            )
             
             return changes_detected
             
         except Exception as err:
             LOGGER.error("Error detecting rule changes: %s", err)
             return False
+
+    async def _handle_potential_trigger(self, expected_trigger_type: str, rule_id: str, rule_type: str, rule_data_for_filter: Dict, old_state: Optional[Dict], new_state: Optional[Dict], cqrs_log_message: str) -> None:
+        """DRY helper to check filters and fire a trigger if conditions are met."""
+        # Only proceed if this trigger instance is configured for this type of event
+        if self.config[CONF_TYPE] != expected_trigger_type:
+            return
+
+        # --- CQRS Check ---
+        is_ha_change = self._coordinator.check_and_consume_ha_initiated_operation(rule_id)
+        if is_ha_change:
+            LOGGER.debug("[CQRS] HA-initiated %s detected for %s. Firing trigger, but refresh was already suppressed.", cqrs_log_message, rule_id)
+        
+        # --- Filter and Fire ---
+        if self._matches_filters(rule_type, rule_id, rule_data_for_filter):
+            # Log specific changes for better debugging
+            if LOG_TRIGGERS:
+                if expected_trigger_type == TRIGGER_RULE_DELETED:
+                    LOGGER.info("🗑️ FIRING DELETION: %s rule %s", rule_type, rule_id)
+                elif expected_trigger_type == TRIGGER_RULE_CHANGED and old_state is None:
+                    LOGGER.info("🆕 FIRING NEW RULE: %s rule %s", rule_type, rule_id)
+                elif expected_trigger_type in [TRIGGER_RULE_ENABLED, TRIGGER_RULE_DISABLED]:
+                    LOGGER.info("🔄 FIRING ENABLE/DISABLE: %s rule %s (%s → %s)",
+                                rule_type, rule_id, old_state.get("enabled", "N/A"), new_state.get("enabled", "N/A"))
+                elif expected_trigger_type == TRIGGER_RULE_CHANGED:
+                    changed_fields = []
+                    old_copy = {k: v for k, v in old_state.items() if not k.startswith('_')}
+                    new_copy = {k: v for k, v in new_state.items() if not k.startswith('_')}
+                    for key in set(old_copy.keys()) | set(new_copy.keys()):
+                        if old_copy.get(key) != new_copy.get(key):
+                            changed_fields.append(f"{key}: {old_copy.get(key)} → {new_copy.get(key)}")
+                    LOGGER.info("📝 FIRING CHANGE: %s rule %s modified (%s)", 
+                                rule_type, rule_id, ", ".join(changed_fields[:3]) + ("..." if len(changed_fields) > 3 else ""))
+
+            await self._fire_trigger(expected_trigger_type, rule_id, rule_type, rule_data_for_filter, old_state, new_state)
 
     def _matches_filters(self, rule_type: str, rule_id: str, rule_data: Dict) -> bool:
         """Check if rule matches the trigger's filters."""
