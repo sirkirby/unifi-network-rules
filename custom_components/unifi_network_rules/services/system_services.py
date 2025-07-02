@@ -49,22 +49,6 @@ async def async_refresh_data(hass: HomeAssistant, coordinators: Dict, call: Serv
             LOGGER.debug("Refreshing coordinator for entry %s", entry_id)
             await coordinator.async_refresh()
 
-async def async_reset_rate_limit(hass: HomeAssistant, coordinators: Dict, call: ServiceCall) -> None:
-    """Handle reset rate limit service call."""
-    # Reset rate limit for all APIs
-    for entry_data in hass.data[DOMAIN].values():
-        if "api" in entry_data:
-            api = entry_data["api"]
-            if hasattr(api, "reset_rate_limit"):
-                try:
-                    success = await api.reset_rate_limit()
-                    if success:
-                        LOGGER.info("Rate limit reset successful")
-                    else:
-                        LOGGER.warning("Rate limit reset failed")
-                except Exception as e:
-                    LOGGER.error("Error resetting rate limit: %s", e)
-
 async def async_websocket_diagnostics(hass: HomeAssistant, coordinators: Dict, call: ServiceCall) -> None:
     """Run diagnostics on WebSocket connections and try to repair if needed."""
     results = {}
@@ -213,10 +197,6 @@ async def async_setup_system_services(hass: HomeAssistant, coordinators: Dict) -
     async def handle_refresh_data(call: ServiceCall) -> None:
         await async_refresh_data(hass, coordinators, call)
         
-    # Handle the reset rate limit service  
-    async def handle_reset_rate_limit(call: ServiceCall) -> None:
-        await async_reset_rate_limit(hass, coordinators, call)
-        
     # Handle the websocket diagnostics service
     async def handle_websocket_diagnostics(call: ServiceCall) -> None:
         return await async_websocket_diagnostics(hass, coordinators, call)
@@ -228,10 +208,6 @@ async def async_setup_system_services(hass: HomeAssistant, coordinators: Dict) -
     
     hass.services.async_register(
         DOMAIN, SERVICE_REFRESH_DATA, handle_refresh_data, schema=REFRESH_DATA_SCHEMA
-    )
-    
-    hass.services.async_register(
-        DOMAIN, SERVICE_RESET_RATE_LIMIT, handle_reset_rate_limit, schema=vol.Schema({})
     )
     
     hass.services.async_register(
