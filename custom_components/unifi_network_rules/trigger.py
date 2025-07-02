@@ -12,9 +12,6 @@ from homeassistant.helpers.trigger import TriggerActionType, TriggerInfo
 
 from .const import DOMAIN, LOGGER, LOG_TRIGGERS
 
-# Module-level logging to verify trigger platform loads
-LOGGER.info("🚀 UniFi Network Rules trigger platform loading...")
-
 # Rule types as constants - updated to match current codebase
 RULE_TYPE_FIREWALL_POLICY = "firewall_policies"
 RULE_TYPE_TRAFFIC_ROUTE = "traffic_routes"
@@ -56,7 +53,7 @@ RULE_TYPE_KEYWORDS = {
     RULE_TYPE_WLAN: ["wlan", "wireless", "wifi", "ssid"],
 }
 
-# Configuration schema - updated with all supported rule types and proper selectors
+# Configuration schema for platform triggers
 TRIGGER_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_PLATFORM): DOMAIN,
@@ -143,78 +140,16 @@ def get_rule_name_from_data(rule_data: Dict[str, Any], rule_id: str, rule_type: 
     return f"Rule {rule_id[:8] if len(rule_id) > 8 else rule_id}"
 
 # Add function to get available triggers (for device automation style integration)
-async def async_get_triggers(hass: HomeAssistant) -> list[dict]:
-    """Return a list of available triggers."""
-    triggers = []
-    
-    for trigger_type in [TRIGGER_RULE_ENABLED, TRIGGER_RULE_DISABLED, TRIGGER_RULE_CHANGED, TRIGGER_RULE_DELETED]:
-        triggers.append({
-            "platform": DOMAIN,
-            "type": trigger_type,
-            "description": TRIGGER_TYPE_DESCRIPTIONS.get(trigger_type, trigger_type),
-            "variables": {
-                "rule_id": "The unique identifier of the rule",
-                "rule_name": "The human-readable name of the rule",
-                "rule_type": "The type of rule (firewall_policies, port_forwards, etc.)",
-                "old_state": "The previous state of the rule (for changes)",
-                "new_state": "The new state of the rule",
-                "trigger_type": "The type of trigger that fired"
-            }
-        })
-    
-    return triggers
+
 
 async def async_validate_trigger_config(hass: HomeAssistant, config: dict) -> dict:
     """Validate trigger configuration."""
-    return TRIGGER_SCHEMA(config)
+    result = TRIGGER_SCHEMA(config)
+    LOGGER.debug("🔍 TRIGGER VALIDATION: input=%s, output=%s, type=%s", 
+                config, result, type(result))
+    return result
 
-async def async_get_trigger_schema(hass: HomeAssistant, config_entry) -> vol.Schema:
-    """Return the trigger schema with selectors for UI integration."""
-    return vol.Schema({
-        vol.Required(CONF_TYPE): {
-            "selector": {
-                "select": {
-                    "options": [
-                        {"label": "Rule Enabled", "value": TRIGGER_RULE_ENABLED},
-                        {"label": "Rule Disabled", "value": TRIGGER_RULE_DISABLED},
-                        {"label": "Rule Changed", "value": TRIGGER_RULE_CHANGED},
-                        {"label": "Rule Deleted", "value": TRIGGER_RULE_DELETED},
-                    ]
-                }
-            }
-        },
-        vol.Optional("rule_id"): {
-            "selector": {
-                "text": {
-                    "placeholder": "Enter specific rule ID (optional)"
-                }
-            }
-        },
-        vol.Optional("rule_type"): {
-            "selector": {
-                "select": {
-                    "options": [
-                        {"label": "Firewall Policies", "value": RULE_TYPE_FIREWALL_POLICY},
-                        {"label": "Traffic Routes", "value": RULE_TYPE_TRAFFIC_ROUTE},
-                        {"label": "Port Forwards", "value": RULE_TYPE_PORT_FORWARD},
-                        {"label": "QoS Rules", "value": RULE_TYPE_QOS_RULE},
-                        {"label": "VPN Clients", "value": RULE_TYPE_VPN_CLIENT},
-                        {"label": "VPN Servers", "value": RULE_TYPE_VPN_SERVER},
-                        {"label": "Legacy Firewall Rules", "value": RULE_TYPE_LEGACY_FIREWALL_RULE},
-                        {"label": "Traffic Rules", "value": RULE_TYPE_TRAFFIC_RULE},
-                        {"label": "WLANs", "value": RULE_TYPE_WLAN},
-                    ]
-                }
-            }
-        },
-        vol.Optional("name_filter"): {
-            "selector": {
-                "text": {
-                    "placeholder": "Filter by rule name (optional)"
-                }
-            }
-        },
-    })
+
 
 async def async_attach_trigger(
     hass: HomeAssistant,
