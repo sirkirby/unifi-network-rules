@@ -14,7 +14,6 @@ from ..const import DOMAIN, LOGGER
 from .constants import (
     SERVICE_REFRESH,
     SERVICE_REFRESH_DATA,
-    SERVICE_RESET_RATE_LIMIT,
     SERVICE_WEBSOCKET_DIAGNOSTICS,
 )
 
