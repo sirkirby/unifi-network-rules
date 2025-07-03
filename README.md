@@ -232,7 +232,7 @@ trigger_type: "rule_enabled"            # Which trigger fired (trigger.event.tri
 
 ### 1. Security Monitoring - Alert on Unexpected Rule Changes
 
-Get notified when someone makes firewall changes outside of Home Assistant:
+Create rich notifications when firewall policies are modified:
 
 ```yaml
 alias: Security Alert - Firewall Changes
@@ -255,6 +255,31 @@ actions:
       data:
         priority: high
         category: security
+mode: single
+```
+
+Use the `new_state` and `old_state` to get the full details of the rule change. (check your backup file to see what is available for each rule type)
+
+```yaml
+alias: UniFi Policy Changed
+description: UniFi Rule Changed Trigger
+triggers:
+  - trigger: unifi_network_rules
+    type: rule_changed
+    rule_type: firewall_policies
+conditions: []
+actions:
+  - data:
+      title: >-
+        Firewall Policy {{ trigger.event.rule_name }} was {{
+        trigger.event.trigger_type.replace('rule_', '').upper() }}
+      message: |-
+        {% if trigger.event.new_state %}
+          The {{ trigger.event.new_state.action }} policy '{{ trigger.event.rule_name }}' was updated. It is now {{ 'enabled' if trigger.event.new_state.enabled else 'disabled' }}.
+        {% else %}
+          The policy '{{ trigger.event.rule_name }}' was deleted.
+        {% endif %}
+    action: persistent_notification.create
 mode: single
 ```
 
@@ -335,30 +360,41 @@ mode: single
 
 ### 4. VPN Connection Monitoring
 
-Monitor VPN client connections and send notifications:
+Monitor specificVPN client connections and reconnect them when they disconnect:
 
 ```yaml
-alias: VPN Connection Monitoring
-description: Monitor when VPN clients connect or disconnect
+alias: Reconnect VPN Client
+description: Monitor when a specific VPN client disconnects and reconnect
+triggers:
+  - trigger: unifi_network_rules
+    type: rule_disabled
+    rule_type: vpn_clients
+    name_filter: "NordVPN-Chicago"
+actions:
+  - action: unifi_network_rules.toggle_rule
+    data:
+      rule_id: "{{ trigger.event.rule_id }}"
+      enabled: true
+  - action: persistent_notification.create
+    data:
+      title: "🔒 Attempting to reconnect VPN"
+      message: >
+        VPN "{{ trigger.event.rule_name }}" was disconnected, attempting to reconnect
+mode: parallel
+```
+
+```yaml
+alias: VPN Client connected
+description: Notify when VPN clients connect
 triggers:
   - trigger: unifi_network_rules
     type: rule_enabled
     rule_type: vpn_clients
-  - trigger: unifi_network_rules
-    type: rule_disabled
-    rule_type: vpn_clients
-actions:
   - action: persistent_notification.create
     data:
-      title: "🔒 VPN Status Change"
+      title: "🔒 VPN Connected"
       message: >
-        VPN "{{ trigger.event.rule_name }}" was {{ 'connected' if trigger.event.trigger_type == 'rule_enabled' else 'disconnected' }}
-        {% if trigger.event.trigger_type == 'rule_enabled' %}
-        🟢 Secure connection established
-        {% else %}
-        🔴 Connection terminated
-        {% endif %}
-mode: parallel
+        VPN "{{ trigger.event.rule_name }}" was connected
 ```
 
 ### 5. Kids' Device Management with Notifications
