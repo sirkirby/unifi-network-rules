@@ -238,10 +238,6 @@ force_remove_stale:
       selector:
         boolean:
 
-reset_rate_limit:
-  name: Reset Rate Limit
-  description: Reset the rate limiter for the UniFi API connection
-
 websocket_diagnostics:
   name: WebSocket Diagnostics
   description: Run diagnostics on the WebSocket connection and attempt to repair if needed

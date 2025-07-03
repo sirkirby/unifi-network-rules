@@ -84,6 +84,11 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self._update_in_progress = False
         self._has_data = False
         
+        # --- CQRS-style Operation Tracking ---
+        # This tracks rule_ids for operations initiated within Home Assistant
+        # to prevent the trigger from causing a redundant refresh and to prevent a potential race condition
+        self._ha_initiated_operations: Dict[str, float] = {}
+        
         # Websocket processing is now handled by trigger system
         
         # Track entities we added or removed
@@ -122,6 +127,47 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self._in_error_state = False
         self._consecutive_errors = 0
         self._api_errors = 0
+
+    def register_ha_initiated_operation(self, rule_id: str, timeout: int = 15) -> None:
+        """Register that a rule change was initiated from HA.
+        
+        This is called by a switch entity just before it queues an API call.
+        The trigger system will check this to avoid a redundant refresh.
+        
+        Args:
+            rule_id: The ID of the rule being changed.
+            timeout: How long (in seconds) to keep the registration active.
+        """
+        self._ha_initiated_operations[rule_id] = time.time()
+        LOGGER.debug("[CQRS] Registered HA-initiated operation for rule_id: %s", rule_id)
+        
+        # Schedule cleanup to prevent the dictionary from growing indefinitely
+        # if a corresponding websocket event never arrives.
+        async def cleanup_op(op_rule_id):
+            await asyncio.sleep(timeout)
+            if op_rule_id in self._ha_initiated_operations:
+                del self._ha_initiated_operations[op_rule_id]
+                LOGGER.debug("[CQRS] Expired and removed HA-initiated operation for rule_id: %s", op_rule_id)
+
+        self.hass.async_create_task(cleanup_op(rule_id))
+        
+    def check_and_consume_ha_initiated_operation(self, rule_id: str) -> bool:
+        """Check if a rule change was HA-initiated and consume the flag.
+        
+        This is called by the trigger system before it decides to fire a
+        refresh, to see if the change was expected.
+        
+        Args:
+            rule_id: The ID of the rule that changed.
+            
+        Returns:
+            True if the operation was initiated from HA, False otherwise.
+        """
+        if rule_id in self._ha_initiated_operations:
+            LOGGER.debug("[CQRS] Consumed HA-initiated operation for rule_id: %s. Suppressing trigger refresh.", rule_id)
+            del self._ha_initiated_operations[rule_id]
+            return True
+        return False
 
     async def _async_update_data(self) -> Dict[str, List[Any]]:
         """Fetch data from API endpoint."""
