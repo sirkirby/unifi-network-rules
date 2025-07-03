@@ -10,24 +10,27 @@
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/sirkirby)
 
-UniFi Network Rules is a custom integration for Home Assistant that integrates with your UniFi Dream Machine/Router to both provide and help you create useful interactions and automations for your Home Lab. The goal of this integration is to simplify policy and rule management for real world use cases. I built this because I wanted to enable things like screen time controls for my kids, game server access controls, and more with the push of a button in Home Assistant. Functionality that can be shared with anyone in your home.
+UniFi Network Rules is a custom integration for Home Assistant that integrates with your UniFi Dream Machine/Router to both provide and help you create useful interactions and automations for your Home Lab. The goal of this integration is to simplify policy and rule management for real world use cases. I built this because I wanted to unlock the power of my UniFi firewall. From simple things like screen time and game server access controls for my kids, to more advanced like getting notified when a critical rule is changed. And most importantly, make all of this easy to use and share with anyone in your home or home lab. I hope you find it useful!
 
-## Features
+## What this integration provides
 
-- Switch entities for all rules, including firewall policies (zone-based firewall), traffic/firewall rules (non-zone-based firewall), forwarding rules, traffic routes.
-- VPN management including both client and server configurations for OpenVPN and WireGuard.
-- Service actions for full backup and restore of all rules that are managed by this integration.
-- Service actions for batch enabling and disabling rules by pattern matching rule names or IDs.
-- Service actions for deleting rules by ID.
-- LED toggle switch for UniFi access points and other LED capable devices to control LED on/off.
+### Switches for enabling and disabling rules and configuration
 
-Request a feature [here](https://github.com/sirkirby/unifi-network-rules/issues).
+- Firewall policies (zone-based firewall)
+- Traffic/firewall rules (non-zone-based firewall)
+- Port Forwarding rules
+- Traffic Routes & Traffic Route Kill Switch
+- QoS rules
+- OpenVPN Client and Server configurations
+- WireGuard Client and Server configurations
+- UniFi Device LEDs
+- WLAN SSIDs
 
-## Requirements
+### Advanced automations powered by [Custom Triggers](#real-time-triggers-) and [Custom Services](#services)
 
-- A UniFi device running network application 9.0.92 or later.
-- A local account with Admin privileges to the network application. Must not be a UniFi Cloud account.
-- Home Assistant 2025.2 or later with network access to the UniFi device.
+The included [Triggers](#real-time-triggers-) and [Services](#services) provide a framework for building custom UDM automations to cover a wide range of use cases. For example, you can [backup](#3-backup-trigger---save-config-on-important-changes) and [restore](#full-and-selective-restore) all rules when a change is detected, ensure game server port [forwarding rules get disabled](#2-game-server-management---auto-disable-after-hours) at bedtime, [create and maintain an audit log](#1-security-monitoring---alert-on-unexpected-rule-changes) of all UDM configuration changes, and so much more. Get inspired by the many examples below.
+
+> Questions, ideas, help, or feedback? [Discussions](https://github.com/sirkirby/unifi-network-rules/discussions). Errors or bugs? [Issues](https://github.com/sirkirby/unifi-network-rules/issues).
 
 ## Installation
 
@@ -49,13 +52,19 @@ THEN
 4. Search for "UniFi Network Rule Manager" and select it.
 5. Enter credentials of a local admin user on your UDM and click on the "Submit" button.
 
+### Requirements
+
+- A UniFi device running network application 9.0.92 or later.
+- A local account with Admin privileges to the network application. Must not be a UniFi Cloud account.
+- Home Assistant 2025.2 or later with network access to the UniFi device.
+
 ## Configuration
 
-**Host**: The IP address or hostname of your UniFi Device.
+**Host**: The IP address or hostname of your UniFi Device. ex. `192.168.1.1` or `udm.mydomain.com`
 
-**Username**: The local admin account on the UDM.
+**Username**: The local admin account on the UDM. ex. `admin`
 
-**Password**: The password for the UDM account.
+**Password**: The password for the UDM account. ex. `password`
 
 **Site**: The UniFi site name to connect to (defaults to "default" if not specified).
 
@@ -63,21 +72,15 @@ THEN
 
 **Verify SSL**: Enable SSL certificate verification (defaults to disabled for self-signed certificates).
 
-## Usage
-
-Once you have configured the integration, you will be able to see the policies, rules, and routes configured on your UniFi Network as switches in Home Assistant. Add the switch to a custom dashboard or use it in automations just like any other Home Assistant switch.
-
 ## Services
 
 The integration provides several services focused on managing and automating existing UniFi Network rules:
 
 ### Getting Started with Services
 
-There are two main ways to use these services in Home Assistant:
+Here are some examples of how to get started with services in Home Assistant:
 
-#### Method 1: Using an Input Button Helper with Automation
-
-This is the simplest method:
+#### Example 1: Using an Input Button Helper with Automation
 
 1. Go to Settings → Devices & Services → Helpers
 2. Add a Button helper (e.g., "Refresh UniFi Rules")
@@ -106,7 +109,7 @@ mode: single
 
 <img src="./assets/backup_unr_button.png" alt="Backup UNR Button" width="200" />
 
-#### Method 2: Using Scripts with a Lovelace Button Card (More Customizable)
+#### Example 2: Using Scripts with a Lovelace Button Card (More Customizable)
 
 First, create a script in your Settings → Automations & Scenes → Scripts:
 
@@ -135,6 +138,8 @@ name: Backup my Network Rules
 icon: mdi:cloud-upload
 ```
 
+See below for more automation examples using [Services with Triggers](#service-automation-examples).
+
 ### Services Reference
 
 | Service | Description | Parameters |
@@ -145,7 +150,6 @@ icon: mdi:cloud-upload
 | `unifi_network_rules.bulk_update_rules` | Enable or disable multiple rules by name pattern | `state`: true (enable) or false (disable)<br>`name_filter`: String to match in rule names |
 | `unifi_network_rules.delete_rule` | Delete an existing firewall policy by ID | `rule_id`: ID of the rule to delete |
 | `unifi_network_rules.refresh_data` | Refresh data for a specific integration instance or all | `entry_id`: (Optional) Specific integration instance ID |
-| `unifi_network_rules.reset_rate_limit` | Reset API rate limiting if you hit request limits | None |
 | `unifi_network_rules.websocket_diagnostics` | Run diagnostics on WebSocket connections and try to repair if needed | None |
 | `unifi_network_rules.force_cleanup` | Force cleanup of all entities in the integration | None |
 | `unifi_network_rules.force_remove_stale` | Force removal of stale or broken entities | `remove_all`: (Optional) Remove all entities instead of just stale ones |
@@ -190,7 +194,7 @@ UniFi Network Rules provides a **sophisticated trigger system** that gives you r
 
 #### Using the Automation UI
 
-**Note:** UI support is currently limited to Device Triggers. Triggers will appear as "unknown" in the automation UI. For now, we recommend using YAML configuration.
+**Note:** The VS Code editor validation and UI trigger selectors may show errors since Home Assistant's automation validator hasn't been updated to recognize custom trigger platforms in HA 2025.7.0. However, the triggers work correctly when configured in YAML format as shown below.
 
 1. Go to Settings → Automations & Scenes → Create Automation
 2. Choose "When" → Manual trigger
@@ -201,8 +205,8 @@ UniFi Network Rules provides a **sophisticated trigger system** that gives you r
 
 ```yaml
 triggers:
-  - type: rule_enabled
-    trigger: unifi_network_rules
+  - trigger: unifi_network_rules
+    type: rule_enabled
     rule_type: port_forwards  # Optional: filter by rule type
     name_filter: "Minecraft"  # Optional: filter by rule name
 ```
@@ -212,43 +216,70 @@ triggers:
 Each trigger provides rich data you can use in conditions and actions:
 
 ```yaml
-# Available in automations as trigger.event.*
-rule_id: "64f1a2b3c4d5e6f7g8h9i0j1"  # Unique rule identifier
-rule_name: "Minecraft Server Access"    # Human-readable rule name
-rule_type: "port_forwards"              # Type of rule that changed
-old_state: { ... }                      # Previous rule configuration
-new_state: { ... }                      # New rule configuration (null for deletions)
-trigger_type: "rule_enabled"            # Which trigger fired
+# Available in automations as trigger.*
+rule_id: "64f1a2b3c4d5e6f7g8h9i0j1"  # Unique rule identifier (trigger.rule_id)
+rule_name: "Minecraft Server Access"    # Human-readable rule name (trigger.rule_name)
+rule_type: "port_forwards"              # Type of rule that changed (trigger.rule_type)
+type: "rule_enabled"                    # Which trigger fired (trigger.type)
+
+# Also available as trigger.event.* for some data:
+old_state: { ... }                      # Previous rule configuration (trigger.event.old_state)
+new_state: { ... }                      # New rule configuration (trigger.event.new_state)
+trigger_type: "rule_enabled"            # Which trigger fired (trigger.event.trigger_type)
 ```
 
 ## Trigger Automation Examples
 
 ### 1. Security Monitoring - Alert on Unexpected Rule Changes
 
-Get notified when someone makes firewall changes outside of Home Assistant:
+Create rich notifications when firewall policies are modified:
 
 ```yaml
 alias: Security Alert - Firewall Changes
 description: Alert when firewall rules are modified outside of HA
 triggers:
-  - type: rule_changed
-    trigger: unifi_network_rules
+  - trigger: unifi_network_rules
+    type: rule_changed
     rule_type: firewall_policies
-  - type: rule_deleted
-    trigger: unifi_network_rules
+  - trigger: unifi_network_rules
+    type: rule_deleted
     rule_type: firewall_policies
-condition:
-  # Add conditions to filter out expected changes if needed
-action:
+conditions: []
+actions:
   - action: notify.mobile_app_admin_phone
     data:
       title: "🚨 Network Security Alert"
       message: >
-        Firewall rule "{{ trigger.event.rule_name }}" was {{ trigger.event.trigger_type.replace('rule_', '') }}
+        Firewall rule "{{ trigger.event.rule_name }}" was {{ trigger.event.rule_type.replace('rule_', '') }}
         Rule ID: {{ trigger.event.rule_id }}
       data:
         priority: high
         category: security
+mode: single
+```
+
+Use the `new_state` and `old_state` to get the full details of the rule change. (check your backup file to see what is available for each rule type)
+
+```yaml
+alias: UniFi Policy Changed
+description: UniFi Rule Changed Trigger
+triggers:
+  - trigger: unifi_network_rules
+    type: rule_changed
+    rule_type: firewall_policies
+conditions: []
+actions:
+  - data:
+      title: >-
+        Firewall Policy {{ trigger.event.rule_name }} was {{
+        trigger.event.trigger_type.replace('rule_', '').upper() }}
+      message: |-
+        {% if trigger.event.new_state %}
+          The {{ trigger.event.new_state.action }} policy '{{ trigger.event.rule_name }}' was updated. It is now {{ 'enabled' if trigger.event.new_state.enabled else 'disabled' }}.
+        {% else %}
+          The policy '{{ trigger.event.rule_name }}' was deleted.
+        {% endif %}
+    action: persistent_notification.create
 mode: single
 ```
 
@@ -260,10 +291,10 @@ Automatically disable game server access when enabled outside of allowed hours:
 alias: Game Server Auto-Disable
 description: Disable Minecraft server if enabled during school hours
 triggers:
-  - type: rule_enabled
-    trigger: unifi_network_rules
+  - trigger: unifi_network_rules
+    type: rule_enabled
     name_filter: "Minecraft"
-condition:
+conditions:
   - condition: time
     after: "08:00:00"
     before: "15:30:00"
@@ -274,7 +305,7 @@ condition:
       - wed
       - thu
       - fri
-action:
+actions:
   - delay:
       minutes: 5  # Give a 5-minute grace period
   - action: switch.turn_off
@@ -298,21 +329,23 @@ Automatically backup network rules when critical changes are made by combining t
 alias: Auto-Backup on Critical Changes
 description: Backup rules when important firewall or VPN changes occur
 triggers:
-  - type: rule_changed
-    trigger: unifi_network_rules
+  - trigger: unifi_network_rules
+    type: rule_changed
     rule_type: firewall_policies
-  - type: rule_deleted
-    trigger: unifi_network_rules
+  - trigger: unifi_network_rules
+    type: rule_deleted
     rule_type: firewall_policies
-  - type: rule_changed
-    trigger: unifi_network_rules
+  - trigger: unifi_network_rules
+    type: rule_changed
     rule_type: vpn_servers
-condition:
+conditions:
   # Only backup if it's been more than 1 hour since last backup
   - condition: template
     value_template: >
-      {{ (now() - states.automation.auto_backup_on_critical_changes.attributes.last_triggered).total_seconds() > 3600 }}
-action:
+      {% set last = state_attr('automation.auto_backup_on_critical_changes','last_triggered') %}
+      {% set last_ts = last.timestamp() if last else 0 %}
+      {{ (now().timestamp() - last_ts) > 3600 }}
+actions:
   - action: unifi_network_rules.backup_rules
     data:
       filename: "auto_backup_{{ now().strftime('%Y%m%d_%H%M') }}.json"
@@ -327,30 +360,41 @@ mode: single
 
 ### 4. VPN Connection Monitoring
 
-Monitor VPN client connections and send notifications:
+Monitor specificVPN client connections and reconnect them when they disconnect:
 
 ```yaml
-alias: VPN Connection Monitoring
-description: Monitor when VPN clients connect or disconnect
+alias: Reconnect VPN Client
+description: Monitor when a specific VPN client disconnects and reconnect
 triggers:
-  - type: rule_enabled
-    trigger: unifi_network_rules
+  - trigger: unifi_network_rules
+    type: rule_disabled
     rule_type: vpn_clients
-  - type: rule_disabled
-    trigger: unifi_network_rules
-    rule_type: vpn_clients
-action:
-  actions:
+    name_filter: "NordVPN-Chicago"
+actions:
+  - action: unifi_network_rules.toggle_rule
+    data:
+      rule_id: "{{ trigger.event.rule_id }}"
+      enabled: true
   - action: persistent_notification.create
     data:
-      title: 🔒 VPN Status Change
-      message: >-
-        VPN "{{ trigger.event.rule_name }}" was {{ 'connected' if
-        trigger.event.trigger_type == 'rule_enabled' else 'disconnected'
-        }}         {% if trigger.event.trigger_type == 'rule_enabled' %}        
-        🟢 Secure connection established         {% else %}         🔴
-        Connection terminated         {% endif %}
+      title: "🔒 Attempting to reconnect VPN"
+      message: >
+        VPN "{{ trigger.event.rule_name }}" was disconnected, attempting to reconnect
 mode: parallel
+```
+
+```yaml
+alias: VPN Client connected
+description: Notify when VPN clients connect
+triggers:
+  - trigger: unifi_network_rules
+    type: rule_enabled
+    rule_type: vpn_clients
+  - action: persistent_notification.create
+    data:
+      title: "🔒 VPN Connected"
+      message: >
+        VPN "{{ trigger.event.rule_name }}" was connected
 ```
 
 ### 5. Kids' Device Management with Notifications
@@ -361,16 +405,16 @@ Monitor and log when parental control rules change:
 alias: Parental Control Monitor
 description: Track changes to kids' internet access rules
 triggers:
-  - type: rule_enabled
-    trigger: unifi_network_rules
+  - trigger: unifi_network_rules
+    type: rule_enabled
     name_filter: "Kid"
-  - type: rule_disabled
-    trigger: unifi_network_rules
+  - trigger: unifi_network_rules
+    type: rule_disabled
     name_filter: "Kid"
-  - type: rule_changed
-    trigger: unifi_network_rules
+  - trigger: unifi_network_rules
+    type: rule_changed
     name_filter: "Block"
-action:
+actions:
   - action: logbook.log
     data:
       name: "Parental Controls"
@@ -399,13 +443,13 @@ Create input helpers to track network rule changes on your dashboard:
 alias: Update Network Stats
 description: Update dashboard counters for network changes
 triggers:
-  - type: rule_enabled
-    trigger: unifi_network_rules
-  - type: rule_disabled
-    trigger: unifi_network_rules
-  - type: rule_changed
-    trigger: unifi_network_rules
-action:
+  - trigger: unifi_network_rules
+    type: rule_enabled
+  - trigger: unifi_network_rules
+    type: rule_disabled
+  - trigger: unifi_network_rules
+    type: rule_changed
+actions:
   - action: counter.increment
     target:
       entity_id: counter.network_rule_changes
@@ -429,11 +473,11 @@ mode: parallel
 
 ```yaml
 triggers:
-  - type: rule_changed
-    trigger: unifi_network_rules
+  - trigger: unifi_network_rules
+    type: rule_changed
     rule_type: port_forwards
-  - type: rule_changed
-    trigger: unifi_network_rules
+  - trigger: unifi_network_rules
+    type: rule_changed
     rule_type: vpn_clients
 ```
 
@@ -441,8 +485,8 @@ triggers:
 
 ```yaml
 triggers:
-  - type: rule_enabled
-    trigger: unifi_network_rules
+  - trigger: unifi_network_rules
+    type: rule_enabled
     name_filter: "Gaming"  # Matches any rule containing "Gaming"
 ```
 
@@ -450,8 +494,8 @@ triggers:
 
 ```yaml
 triggers:
-  - type: rule_changed
-    trigger: unifi_network_rules
+  - trigger: unifi_network_rules
+    type: rule_changed
     rule_id: "64f1a2b3c4d5e6f7g8h9i0j1"  # Monitor one specific rule
 ```
 
@@ -466,7 +510,8 @@ triggers:
 
 ### Troubleshooting Triggers
 
-- **UI Shows "Unknown"**: Currently, trigger UI support is limited. Use YAML configuration instead
+- **VS Code Validation Errors**: The automation validator in HA 2025.7.0 doesn't recognize custom trigger platforms yet, causing false validation errors. The triggers work correctly despite these warnings.
+- **UI Shows "Unknown"**: The automation UI doesn't display custom trigger options. Use YAML configuration as shown in the examples above.
 - **Enable Debug Logging**: Set `LOG_TRIGGERS = True` in `const.py` for detailed trigger logs
 - **Check WebSocket Connection**: Triggers require active WebSocket connection to UniFi OS
 - **Verify Permissions**: Ensure your UniFi user has admin access to receive all rule change events

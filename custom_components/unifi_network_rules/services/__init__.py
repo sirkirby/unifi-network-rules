@@ -28,7 +28,6 @@ from .backup_services import (
 from .system_services import (
     async_setup_system_services,
     async_refresh_service,
-    async_reset_rate_limit,
     async_websocket_diagnostics,
 )
 from .cleanup_services import (
@@ -49,7 +48,6 @@ from .constants import (
     SERVICE_SAVE_TEMPLATE,
     SERVICE_FORCE_CLEANUP,
     SERVICE_FORCE_REMOVE_STALE,
-    SERVICE_RESET_RATE_LIMIT,
     SERVICE_WEBSOCKET_DIAGNOSTICS,
     SERVICE_TOGGLE_RULE,
 )
@@ -105,7 +103,6 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_SAVE_TEMPLATE,
         SERVICE_FORCE_CLEANUP,
         SERVICE_FORCE_REMOVE_STALE,
-        SERVICE_RESET_RATE_LIMIT,
         SERVICE_WEBSOCKET_DIAGNOSTICS
     ]
     
