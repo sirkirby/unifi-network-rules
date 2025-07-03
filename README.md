@@ -250,8 +250,8 @@ actions:
     data:
       title: "🚨 Network Security Alert"
       message: >
-        Firewall rule "{{ trigger.rule_name }}" was {{ trigger.type.replace('rule_', '') }}
-        Rule ID: {{ trigger.rule_id }}
+        Firewall rule "{{ trigger.event.rule_name }}" was {{ trigger.event.rule_type.replace('rule_', '') }}
+        Rule ID: {{ trigger.event.rule_id }}
       data:
         priority: high
         category: security
@@ -286,7 +286,7 @@ actions:
   - action: switch.turn_off
     target:
       entity_id: >
-        {% set rule_id = trigger.rule_id %}
+        {% set rule_id = trigger.event.rule_id %}
         {% set entities = states.switch | selectattr('attributes.rule_id', 'eq', rule_id) | map(attribute='entity_id') | list %}
         {{ entities[0] if entities else none }}
   - action: notify.family_devices
@@ -328,8 +328,8 @@ actions:
     data:
       title: "📁 Network Rules Backed Up"
       message: >
-        Automatic backup created due to {{ trigger.type.replace('rule_', '') }} 
-        of {{ trigger.rule_type.replace('_', ' ').title() }}: "{{ trigger.rule_name }}"
+        Automatic backup created due to {{ trigger.event.trigger_type.replace('rule_', '') }} 
+        of {{ trigger.event.rule_type.replace('_', ' ').title() }}: "{{ trigger.event.rule_name }}"
 mode: single
 ```
 
@@ -352,8 +352,8 @@ actions:
     data:
       title: "🔒 VPN Status Change"
       message: >
-        VPN "{{ trigger.rule_name }}" was {{ 'connected' if trigger.type == 'rule_enabled' else 'disconnected' }}
-        {% if trigger.type == 'rule_enabled' %}
+        VPN "{{ trigger.event.rule_name }}" was {{ 'connected' if trigger.event.trigger_type == 'rule_enabled' else 'disconnected' }}
+        {% if trigger.event.trigger_type == 'rule_enabled' %}
         🟢 Secure connection established
         {% else %}
         🔴 Connection terminated
@@ -383,10 +383,10 @@ actions:
     data:
       name: "Parental Controls"
       message: >
-        {{ trigger.rule_name }} was {{ trigger.type.replace('rule_', '') }}
-        {% if trigger.type == 'rule_enabled' %}
+        {{ trigger.event.rule_name }} was {{ trigger.event.trigger_type.replace('rule_', '') }}
+        {% if trigger.event.trigger_type == 'rule_enabled' %}
         ✅ Internet access restored
-        {% elif trigger.type == 'rule_disabled' %}
+        {% elif trigger.event.trigger_type == 'rule_disabled' %}
         🚫 Internet access blocked
         {% else %}
         🔧 Settings modified
@@ -395,7 +395,7 @@ actions:
   - action: notify.parents_devices
     data:
       title: "👨‍👩‍👧‍👦 Parental Control Update"
-      message: "{{ trigger.rule_name }} - {{ trigger.type.replace('rule_', '').title() }}"
+      message: "{{ trigger.event.rule_name }} - {{ trigger.event.trigger_type.replace('rule_', '').title() }}"
 mode: parallel
 ```
 
@@ -422,7 +422,7 @@ actions:
       entity_id: input_text.last_network_change
     data:
       value: >
-        {{ now().strftime('%H:%M') }}: {{ trigger.rule_name }} ({{ trigger.type.replace('rule_', '') }})
+        {{ now().strftime('%H:%M') }}: {{ trigger.event.rule_name }} ({{ trigger.event.trigger_type.replace('rule_', '') }})
   - action: input_datetime.set_datetime
     target:
       entity_id: input_datetime.last_rule_change

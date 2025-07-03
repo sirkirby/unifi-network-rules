@@ -485,9 +485,9 @@ class UnifiRuleTrigger:
                         if LOG_TRIGGERS:
                             LOGGER.info("Calling action with trigger vars: %s", trigger_vars)
                         # Schedule the action execution
-                        self.hass.async_create_task(
-                            self.action({"trigger": trigger_vars})
-                        )
+                        result = self.action({"trigger": trigger_vars})
+                        if asyncio.iscoroutine(result):
+                            self.hass.async_create_task(result)
                         
                         # Also trigger coordinator refresh since rule changed
                         self._dispatch_coordinator_refresh(f"Rule change detected: {rule_id} ({detected_rule_type})")
@@ -921,7 +921,9 @@ class UnifiRuleTrigger:
             }
             
             # Schedule the action execution
-            await self.action({"trigger": trigger_vars})
+            result = self.action({"trigger": trigger_vars})
+            if asyncio.iscoroutine(result):
+                await result
             
         except Exception as err:
             LOGGER.error("Error firing trigger: %s", err)
