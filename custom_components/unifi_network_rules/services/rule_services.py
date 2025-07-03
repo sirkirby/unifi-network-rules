@@ -114,6 +114,12 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
         elif rule_type == "wlans":
             wlans = await api.get_wlans()
             return next((w for w in wlans if w.id == rule_id), None)
+        elif rule_type == "vpn_clients":
+            clients = await api.get_vpn_clients()
+            return next((c for c in clients if c.id == rule_id), None)
+        elif rule_type == "vpn_servers":
+            servers = await api.get_vpn_servers()
+            return next((s for s in servers if s.id == rule_id), None)
         return None
         
     # Function to toggle rule based on its type
@@ -132,6 +138,8 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
             return await api.queue_api_operation(api.toggle_qos_rule, rule_obj)
         elif rule_type == "wlans":
             return await api.queue_api_operation(api.toggle_wlan, rule_obj)
+        elif rule_type in ["vpn_clients", "vpn_servers"]:
+            return await api.queue_api_operation(api.toggle_vpn_config, rule_obj)
         return False
 
     for coordinator in coordinators.values():
@@ -146,7 +154,7 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
                         break
             else:
                 # If rule_type is not specified, try all types
-                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules", "qos_rules", "wlans"]:
+                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules", "qos_rules", "wlans", "vpn_clients", "vpn_servers"]:
                     try:
                         rule_obj = await get_rule_by_id(api, type_name, rule_id)
                         if rule_obj:
@@ -195,6 +203,25 @@ async def async_delete_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
             real_id = parts[2]
             LOGGER.debug("Extracted ID %s from prefixed ID %s", real_id, rule_id)
             rule_id = real_id
+            
+    # Helper function to delete rule by type using the API queue
+    async def delete_rule(api, rule_type, rule_id):
+        """Delete a rule by its type."""
+        if rule_type == "firewall_policies":
+            return await api.queue_api_operation(api.remove_firewall_policy, rule_id)
+        elif rule_type == "traffic_rules":
+            return await api.queue_api_operation(api.remove_traffic_rule, rule_id)
+        elif rule_type == "port_forwards":
+            return await api.queue_api_operation(api.remove_port_forward, rule_id)
+        elif rule_type == "traffic_routes":
+            return await api.queue_api_operation(api.remove_traffic_route, rule_id)
+        elif rule_type == "legacy_firewall_rules":
+            return await api.queue_api_operation(api.remove_legacy_firewall_rule, rule_id)
+        elif rule_type == "qos_rules":
+            return await api.queue_api_operation(api.remove_qos_rule, rule_id)
+        elif rule_type in ["vpn_clients", "vpn_servers"]:
+            return await api.queue_api_operation(api.remove_vpn_config, rule_id)
+        return False
     
     success = False
     for coordinator in coordinators.values():
@@ -202,15 +229,15 @@ async def async_delete_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
         try:
             # Try to delete rule based on rule_type
             if rule_type:
-                if await api.delete_rule(rule_type, rule_id):
+                if await delete_rule(api, rule_type, rule_id):
                     success = True
                     LOGGER.info("Successfully deleted rule %s of type %s", rule_id, rule_type)
                     break
             else:
-                # Try all rule types
-                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules", "qos_rules"]:
+                # Try all rule types that can be deleted
+                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules", "qos_rules", "vpn_clients", "vpn_servers"]:
                     try:
-                        if await api.delete_rule(type_name, rule_id):
+                        if await delete_rule(api, type_name, rule_id):
                             success = True
                             LOGGER.info("Successfully deleted rule %s using type: %s", rule_id, type_name)
                             break
@@ -265,6 +292,8 @@ async def async_bulk_update_rules(hass: HomeAssistant, coordinators: Dict, call:
                 return await api.queue_api_operation(api.toggle_qos_rule, rule_obj)
             elif rule_type == "wlans":
                 return await api.queue_api_operation(api.toggle_wlan, rule_obj)
+            elif rule_type in ["vpn_clients", "vpn_servers"]:
+                return await api.queue_api_operation(api.toggle_vpn_config, rule_obj)
         return True  # Already in desired state
 
     entity_registry = async_get_entity_registry(hass)
