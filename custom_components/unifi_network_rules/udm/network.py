@@ -144,60 +144,78 @@ class NetworkMixin:
             like brightness and color control, a Light entity would be more appropriate.
             
         Implementation:
-            Sends only essential device fields to avoid InvalidPayload errors on older
-            UniFi Network versions that reject read-only fields in update requests.
+            Uses DeviceSetLedStatus with fallback to minimal payload of device endpoint.
         """
         try:
             device_id = device.id
-            status = "on" if enable else "off"
-            
-            # Get device MAC safely for logging
             device_raw = getattr(device, 'raw', {}) if hasattr(device, 'raw') else {}
             device_mac = device_raw.get('mac', device_raw.get('serial', 'unknown'))
             
-            # Create minimal payload with only essential fields to avoid InvalidPayload errors
-            # Many fields in the full device payload are read-only and cause API errors
-            device_payload = {
-                '_id': device_id,
-                'led_override': status
-            }
+            LOGGER.debug("Attempting LED toggle for device %s (MAC: %s) to %s", 
+                        device_id, device_mac, "on" if enable else "off")
             
-            # Include optional LED fields if they exist in the original data
-            # to maintain any existing LED configuration
-            if 'led_override_color' in device_raw:
-                device_payload['led_override_color'] = device_raw['led_override_color']
-            if 'led_override_color_brightness' in device_raw:
-                device_payload['led_override_color_brightness'] = device_raw['led_override_color_brightness']
+            # Approach 1: Try using DeviceSetLedStatus from aiounifi first
+            try:
+                LOGGER.debug("Trying DeviceSetLedStatus approach for %s", device_mac)
+                
+                # Use 'default' for enabled (normal LED behavior), 'off' for disabled
+                led_value = "default" if enable else "off"
+                
+                request = DeviceSetLedStatus.create(device, led_value)
+                result = await self.controller.request(request)
+                
+                if result and isinstance(result, dict):
+                    meta = result.get('meta', {})
+                    if meta.get('rc') == 'ok':
+                        LOGGER.debug("DeviceSetLedStatus succeeded for %s with value: %s", device_mac, led_value)
+                        # Update local state
+                        if hasattr(device, 'raw') and device.raw:
+                            device.raw['led_override'] = led_value
+                        return True
+                    else:
+                        LOGGER.debug("DeviceSetLedStatus failed for %s: %s", device_mac, meta)
+                        
+            except Exception as err:
+                LOGGER.debug("DeviceSetLedStatus approach failed for %s: %s", device_mac, err)
             
-            # Use the legacy API endpoint for device updates (not v2)
-            # Path format: /rest/device/{device_id}
-            path = f"/rest/device/{device_id}"
-            request = self.create_api_request("PUT", path, data=device_payload, is_v2=False)
+            # Approach 2: Fallback to minimal payload of device endpoint
+            try:
+                LOGGER.debug("Trying minimal payload approach (original working method) for %s", device_mac)
+                
+                # Use original working LED values: 'on' for enabled, 'off' for disabled
+                led_value = "on" if enable else "off"
+                device_payload = {
+                    '_id': device_id,
+                    'led_override': led_value
+                }
+                
+                path = f"/rest/device/{device_id}"
+                request = self.create_api_request("PUT", path, data=device_payload, is_v2=False)
+                result = await self.controller.request(request)
+                
+                if result and isinstance(result, dict):
+                    meta = result.get('meta', {})
+                    if meta.get('rc') == 'ok':
+                        LOGGER.debug("Minimal payload approach succeeded for %s with value: %s", device_mac, led_value)
+                        # Update local state
+                        if hasattr(device, 'raw') and device.raw:
+                            device.raw['led_override'] = led_value
+                        return True
+                    else:
+                        LOGGER.debug("Minimal payload approach failed for %s: %s", device_mac, meta)
+                        
+            except Exception as err:
+                LOGGER.debug("Minimal payload approach failed for %s: %s", device_mac, err)
             
-            result = await self.controller.request(request)
+            # Both approaches failed
+            LOGGER.error("Both LED toggle approaches failed for device %s (MAC: %s)", device_id, device_mac)
+            return False
             
-            # Check for successful response
-            if result and isinstance(result, dict):
-                meta = result.get('meta', {})
-                if meta.get('rc') == 'ok':
-                    LOGGER.debug("Device %s LED set to %s", device_mac, status)
-                    # Update the device's local state for immediate feedback
-                    if hasattr(device, 'raw') and device.raw:
-                        device.raw['led_override'] = status
-                    elif hasattr(device, 'led_override'):
-                        device.led_override = status
-                    return True
-                else:
-                    LOGGER.error("API returned error for device %s LED update: %s", device_mac, meta)
-                    return False
-            else:
-                LOGGER.error("Failed to set LED for device %s - unexpected API response", device_mac)
-                return False
         except Exception as err:
             # Get device MAC safely for error logging
             device_raw = getattr(device, 'raw', {}) if hasattr(device, 'raw') else {}
             device_mac = device_raw.get('mac', device_raw.get('serial', 'unknown'))
-            LOGGER.error("Error setting device LED for %s: %s", device_mac, str(err))
+            LOGGER.error("Critical error in LED toggle for %s: %s", device_mac, str(err))
             return False
 
     async def get_device_led_states(self) -> Dict[str, Dict[str, Any]]:
