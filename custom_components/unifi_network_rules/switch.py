@@ -30,7 +30,7 @@ from aiounifi.models.firewall_zone import FirewallZone
 from aiounifi.models.wlan import Wlan
 from aiounifi.models.device import Device  # For LED toggle
 
-from .const import DOMAIN, MANUFACTURER, SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS
+from .const import DOMAIN, MANUFACTURER, SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS, LOG_TRIGGERS
 from .helpers.rule import sanitize_entity_id
 from .coordinator import UnifiRuleUpdateCoordinator
 from .helpers.rule import (
@@ -743,7 +743,9 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                             # The flag was already consumed, so the trigger worked correctly.
                             LOGGER.debug("Delayed verification: Trigger confirmed change for %s. No refresh needed.", self._rule_id)
                     
-                    self.hass.async_create_task(delayed_verification())
+                    # Skip delayed verification for device LED toggles since we use immediate trigger + polling detection
+                    if self._rule_type != "devices":
+                        self.hass.async_create_task(delayed_verification())
                 
             except Exception as err:
                 # Check if this is an auth error
@@ -1578,6 +1580,35 @@ class UnifiLedToggleSwitch(UnifiRuleSwitch):
         
         # Call parent update (handles optimistic state and availability)
         super()._handle_coordinator_update()
+
+    async def _async_toggle_rule(self, enable: bool) -> None:
+        """Override toggle for LED devices to add immediate trigger firing."""
+        # Fire immediate device trigger for optimistic response
+        try:
+            device_name = getattr(self._device, 'name', f"Device {self._rule_id}")
+            device_id = getattr(self._device, 'mac', self._rule_id)
+            
+            # Use existing CQRS pattern to track this HA-initiated operation
+            self.coordinator.register_ha_initiated_operation(device_id)
+            
+            if LOG_TRIGGERS:
+                LOGGER.info("🔥 LED IMMEDIATE TRIGGER: Firing device trigger for %s (%s): %s → %s", 
+                           device_name, device_id, not enable, enable)
+            
+            # Fire immediate device trigger via dispatcher
+            self.coordinator.fire_device_trigger_via_dispatcher(
+                device_id=device_id,
+                device_name=device_name,
+                change_type="led_toggled",
+                old_state=not enable,
+                new_state=enable
+            )
+            
+        except Exception as trigger_err:
+            LOGGER.error("Error firing immediate device trigger for LED toggle: %s", trigger_err)
+        
+        # Call parent toggle method to handle the actual API operation
+        await super()._async_toggle_rule(enable)
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
