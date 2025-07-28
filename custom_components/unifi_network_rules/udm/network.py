@@ -144,8 +144,8 @@ class NetworkMixin:
             like brightness and color control, a Light entity would be more appropriate.
             
         Implementation:
-            Sends only essential device fields to avoid InvalidPayload errors on older
-            UniFi Network versions that reject read-only fields in update requests.
+            Uses the pattern of getting full device payload, modifying only the LED field,
+            and PUTting the entire payload back to the device-specific endpoint.
         """
         try:
             device_id = device.id
@@ -155,19 +155,11 @@ class NetworkMixin:
             device_raw = getattr(device, 'raw', {}) if hasattr(device, 'raw') else {}
             device_mac = device_raw.get('mac', device_raw.get('serial', 'unknown'))
             
-            # Create minimal payload with only essential fields to avoid InvalidPayload errors
-            # Many fields in the full device payload are read-only and cause API errors
-            device_payload = {
-                '_id': device_id,
-                'led_override': status
-            }
+            # Get the current device configuration (full payload)
+            device_payload = device.raw.copy() if hasattr(device, 'raw') and device.raw else {}
             
-            # Include optional LED fields if they exist in the original data
-            # to maintain any existing LED configuration
-            if 'led_override_color' in device_raw:
-                device_payload['led_override_color'] = device_raw['led_override_color']
-            if 'led_override_color_brightness' in device_raw:
-                device_payload['led_override_color_brightness'] = device_raw['led_override_color_brightness']
+            # Modify only the LED override field
+            device_payload['led_override'] = status
             
             # Use the legacy API endpoint for device updates (not v2)
             # Path format: /rest/device/{device_id}
