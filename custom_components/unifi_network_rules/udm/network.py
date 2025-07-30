@@ -192,32 +192,24 @@ class NetworkMixin:
             LOGGER.error("Error setting device LED for %s: %s", device_mac, str(err))
             return False
 
-    async def get_device_led_states(self) -> Dict[str, Dict[str, Any]]:
-        """Get LED states for all devices from the stat/device endpoint.
+    async def get_device_led_states(self) -> List[Device]:
+        """Get LED-capable devices with their current states.
+        
+        Returns properly typed Device objects for LED control switches and triggers.
+        Connection state monitoring is handled by the core UniFi integration.
         
         Returns:
-            Dict mapping device MAC addresses to LED state info:
-            {
-                "28:70:4e:31:5f:5d": {
-                    "led_override": "off",
-                    "led_override_color": "#0000ff", 
-                    "led_override_color_brightness": 100,
-                    "name": "Neb",
-                    "model": "U7PRO",
-                    "type": "uap",
-                    "is_access_point": True
-                }
-            }
+            List[Device]: LED-capable Device objects with full device data
         """
         try:
             # Use the stat/device endpoint which has full device config including LED state
             request = self.create_api_request("GET", "/stat/device", is_v2=False)
             data = await self.controller.request(request)
             
-            led_states = {}
+            led_capable_devices: List[Device] = []
             if data and "data" in data:
                 for device_data in data["data"]:
-                    # Extract only the fields we need for LED control
+                    # Extract device information needed for LED control
                     mac = device_data.get('mac')
                     if not mac:
                         continue
@@ -229,21 +221,21 @@ class NetworkMixin:
                     
                     # Include UAPs (type 'uap') that are access points, or any device with LED override
                     if (device_type == 'uap' and is_access_point) or has_led_override:
-                        led_states[mac] = {
-                            'led_override': device_data.get('led_override'),
-                            'led_override_color': device_data.get('led_override_color'),
-                            'led_override_color_brightness': device_data.get('led_override_color_brightness'),
-                            'name': device_data.get('name', 'Unknown'),
-                            'model': device_data.get('model', 'Unknown'),
-                            'type': device_type,
-                            'is_access_point': is_access_point,
-                            '_id': device_data.get('_id'),  # Needed for device updates
-                            'state': device_data.get('state', 1),  # Device connection state
-                        }
+                        try:
+                            # Create Device object directly from API data (consistent with firewall.py pattern)
+                            device = Device(device_data)
+                            led_capable_devices.append(device)
+                            LOGGER.debug("Created LED-capable device: %s (%s) - LED state: %s", 
+                                       device_data.get('name', 'Unknown'), mac, 
+                                       device_data.get('led_override', 'unknown'))
+                        except Exception as device_err:
+                            LOGGER.warning("Error creating Device object for %s (%s): %s", 
+                                         device_data.get('name', 'unknown'), mac, str(device_err))
+                            continue
                         
-                LOGGER.debug("Extracted LED states for %d devices from stat/device", len(led_states))
-                return led_states
-            return {}
+                LOGGER.debug("Created %d LED-capable Device objects from stat/device", len(led_capable_devices))
+                return led_capable_devices
+            return []
         except Exception as err:
             LOGGER.error("Failed to get device LED states: %s", str(err))
-            return {}
+            return []
