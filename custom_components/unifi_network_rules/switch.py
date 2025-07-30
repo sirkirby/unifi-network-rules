@@ -30,7 +30,7 @@ from aiounifi.models.firewall_zone import FirewallZone
 from aiounifi.models.wlan import Wlan
 from aiounifi.models.device import Device  # For LED toggle
 
-from .const import DOMAIN, MANUFACTURER, SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS
+from .const import DOMAIN, MANUFACTURER, SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS, LOG_TRIGGERS
 from .helpers.rule import sanitize_entity_id
 from .coordinator import UnifiRuleUpdateCoordinator
 from .helpers.rule import (
@@ -743,7 +743,9 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                             # The flag was already consumed, so the trigger worked correctly.
                             LOGGER.debug("Delayed verification: Trigger confirmed change for %s. No refresh needed.", self._rule_id)
                     
-                    self.hass.async_create_task(delayed_verification())
+                    # Skip delayed verification for device LED toggles since we use immediate trigger + polling detection
+                    if self._rule_type != "devices":
+                        self.hass.async_create_task(delayed_verification())
                 
             except Exception as err:
                 # Check if this is an auth error
@@ -1538,20 +1540,6 @@ class UnifiLedToggleSwitch(UnifiRuleSwitch):
         else:
             self._attr_icon = "mdi:led-off"
     
-    def _get_actual_state_from_rule(self, rule: Any) -> Optional[bool]:
-        """Helper to get the actual LED state from the device object."""
-        if not isinstance(rule, Device):
-            return None
-            
-        # Check device LED state from raw data
-        if hasattr(rule, 'raw') and 'led_override' in rule.raw:
-            led_state = rule.raw.get('led_override')
-            # LED is "on" when not overridden to "off"
-            return led_state != 'off'
-        
-        # Default to True (LEDs are typically on by default)
-        return True
-    
     def _get_current_rule(self) -> Device | None:
         """Override to get current device from coordinator."""
         try:
@@ -1578,6 +1566,62 @@ class UnifiLedToggleSwitch(UnifiRuleSwitch):
         
         # Call parent update (handles optimistic state and availability)
         super()._handle_coordinator_update()
+
+    async def _async_toggle_rule(self, enable: bool) -> None:
+        """Override toggle for LED devices to add immediate trigger firing."""
+        # Fire immediate device trigger for optimistic response
+        try:
+            device_name = getattr(self._device, 'name', f"Device {self._rule_id}")
+            device_id = getattr(self._device, 'mac', self._rule_id)
+            
+            # Use existing CQRS pattern to track this HA-initiated operation
+            self.coordinator.register_ha_initiated_operation(device_id)
+            
+            if LOG_TRIGGERS:
+                LOGGER.info("🔥 LED IMMEDIATE TRIGGER: Firing device trigger for %s (%s): LED %s → %s", 
+                           device_name, device_id, "OFF" if enable else "ON", "ON" if enable else "OFF")
+            
+            # Get current device object for trigger payload (consistent with rule triggers)
+            current_device = self._get_current_rule()  # Returns Device object
+            
+            # Create optimistic device states for immediate trigger
+            if current_device and hasattr(current_device, 'raw'):
+                # Create old_state (current LED state)
+                old_state_device = current_device
+                
+                # Create new_state with optimistic LED state
+                new_device_data = current_device.raw.copy()
+                new_device_data['led_override'] = "default" if enable else "off"  # Optimistic new state
+                
+                # Import Device class and create optimistic new device object
+                from aiounifi.models.device import Device
+                new_state_device = Device(new_device_data)
+                
+                if LOG_TRIGGERS:
+                    LOGGER.info("🎯 OPTIMISTIC DEVICE STATE: %s → %s", 
+                               old_state_device.raw.get('led_override', 'unknown'), 
+                               new_state_device.raw.get('led_override', 'unknown'))
+            else:
+                # Fallback if device structure is unexpected
+                old_state_device = current_device
+                new_state_device = current_device
+                LOGGER.warning("Could not create optimistic device state for immediate trigger")
+            
+            # Fire immediate device trigger via dispatcher
+            # Pass full device objects like rule triggers do
+            self.coordinator.fire_device_trigger_via_dispatcher(
+                device_id=device_id,
+                device_name=device_name,
+                change_type="led_toggled",
+                old_state=old_state_device,  # Full device object (consistent with rule triggers)
+                new_state=new_state_device   # Full device object (consistent with rule triggers)
+            )
+            
+        except Exception as trigger_err:
+            LOGGER.error("Error firing immediate device trigger for LED toggle: %s", trigger_err)
+        
+        # Call parent toggle method to handle the actual API operation
+        await super()._async_toggle_rule(enable)
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:

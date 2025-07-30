@@ -22,7 +22,7 @@ from aiounifi.models.firewall_zone import FirewallZone
 from aiounifi.models.wlan import Wlan
 from aiounifi.models.device import Device
 
-from .const import DOMAIN, LOGGER, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DEBUG_WEBSOCKET
+from .const import DOMAIN, LOGGER, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DEBUG_WEBSOCKET, LOG_TRIGGERS
 from .udm import UDMAPI
 from .websocket import SIGNAL_WEBSOCKET_MESSAGE, UnifiRuleWebsocket
 from .helpers.rule import get_rule_id, get_rule_name, get_rule_enabled, get_child_unique_id
@@ -168,6 +168,153 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             del self._ha_initiated_operations[rule_id]
             return True
         return False
+
+    def fire_device_trigger_via_dispatcher(self, device_id: str, device_name: str, change_type: str, old_state: Any = None, new_state: Any = None) -> None:
+        """Fire device_changed triggers using Home Assistant's dispatcher pattern.
+        
+        This method dispatches device change events that trigger instances can listen for.
+        Uses the same dispatcher pattern as other coordinator events for consistency.
+        
+        Args:
+            device_id: The ID of the device that changed (e.g., MAC address)
+            device_name: Human-readable name of the device
+            change_type: Type of change (e.g., "led_toggled", "reboot")
+            old_state: Previous state of the device property
+            new_state: New state of the device property
+        """
+        if LOG_TRIGGERS:
+            LOGGER.info("🔥 COORDINATOR: Dispatching device trigger for %s (%s): %s", 
+                       device_name, device_id, change_type)
+        
+        # Prepare trigger data
+        trigger_data = {
+            "device_id": device_id,
+            "device_name": device_name,
+            "change_type": change_type,
+            "old_state": old_state,
+            "new_state": new_state,
+            "trigger_type": "device_changed"
+        }
+        
+        # Dispatch via Home Assistant's dispatcher system
+        try:
+            # Get entry_id for this coordinator
+            entry_id = self.config_entry.entry_id if self.config_entry else "unknown"
+            signal_name = f"{DOMAIN}_device_trigger_{entry_id}"
+            
+            async_dispatcher_send(self.hass, signal_name, trigger_data)
+            
+            if LOG_TRIGGERS:
+                LOGGER.info("✅ COORDINATOR: Dispatched device trigger signal: %s", signal_name)
+                
+        except Exception as err:
+            LOGGER.error("Error dispatching device trigger: %s", err)
+
+    def _check_for_device_state_changes(self, previous_data: Dict[str, List[Any]], new_data: Dict[str, List[Any]]) -> None:
+        """Check for LED state changes on devices and fire device triggers accordingly.
+        
+        This provides eventual consistency by detecting LED changes during regular 
+        coordinator polling cycles, in case websocket events are not received.
+        
+        Note: Only monitors LED state changes for devices we manage (LED-capable access points).
+        Connection state monitoring is handled by the core UniFi integration.
+        
+        Args:
+            previous_data: The previous coordinator data
+            new_data: The current coordinator data
+        """
+        if not previous_data or not new_data:
+            LOGGER.debug("Skipping device LED state change detection - no previous or new data")
+            return
+            
+        previous_devices = previous_data.get("devices", [])
+        new_devices = new_data.get("devices", [])
+        
+        if not previous_devices and not new_devices:
+            return  # No devices to compare
+            
+        # Create lookup dictionaries by device MAC for efficient comparison
+        previous_device_states = {}
+        for device in previous_devices:
+            try:
+                device_id = getattr(device, 'mac', getattr(device, 'id', None))
+                if device_id:
+                    previous_device_states[device_id] = {
+                        'led_override': getattr(device, 'led_override', None),
+                        'name': getattr(device, 'name', f"Device {device_id}"),
+                    }
+            except Exception as err:
+                LOGGER.warning("Error processing previous device LED state: %s", err)
+                
+        new_device_states = {}
+        for device in new_devices:
+            try:
+                device_id = getattr(device, 'mac', getattr(device, 'id', None))
+                if device_id:
+                    new_device_states[device_id] = {
+                        'led_override': getattr(device, 'led_override', None),
+                        'name': getattr(device, 'name', f"Device {device_id}"),
+                    }
+            except Exception as err:
+                LOGGER.warning("Error processing new device LED state: %s", err)
+        
+        # Compare device LED states and fire triggers for changes
+        all_device_ids = set(previous_device_states.keys()) | set(new_device_states.keys())
+        
+        # Build lookup for full device objects
+        previous_devices_lookup = {}
+        new_devices_lookup = {}
+        
+        for device in previous_devices:
+            device_id = getattr(device, 'mac', getattr(device, 'id', None))
+            if device_id:
+                previous_devices_lookup[device_id] = device
+        
+        for device in new_devices:
+            device_id = getattr(device, 'mac', getattr(device, 'id', None))
+            if device_id:
+                new_devices_lookup[device_id] = device
+        
+        for device_id in all_device_ids:
+            previous_state = previous_device_states.get(device_id)
+            new_state = new_device_states.get(device_id)
+            
+            # Skip if device was just added or removed (handled elsewhere)
+            if not previous_state or not new_state:
+                continue
+                
+            # Check for LED state changes only
+            prev_led = previous_state.get('led_override')
+            new_led = new_state.get('led_override')
+            
+            if prev_led != new_led:
+                device_name = new_state.get('name', f"Device {device_id}")
+                
+                # Get full device objects for trigger payload (consistent with rule triggers)
+                previous_device_obj = previous_devices_lookup.get(device_id)
+                new_device_obj = new_devices_lookup.get(device_id)
+                
+                # Check if this was an HA-initiated operation to avoid duplicate triggers
+                was_ha_initiated = self.check_and_consume_ha_initiated_operation(device_id)
+                
+                if was_ha_initiated:
+                    if LOG_TRIGGERS:
+                        LOGGER.info("🔄 DEVICE LED CHANGE: %s (%s) LED: %s → %s [HA-INITIATED - Skipping duplicate trigger]", 
+                                   device_name, device_id, prev_led, new_led)
+                else:
+                    if LOG_TRIGGERS:
+                        LOGGER.info("🔍 DEVICE LED CHANGE DETECTED: %s (%s) LED: %s → %s [EXTERNAL CHANGE - Firing trigger]", 
+                                   device_name, device_id, prev_led, new_led)
+                    
+                    # Fire device trigger via dispatcher (external change)
+                    # Pass full device objects like rule triggers do
+                    self.fire_device_trigger_via_dispatcher(
+                        device_id=device_id,
+                        device_name=device_name,
+                        change_type="led_toggled",
+                        old_state=previous_device_obj,  # Full device object (consistent with rule triggers)
+                        new_state=new_device_obj        # Full device object (consistent with rule triggers)
+                    )
 
     async def _async_update_data(self) -> Dict[str, List[Any]]:
         """Fetch data from API endpoint."""
@@ -416,6 +563,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     if self._initial_update_done:
                         # --- Check for DELETED Entities ---
                         self._check_for_deleted_rules(rules_data)
+
+                        # --- Check for LED State Changes ---
+                        self._check_for_device_state_changes(previous_data, rules_data)
 
                         # --- Discover and Add NEW Entities --- 
                         await self._discover_and_add_new_entities(rules_data)
@@ -666,50 +816,24 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
     async def _update_devices_in_dict(self, data: Dict[str, List[Any]]) -> None:
         """Update devices in the data dictionary."""
         try:
-            LOGGER.info("Fetching devices for LED switches...")
+            LOGGER.info("Fetching LED-capable devices for LED switches...")
             
-            # Get LED states from the stat/device endpoint (has comprehensive device data including LED states)
-            led_states = await self.api.get_device_led_states()
-            LOGGER.info("Retrieved LED states for %d devices from stat/device", len(led_states))
+            # Get LED-capable devices (access points with LED support) as properly typed Device objects
+            led_capable_devices = await self.api.get_device_led_states()
+            LOGGER.info("Retrieved %d LED-capable Device objects", len(led_capable_devices))
             
-            # Debug: Print LED states found
-            if led_states:
+            # Debug: Print LED-capable devices found
+            if led_capable_devices:
                 LOGGER.info("LED-capable devices found:")
-                for mac, led_info in led_states.items():
+                for device in led_capable_devices:
+                    device_mac = getattr(device, 'mac', getattr(device, 'id', 'unknown'))
+                    device_name = getattr(device, 'name', 'Unknown')
+                    led_state = getattr(device, 'led_override', 'unknown')
+                    device_model = getattr(device, 'model', 'Unknown')
                     LOGGER.info("  %s (%s): LED=%s, Model=%s", 
-                              led_info['name'], mac, led_info.get('led_override', 'unknown'), led_info['model'])
+                              device_name, device_mac, led_state, device_model)
             
-            # Create Device objects directly from the comprehensive LED states data
-            # This avoids the issue where v2 /device endpoint may not return all devices
-            led_capable_devices = []
-            for mac, led_info in led_states.items():
-                try:
-                    # Create a device data structure from the LED info
-                    device_data = {
-                        'mac': mac,
-                        '_id': led_info.get('_id', mac),  # Use _id if available, fallback to mac
-                        'device_id': led_info.get('_id', mac),   # Device ID field expected by Device class
-                        'name': led_info['name'],
-                        'model': led_info['model'],
-                        'type': led_info['type'],
-                        'is_access_point': led_info['is_access_point'],
-                        'led_override': led_info.get('led_override'),
-                        'led_override_color': led_info.get('led_override_color'),
-                        'led_override_color_brightness': led_info.get('led_override_color_brightness'),
-                        'state': led_info.get('state', 1),  # Device connection state
-                    }
-                    
-                    # Create Device object from this data
-                    device = Device(device_data)
-                    led_capable_devices.append(device)
-                    LOGGER.info("Created LED-capable device: %s (%s) - LED state: %s", 
-                              led_info['name'], mac, led_info.get('led_override', 'unknown'))
-                    
-                except Exception as device_err:
-                    LOGGER.warning("Error creating device object for %s (%s): %s", 
-                                 led_info.get('name', 'unknown'), mac, str(device_err))
-                    continue
-            
+            # Use Device objects directly to represent LED-capable devices with their current states
             data["devices"] = led_capable_devices
             self.devices = led_capable_devices
             LOGGER.info("Updated %d LED-capable devices with current LED states", len(led_capable_devices))

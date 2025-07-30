@@ -9,6 +9,7 @@ from homeassistant.const import CONF_TYPE, CONF_PLATFORM
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.trigger import TriggerActionType, TriggerInfo
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import DOMAIN, LOGGER, LOG_TRIGGERS
 
@@ -28,6 +29,7 @@ TRIGGER_RULE_ENABLED = "rule_enabled"
 TRIGGER_RULE_DISABLED = "rule_disabled"
 TRIGGER_RULE_CHANGED = "rule_changed"
 TRIGGER_RULE_DELETED = "rule_deleted"
+TRIGGER_DEVICE_CHANGED = "device_changed"
 
 # Message types from UniFi OS websocket - updated based on actual message structure
 WS_MSG_FIREWALL = "firewall"
@@ -62,6 +64,7 @@ TRIGGER_SCHEMA = vol.Schema(
             TRIGGER_RULE_DISABLED,
             TRIGGER_RULE_CHANGED,
             TRIGGER_RULE_DELETED,
+            TRIGGER_DEVICE_CHANGED,
         ]),
         vol.Optional("rule_id"): cv.string,
         vol.Optional("rule_type"): vol.In([
@@ -76,6 +79,8 @@ TRIGGER_SCHEMA = vol.Schema(
             RULE_TYPE_WLAN,
         ]),
         vol.Optional("name_filter"): cv.string,
+        vol.Optional("device_id"): cv.string,  # For device_changed triggers (LED-capable devices only)
+        vol.Optional("change_type"): cv.string,  # For device_changed triggers (currently only "led_toggled")
     }
 )
 
@@ -85,6 +90,7 @@ TRIGGER_TYPE_DESCRIPTIONS = {
     TRIGGER_RULE_DISABLED: "When a UniFi rule is disabled", 
     TRIGGER_RULE_CHANGED: "When a UniFi rule is modified",
     TRIGGER_RULE_DELETED: "When a UniFi rule is deleted",
+    TRIGGER_DEVICE_CHANGED: "When a UniFi device LED is changed",
 }
 
 def get_rule_name_from_data(rule_data: Dict[str, Any], rule_id: str, rule_type: str = None) -> str:
@@ -576,10 +582,33 @@ class UnifiRuleTrigger:
             if hasattr(websocket, '_unr_trigger_handlers'):
                 websocket._unr_trigger_handlers.append(_handle_websocket_msg)
                 
+                # Register device trigger listener if this is a device_changed trigger
+                device_trigger_unsubscribe = None
+                if self.config[CONF_TYPE] == TRIGGER_DEVICE_CHANGED:
+                    # Listen for device triggers via Home Assistant's dispatcher
+                    entry_id = coordinator.config_entry.entry_id if coordinator.config_entry else "unknown"
+                    signal_name = f"{DOMAIN}_device_trigger_{entry_id}"
+                    
+                    device_trigger_unsubscribe = async_dispatcher_connect(
+                        self.hass,
+                        signal_name,
+                        self._handle_device_trigger
+                    )
+                    
+                    if LOG_TRIGGERS:
+                        LOGGER.info("✅ Registered device trigger listener for signal: %s", signal_name)
+                
                 # Store remove function to unregister this specific trigger
                 def remove_this_trigger():
                     if hasattr(websocket, '_unr_trigger_handlers') and _handle_websocket_msg in websocket._unr_trigger_handlers:
                         websocket._unr_trigger_handlers.remove(_handle_websocket_msg)
+                        
+                        # Unregister device trigger listener if applicable
+                        if device_trigger_unsubscribe:
+                            device_trigger_unsubscribe()
+                            if LOG_TRIGGERS:
+                                LOGGER.info("✅ Unregistered device trigger listener")
+                        
                         # If no more triggers, restore original handler
                         if not websocket._unr_trigger_handlers and hasattr(websocket, '_unr_original_handler'):
                             websocket._message_handler = websocket._unr_original_handler
@@ -927,6 +956,99 @@ class UnifiRuleTrigger:
             
         except Exception as err:
             LOGGER.error("Error firing trigger: %s", err)
+
+    async def fire_device_trigger(self, device_id: str, device_name: str, change_type: str, old_state: Any = None, new_state: Any = None) -> None:
+        """Fire a device_changed trigger manually (not from websocket)."""
+        # Only proceed if this trigger instance is configured for device_changed events
+        if self.config[CONF_TYPE] != TRIGGER_DEVICE_CHANGED:
+            return
+
+        # Apply device-specific filters
+        if "device_id" in self.config and self.config["device_id"] != device_id:
+            if LOG_TRIGGERS:
+                LOGGER.info("❌ DEVICE FILTER BLOCKED: device_id filter %s != actual %s", 
+                           self.config["device_id"], device_id)
+            return
+            
+        if "change_type" in self.config and self.config["change_type"] != change_type:
+            if LOG_TRIGGERS:
+                LOGGER.info("❌ DEVICE FILTER BLOCKED: change_type filter %s != actual %s", 
+                           self.config["change_type"], change_type)
+            return
+
+        try:
+            data = {
+                "device_id": device_id,
+                "device_name": device_name,
+                "change_type": change_type,
+                "old_state": old_state,
+                "new_state": new_state,
+                "trigger_type": TRIGGER_DEVICE_CHANGED
+            }
+            
+            if LOG_TRIGGERS:
+                LOGGER.info("🔥 DEVICE TRIGGER FIRING: %s for device %s (%s) - '%s'", 
+                           TRIGGER_DEVICE_CHANGED, device_id, change_type, device_name)
+            
+            trigger_vars = {
+                "platform": DOMAIN,
+                "type": TRIGGER_DEVICE_CHANGED,
+                "event": data
+            }
+            
+            # Schedule the action execution
+            result = self.action({"trigger": trigger_vars})
+            if asyncio.iscoroutine(result):
+                await result
+            
+        except Exception as err:
+            LOGGER.error("Error firing device trigger: %s", err)
+
+    @callback
+    def _handle_device_trigger(self, trigger_data: Dict[str, Any]) -> None:
+        """Handle device trigger dispatched via Home Assistant's dispatcher system."""
+        try:
+            device_id = trigger_data.get("device_id")
+            device_name = trigger_data.get("device_name")
+            change_type = trigger_data.get("change_type")
+            old_state = trigger_data.get("old_state")
+            new_state = trigger_data.get("new_state")
+            
+            if LOG_TRIGGERS:
+                LOGGER.info("🎯 DEVICE TRIGGER RECEIVED: %s (%s) - %s: %s → %s", 
+                           device_name, device_id, change_type, old_state, new_state)
+            
+            # Apply device-specific filters
+            if "device_id" in self.config and self.config["device_id"] != device_id:
+                if LOG_TRIGGERS:
+                    LOGGER.info("❌ DEVICE FILTER BLOCKED: device_id filter %s != actual %s", 
+                               self.config["device_id"], device_id)
+                return
+                
+            if "change_type" in self.config and self.config["change_type"] != change_type:
+                if LOG_TRIGGERS:
+                    LOGGER.info("❌ DEVICE FILTER BLOCKED: change_type filter %s != actual %s", 
+                               self.config["change_type"], change_type)
+                return
+
+            # Fire the trigger action
+            trigger_vars = {
+                "platform": DOMAIN,
+                "type": TRIGGER_DEVICE_CHANGED,
+                "event": trigger_data
+            }
+            
+            if LOG_TRIGGERS:
+                LOGGER.info("🔥 DEVICE TRIGGER FIRING: %s for device %s (%s) - '%s'", 
+                           TRIGGER_DEVICE_CHANGED, device_id, change_type, device_name)
+            
+            # Schedule the action execution
+            result = self.action({"trigger": trigger_vars})
+            if asyncio.iscoroutine(result):
+                self.hass.async_create_task(result)
+                
+        except Exception as err:
+            LOGGER.error("Error handling device trigger: %s", err)
 
     def async_detach(self) -> None:
         """Detach trigger."""
