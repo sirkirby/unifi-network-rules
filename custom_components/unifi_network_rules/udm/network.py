@@ -222,7 +222,7 @@ class NetworkMixin:
                     # Include UAPs (type 'uap') that are access points, or any device with LED override
                     if (device_type == 'uap' and is_access_point) or has_led_override:
                         try:
-                            # Create Device object directly from API data (consistent with firewall.py pattern)
+                            # Create Device object directly from API data, following the pattern of converting raw API responses into typed objects
                             device = Device(device_data)
                             led_capable_devices.append(device)
                             LOGGER.debug("Created LED-capable device: %s (%s) - LED state: %s", 
