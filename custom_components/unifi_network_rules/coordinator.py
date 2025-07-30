@@ -833,7 +833,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     LOGGER.info("  %s (%s): LED=%s, Model=%s", 
                               device_name, device_mac, led_state, device_model)
             
-            # Use Device objects directly (consistent with firewall.py pattern)
+            # Use Device objects directly to represent LED-capable devices with their current states
             data["devices"] = led_capable_devices
             self.devices = led_capable_devices
             LOGGER.info("Updated %d LED-capable devices with current LED states", len(led_capable_devices))
