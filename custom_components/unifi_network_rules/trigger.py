@@ -79,8 +79,8 @@ TRIGGER_SCHEMA = vol.Schema(
             RULE_TYPE_WLAN,
         ]),
         vol.Optional("name_filter"): cv.string,
-        vol.Optional("device_id"): cv.string,  # For device_changed triggers
-        vol.Optional("change_type"): cv.string,  # For device_changed triggers
+        vol.Optional("device_id"): cv.string,  # For device_changed triggers (LED-capable devices only)
+        vol.Optional("change_type"): cv.string,  # For device_changed triggers (currently only "led_toggled")
     }
 )
 
@@ -90,7 +90,7 @@ TRIGGER_TYPE_DESCRIPTIONS = {
     TRIGGER_RULE_DISABLED: "When a UniFi rule is disabled", 
     TRIGGER_RULE_CHANGED: "When a UniFi rule is modified",
     TRIGGER_RULE_DELETED: "When a UniFi rule is deleted",
-    TRIGGER_DEVICE_CHANGED: "When a UniFi device is changed",
+    TRIGGER_DEVICE_CHANGED: "When a UniFi device LED is changed",
 }
 
 def get_rule_name_from_data(rule_data: Dict[str, Any], rule_id: str, rule_type: str = None) -> str:
