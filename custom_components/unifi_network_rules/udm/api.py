@@ -16,11 +16,18 @@ from .routes import RoutesMixin
 from .network import NetworkMixin
 from .qos import QoSMixin
 from .vpn import VPNMixin
+from .objects import ObjectsMixin
+from .profiles import PortProfilesMixin, WlanRateProfilesMixin, RadiusProfilesMixin, WanSlaProfilesMixin
 
 from ..const import LOGGER
 from ..queue import ApiOperationQueue
 
 class UDMAPI(
+    ObjectsMixin,
+    PortProfilesMixin,
+    WlanRateProfilesMixin,
+    RadiusProfilesMixin,
+    WanSlaProfilesMixin,
     NetworkMixin,
     RoutesMixin,
     PortForwardMixin,

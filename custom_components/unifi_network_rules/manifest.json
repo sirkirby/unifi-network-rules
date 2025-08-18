@@ -12,8 +12,8 @@
     "quality_scale": "custom",
     "requirements": [
         "aiohttp",
-        "aiounifi>=82.0.0",
+        "aiounifi>=84.0.0",
         "orjson>=3.8.0"
     ],
-    "version": "3.2.0"
+    "version": "3.3.0"
 }
