@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from ..const import (
     LOGGER,
@@ -13,12 +13,12 @@ from ..models.network_object import NetworkObject
 
 
 class ObjectsMixin:
-    async def get_objects(self) -> List[NetworkObject]:
+    async def get_objects(self) -> list[NetworkObject]:
         """List firewall groups as network objects (primary path)."""
         try:
             req = self.create_api_request("GET", API_PATH_FIREWALL_GROUPS)
             data = await self.controller.request(req)
-            items: List[NetworkObject] = []
+            items: list[NetworkObject] = []
             if isinstance(data, dict) and "data" in data:
                 for grp in data["data"]:
                     grp_type = grp.get("group_type", "address-group")
@@ -48,7 +48,7 @@ class ObjectsMixin:
             LOGGER.error("Failed to get firewall groups: %s", err)
             return []
 
-    async def add_object(self, payload: Dict[str, Any]) -> Optional[NetworkObject]:
+    async def add_object(self, payload: dict[str, Any]) -> Optional[NetworkObject]:
         """Create a firewall group from a network object payload."""
         try:
             obj_type = payload.get("type", "address-group")
@@ -86,7 +86,7 @@ class ObjectsMixin:
             LOGGER.error("Failed to add firewall group: %s", err)
             return None
 
-    async def update_object(self, obj: NetworkObject | Dict[str, Any]) -> bool:
+    async def update_object(self, obj: NetworkObject | dict[str, Any]) -> bool:
         """Update a firewall group from a network object payload."""
         try:
             payload = obj.to_dict() if isinstance(obj, NetworkObject) else obj

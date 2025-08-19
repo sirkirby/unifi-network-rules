@@ -5,7 +5,7 @@ Represents v2 Objects (addresses, address-groups, ports, etc.).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, TypedDict
+from typing import Any, Literal, Optional, TypedDict
 
 from aiounifi.models.api import ApiItem
 
@@ -31,7 +31,7 @@ class TypedNetworkObject(TypedDict, total=False):
         "ipv6-address-group",
         "port-group",
     ]
-    members: List[TypedObjectMember]
+    members: list[TypedObjectMember]
     site_id: str
 
 
@@ -54,10 +54,10 @@ class NetworkObject(ApiItem):
         return self.raw.get("type", "")
 
     @property
-    def members(self) -> List[TypedObjectMember]:
+    def members(self) -> list[TypedObjectMember]:
         return self.raw.get("members", [])
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return dict(self.raw)
 
 
