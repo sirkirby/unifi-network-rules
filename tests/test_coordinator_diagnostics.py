@@ -30,6 +30,7 @@ def mock_api():
     api._rate_limited = False
     api._consecutive_auth_failures = 0
     api._last_auth_time = datetime.now()
+    api._rate_limit_until = 0  # Set to 0 instead of Mock
     api.clear_cache = AsyncMock()
     api.refresh_session = AsyncMock(return_value=True)
     api.controller = Mock()

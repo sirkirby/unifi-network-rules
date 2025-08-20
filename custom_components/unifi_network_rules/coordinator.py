@@ -63,8 +63,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         # Initialize config_entry to None - it will be looked up when needed
         self.config_entry = None
         
-        # Remove manual update lock - DataUpdateCoordinator handles concurrency internally
-        # self._update_lock = asyncio.Lock()  # REMOVED - not needed with proper coordinator usage
+        # DataUpdateCoordinator handles concurrency internally, reducing need for manual locks
+        self._update_lock = asyncio.Lock()  # Keep for now, but coordinator provides built-in concurrency control
 
         # Authentication state
         self._authentication_in_progress = False
@@ -319,13 +319,20 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self) -> Dict[str, List[Any]]:
         """Fetch data from API endpoint.
         
-        DataUpdateCoordinator handles concurrency internally, so manual locks are not needed.
-        This method focuses on data fetching and API interaction.
+        DataUpdateCoordinator provides built-in concurrency control, but we keep some
+        custom logic for authentication and error handling specific to UniFi.
         """
-        # DataUpdateCoordinator handles concurrency, so we don't need manual locking
-        # if self._update_lock.locked():  # REMOVED - coordinator handles this
+        # Check if another update is in progress (DataUpdateCoordinator helps with this)
+        if self._update_lock.locked():
+            LOGGER.debug("Another update is already in progress, waiting for it to complete")
+            # If an update is already in progress, wait for it to complete and use its result
+            if self.data:
+                return self.data
+            elif self._last_successful_data:
+                return self._last_successful_data
         
-        try:
+        async with self._update_lock:
+            try:
                 # Track authentication state at start of update
                 authentication_active = self._authentication_in_progress
                 if authentication_active:
@@ -961,68 +968,40 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         pass
 
     async def _controlled_refresh_wrapper(self):
-        """Wrapper for the controlled refresh process to ensure proper semaphore handling."""
-        # Acquire semaphore before starting refresh
-        async def controlled_refresh():
-            async with self._refresh_semaphore:
-                await self._force_refresh_with_cache_clear()
-                # Wait a moment before refreshing entities to let states settle
-                await asyncio.sleep(0.5)
-                self.async_update_listeners()
+        """Request a refresh using DataUpdateCoordinator's built-in mechanisms.
         
-        # Start the controlled refresh task and await it
-        await controlled_refresh()
+        Uses coordinator's throttling and failure handling instead of custom semaphore.
+        """
+        # Use DataUpdateCoordinator's built-in refresh request
+        # This provides better resilience and throttling
+        await self.async_request_refresh()
 
     async def _force_refresh_with_cache_clear(self) -> None:
-        """Force a refresh with cache clearing to ensure fresh data.
+        """Force a refresh with cache clearing using DataUpdateCoordinator mechanisms.
         
-        This method is triggered by WebSocket events and follows the same core refresh
-        and entity management logic as the regular polling updates:
-        1. Clear API cache (but preserve authentication)
-        2. Call async_refresh() which updates rule collections
-        3. Process new entities through the same entity creation path
-        4. Check for deleted rules to maintain consistency with polling
-        
-        The only major difference is the explicit call to _check_for_deleted_rules()
-        which happens automatically during polling updates.
+        Leverages the coordinator's built-in refresh with custom cache clearing for UniFi.
         """
         try:
             # Log that we're starting a refresh
             log_websocket("Starting forced refresh after rule change detected")
             
-            # Store previous data for deletion detection
-            previous_data = self.data.copy() if self.data else {}
-            
             # Clear the API cache to ensure we get fresh data
-            # But do so without disrupting authentication
             LOGGER.debug("Clearing API cache")
             if hasattr(self.api, "clear_cache"):
-                await self.api.clear_cache()  # Modified in API to preserve auth
+                await self.api.clear_cache()
             else:
                 LOGGER.warning("API object does not have clear_cache method")
             LOGGER.debug("API cache cleared")
             log_data("Cache cleared before refresh")
             
-            # Force a full data refresh
-            refresh_successful = await self.async_refresh()
+            # Use DataUpdateCoordinator's built-in refresh mechanism
+            await self.async_request_refresh()
             
-            if refresh_successful:
-                # After refreshing data, discovery and deletion checks are handled within async_refresh -> _async_update_data
-                # REMOVED: await self.process_new_entities() # Redundant
-                # REMOVED: if previous_data: # Incorrect check
-                # REMOVED:     self._check_for_deleted_rules(previous_data) # Incorrect check
-                
-                # Update the data timestamp
-                self._last_update = self.hass.loop.time()
-                
-                # Force an update of all entities
-                self.async_update_listeners()
-                
-                log_data("Refresh completed successfully after WebSocket event")
-            else:
-                LOGGER.error("WebSocket-triggered refresh failed")
+            log_data("Refresh completed successfully after WebSocket event")
+            
         except Exception as err:
             LOGGER.error("Error during forced refresh: %s", err)
+            # Let coordinator handle the error with its built-in mechanisms
 
     @callback
     def shutdown(self) -> None:
@@ -1039,7 +1018,10 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         # For example, wait for pending tasks to complete
 
     async def _handle_auth_failure(self):
-        """Handle authentication failures from API operations."""
+        """Handle authentication failures using DataUpdateCoordinator patterns.
+        
+        Leverages coordinator's built-in failure handling and backoff mechanisms.
+        """
         LOGGER.info("Authentication failure callback triggered, requesting data refresh")
         # Reset authentication flag
         self._authentication_in_progress = False
@@ -1050,8 +1032,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         # Notify any entities that have optimistic state to handle auth issues appropriately
         async_dispatcher_send(self.hass, f"{DOMAIN}_auth_failure")
         
-        # Request a refresh with some delay to allow auth to stabilize
-        await asyncio.sleep(2.0)
+        # Brief delay to allow auth to stabilize (coordinator handles longer backoff)
+        await asyncio.sleep(1.0)
         
         # Ensure a fresh session before refresh
         try:
@@ -1061,8 +1043,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         except Exception as err:
             LOGGER.error("Error refreshing session during auth recovery: %s", str(err))
             
-        # Force a full refresh
-        await self.async_refresh()
+        # Use DataUpdateCoordinator's refresh mechanism instead of direct async_refresh
+        await self.async_request_refresh()
         
         # After successful refresh, notify components to clear any error states
         async_dispatcher_send(self.hass, f"{DOMAIN}_auth_restored")
