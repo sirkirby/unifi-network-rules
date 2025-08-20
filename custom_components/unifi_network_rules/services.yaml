@@ -241,3 +241,25 @@ force_remove_stale:
 websocket_diagnostics:
   name: WebSocket Diagnostics
   description: Run diagnostics on the WebSocket connection and attempt to repair if needed
+
+sync_remote_curated:
+  name: Sync Remote Curated Groups
+  description: >-
+    Fetch curated list file(s) from public raw URLs and create/update firewall group(s).
+    Each file should follow the UNR Lists format (see docs at https://github.com/sirkirby/unr-lists).
+    Header lines start with '# key: value' (name, type, description), then one entry per line.
+  fields:
+    entry_id:
+      name: Entry ID
+      description: Optional specific configuration entry ID to target
+      required: false
+      selector:
+        text:
+    urls:
+      name: Curated list URLs
+      description: >-
+        One or more raw text URLs. Provide a list (YAML) or paste multiple lines here,
+        one URL per line. Example: https://raw.githubusercontent.com/sirkirby/unr-lists/main/dns-ipv4.txt
+      required: true
+      selector:
+        object:

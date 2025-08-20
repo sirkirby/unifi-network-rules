@@ -137,6 +137,17 @@ API_ENDPOINT_QOS_RULE_DETAIL = "/proxy/network/v2/api/site/{site}/qos-rules/{rul
 API_ENDPOINT_QOS_RULES_BATCH = "/proxy/network/v2/api/site/{site}/qos-rules/batch"
 API_ENDPOINT_NETWORK_CONF = "/proxy/network/api/s/{site}/rest/networkconf"
 API_ENDPOINT_NETWORK_CONF_DETAIL = "/proxy/network/api/s/{site}/rest/networkconf/{network_id}"
+# Objects and Profiles
+API_ENDPOINT_OBJECTS = "/proxy/network/v2/api/site/{site}/objects"
+API_ENDPOINT_OBJECT_DETAIL = "/proxy/network/v2/api/site/{site}/objects/{object_id}"
+API_ENDPOINT_PORT_PROFILES = "/proxy/network/api/s/{site}/rest/portconf"
+API_ENDPOINT_PORT_PROFILE_DETAIL = "/proxy/network/api/s/{site}/rest/portconf/{profile_id}"
+API_ENDPOINT_WLAN_RATE_PROFILES = "/proxy/network/v2/api/site/{site}/profiles/wlanrate"
+API_ENDPOINT_WLAN_RATE_PROFILE_DETAIL = "/proxy/network/v2/api/site/{site}/profiles/wlanrate/{profile_id}"
+API_ENDPOINT_RADIUS_PROFILES = "/proxy/network/api/s/{site}/rest/radiusprofile"
+API_ENDPOINT_RADIUS_PROFILE_DETAIL = "/proxy/network/api/s/{site}/rest/radiusprofile/{profile_id}"
+API_ENDPOINT_WAN_SLA_PROFILES = "/proxy/network/v2/api/site/{site}/profiles/wansla"
+API_ENDPOINT_WAN_SLA_PROFILE_DETAIL = "/proxy/network/v2/api/site/{site}/profiles/wansla/{profile_id}"
 
 # API Paths used for aiounifi API Requests
 API_PATH_FIREWALL_POLICIES = "/firewall-policies"
@@ -161,6 +172,17 @@ API_PATH_QOS_RULES_BATCH = "/qos-rules/batch"
 API_PATH_QOS_RULES_BATCH_DELETE = "/qos-rules/batch-delete"
 API_PATH_NETWORK_CONF = "/rest/networkconf"
 API_PATH_NETWORK_CONF_DETAIL = "/rest/networkconf/{network_id}"
+# Objects and Profiles (aiounifi path fragments)
+API_PATH_PORT_PROFILES = "/rest/portconf"
+API_PATH_PORT_PROFILE_DETAIL = "/rest/portconf/{profile_id}"
+API_PATH_WLAN_RATE_PROFILES = "/profiles/wlanrate"
+API_PATH_WLAN_RATE_PROFILE_DETAIL = "/profiles/wlanrate/{profile_id}"
+API_PATH_RADIUS_PROFILES = "/rest/radiusprofile"
+API_PATH_RADIUS_PROFILE_DETAIL = "/rest/radiusprofile/{profile_id}"
+API_PATH_WAN_SLA_PROFILES = "/profiles/wansla"
+API_PATH_WAN_SLA_PROFILE_DETAIL = "/profiles/wansla/{profile_id}"
+API_PATH_FIREWALL_GROUPS = "/rest/firewallgroup"
+API_PATH_FIREWALL_GROUP_DETAIL = "/rest/firewallgroup/{group_id}"
 
 # Detection endpoints
 API_ENDPOINT_SDN_STATUS = "/proxy/network/api/s/{site}/stat/sdn"

@@ -13,6 +13,7 @@ SERVICE_FORCE_REMOVE_STALE = "force_remove_stale"
 SERVICE_WEBSOCKET_DIAGNOSTICS = "websocket_diagnostics"
 SERVICE_TOGGLE_RULE = "toggle_rule"
 SERVICE_REFRESH_DATA = "refresh_data"
+SERVICE_SYNC_REMOTE_CURATED = "sync_remote_curated"
 
 # Schema fields
 CONF_FILENAME = "filename"
@@ -25,6 +26,12 @@ CONF_VARIABLES = "variables"
 CONF_STATE = "state"
 CONF_RULE_ID = "rule_id"
 CONF_RULE_TYPE = "rule_type"
+CONF_OBJECT_SETS = "object_sets"
+CONF_GITHUB_CLONE_URL = "github_clone_url"
+CONF_GITHUB_REF = "ref"
+CONF_REMOTE_FILE = "file"
+CONF_REMOTE_FILES = "files"
+CONF_REMOTE_URLS = "urls"
 
 # Signal for entity cleanup
 SIGNAL_ENTITIES_CLEANUP = "unifi_network_rules_cleanup" 
