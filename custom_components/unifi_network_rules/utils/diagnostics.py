@@ -2,10 +2,134 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+import re
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
+from copy import deepcopy
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
 
 from ..const import LOGGER, DOMAIN
 
+def sanitize_sensitive_data(data: Any) -> Any:
+    """Sanitize sensitive data for diagnostics.
+    
+    Auto-masks passwords, tokens, keys, and other sensitive fields.
+    """
+    if data is None:
+        return None
+    
+    if isinstance(data, dict):
+        sanitized = {}
+        for key, value in data.items():
+            key_lower = key.lower()
+            # List of sensitive field patterns
+            if any(pattern in key_lower for pattern in [
+                'password', 'token', 'key', 'secret', 'auth', 'credential',
+                'pass', 'pwd', 'psk', 'private', 'cert', 'signature'
+            ]):
+                sanitized[key] = "***REDACTED***"
+            else:
+                sanitized[key] = sanitize_sensitive_data(value)
+        return sanitized
+    
+    elif isinstance(data, list):
+        return [sanitize_sensitive_data(item) for item in data]
+    
+    elif isinstance(data, str) and len(data) > 20:
+        # Check if string looks like a token or key (long alphanumeric strings)
+        if re.match(r'^[a-fA-F0-9]{20,}$', data) or re.match(r'^[a-zA-Z0-9_-]{20,}$', data):
+            return "***REDACTED***"
+    
+    return data
+
+
+def get_coordinator_stats(coordinator) -> Dict[str, Any]:
+    """Get comprehensive coordinator statistics for diagnostics."""
+    if not coordinator:
+        return {"error": "Coordinator not found"}
+    
+    stats = {
+        "update_interval": str(getattr(coordinator, "update_interval", "unknown")),
+        "last_update_success": str(getattr(coordinator, "last_update_success", "unknown")),
+        "last_exception": str(getattr(coordinator, "last_exception", None)),
+        "available": getattr(coordinator, "available", False),
+        "data_size": len(getattr(coordinator, "data", {})),
+    }
+    
+    # Add custom coordinator stats
+    if hasattr(coordinator, '_consecutive_errors'):
+        stats["consecutive_errors"] = coordinator._consecutive_errors
+    
+    if hasattr(coordinator, '_authentication_in_progress'):
+        stats["authentication_in_progress"] = coordinator._authentication_in_progress
+    
+    if hasattr(coordinator, '_has_data'):
+        stats["has_data"] = coordinator._has_data
+    
+    if hasattr(coordinator, '_initial_update_done'):
+        stats["initial_update_done"] = coordinator._initial_update_done
+    
+    if hasattr(coordinator, '_api_errors'):
+        stats["api_errors"] = coordinator._api_errors
+    
+    if hasattr(coordinator, '_in_error_state'):
+        stats["in_error_state"] = coordinator._in_error_state
+    
+    # WebSocket stats
+    if hasattr(coordinator, 'websocket'):
+        websocket = coordinator.websocket
+        stats["websocket"] = {
+            "available": websocket is not None,
+            "active": getattr(websocket, '_active', False) if websocket else False,
+            "last_message": str(getattr(websocket, '_last_message_time', "unknown")) if websocket else "N/A",
+        }
+    
+    # Rule collection sizes
+    if hasattr(coordinator, 'data') and coordinator.data:
+        data = coordinator.data
+        stats["rule_counts"] = {
+            "port_forwards": len(data.get("port_forwards", [])),
+            "traffic_routes": len(data.get("traffic_routes", [])),
+            "firewall_policies": len(data.get("firewall_policies", [])),
+            "traffic_rules": len(data.get("traffic_rules", [])),
+            "legacy_firewall_rules": len(data.get("legacy_firewall_rules", [])),
+            "wlans": len(data.get("wlans", [])),
+            "qos_rules": len(data.get("qos_rules", [])),
+            "vpn_clients": len(data.get("vpn_clients", [])),
+            "devices": len(data.get("devices", [])),
+        }
+    
+    return stats
+
+
+def get_recent_websocket_events(coordinator, limit: int = 10) -> List[Dict[str, Any]]:
+    """Get recent WebSocket events for diagnostics."""
+    events = []
+    
+    if not coordinator or not hasattr(coordinator, 'websocket'):
+        return events
+    
+    websocket = coordinator.websocket
+    if not websocket or not hasattr(websocket, '_recent_messages'):
+        return events
+    
+    # Get recent messages (if the websocket tracks them)
+    recent_messages = getattr(websocket, '_recent_messages', [])
+    
+    # Format recent messages for diagnostics
+    for msg in recent_messages[-limit:]:
+        if isinstance(msg, dict):
+            # Sanitize the message data
+            sanitized_msg = sanitize_sensitive_data(msg)
+            events.append({
+                "timestamp": sanitized_msg.get("timestamp", "unknown"),
+                "type": sanitized_msg.get("type", "unknown"),
+                "data": sanitized_msg.get("data", {}),
+            })
+    
+    return events
 def analyze_controller(controller: Any) -> Dict[str, Any]:
     """Analyze controller object structure for diagnostics.
     
@@ -95,8 +219,17 @@ def log_controller_diagnostics(controller: Any, api_instance: Any = None) -> Non
     except Exception as e:
         LOGGER.error("Error generating diagnostics: %s", e)
 
-def async_get_config_entry_diagnostics(hass, entry):
-    """Return diagnostics for a config entry."""
+async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigEntry) -> Dict[str, Any]:
+    """Return diagnostics for a config entry.
+    
+    Provides comprehensive diagnostics including:
+    - Config entry information (sanitized)
+    - Coordinator statistics and health
+    - Controller connectivity status
+    - Recent WebSocket events
+    - API session status
+    - Rule counts and data statistics
+    """
     # Get coordinator from entry data
     coordinator = hass.data[DOMAIN].get(entry.entry_id, {}).get("coordinator")
     
@@ -106,19 +239,58 @@ def async_get_config_entry_diagnostics(hass, entry):
     # Get the UDM API instance
     api = getattr(coordinator, "api", None)
     
-    # Get a subset of important diagnostics data
+    # Build comprehensive diagnostics
     diagnostics = {
         "entry": {
             "entry_id": entry.entry_id,
             "title": entry.title,
             "domain": entry.domain,
+            "version": entry.version,
+            "state": str(entry.state),
+            "unique_id": entry.unique_id,
+            # Sanitize config data
+            "data": sanitize_sensitive_data(dict(entry.data)),
+            "options": sanitize_sensitive_data(dict(entry.options)),
         },
+        "coordinator": get_coordinator_stats(coordinator),
         "controller": analyze_controller(getattr(api, "controller", None) if api else None),
-        "data_stats": {
-            "firewall_policy_count": len(getattr(coordinator, "data", {}).get("firewall_policies", [])),
-            "traffic_route_count": len(getattr(coordinator, "data", {}).get("traffic_routes", [])),
-            "refresh_timestamp": str(getattr(coordinator, "last_update_success", "unknown")),
-        }
+        "recent_websocket_events": get_recent_websocket_events(coordinator, limit=10),
+        "timestamp": datetime.now().isoformat(),
     }
+    
+    # Add API session information if available
+    if api:
+        api_info = {
+            "host": getattr(api, "host", "unknown"),
+            "site": getattr(api, "site", "unknown"),
+            "username": getattr(api, "username", "unknown"),
+            "verify_ssl": getattr(api, "verify_ssl", None),
+        }
+        
+        # Add session status without sensitive details
+        session_info = {
+            "has_session": hasattr(api, "_session") and getattr(api, "_session") is not None,
+            "rate_limited": getattr(api, "_rate_limited", False),
+            "consecutive_auth_failures": getattr(api, "_consecutive_auth_failures", 0),
+            "last_auth_time": str(getattr(api, "_last_auth_time", "unknown")),
+        }
+        
+        # Rate limiting information
+        if hasattr(api, "_rate_limit_until"):
+            rate_limit_until = getattr(api, "_rate_limit_until", 0)
+            if rate_limit_until > 0:
+                session_info["rate_limit_expires"] = str(datetime.fromtimestamp(rate_limit_until))
+        
+        api_info["session"] = session_info
+        diagnostics["api"] = api_info
+    
+    # Add Home Assistant integration data
+    domain_data = hass.data.get(DOMAIN, {})
+    integration_info = {
+        "total_config_entries": len([k for k in domain_data.keys() if k != "shared" and k != "services"]),
+        "shared_data_available": "shared" in domain_data,
+        "services_available": "services" in domain_data,
+    }
+    diagnostics["integration"] = integration_info
     
     return diagnostics 

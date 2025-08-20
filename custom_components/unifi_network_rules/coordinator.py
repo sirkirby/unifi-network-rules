@@ -63,8 +63,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         # Initialize config_entry to None - it will be looked up when needed
         self.config_entry = None
         
-        # Update lock - prevent simultaneous updates
-        self._update_lock = asyncio.Lock()
+        # Remove manual update lock - DataUpdateCoordinator handles concurrency internally
+        # self._update_lock = asyncio.Lock()  # REMOVED - not needed with proper coordinator usage
 
         # Authentication state
         self._authentication_in_progress = False
@@ -317,18 +317,15 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     )
 
     async def _async_update_data(self) -> Dict[str, List[Any]]:
-        """Fetch data from API endpoint."""
-        # Use a lock to prevent concurrent updates, especially during authentication
-        if self._update_lock.locked():
-            LOGGER.debug("Another update is already in progress, waiting for it to complete")
-            # If an update is already in progress, wait for it to complete and use its result
-            if self.data:
-                return self.data
-            elif self._last_successful_data:
-                return self._last_successful_data
+        """Fetch data from API endpoint.
         
-        async with self._update_lock:
-            try:
+        DataUpdateCoordinator handles concurrency internally, so manual locks are not needed.
+        This method focuses on data fetching and API interaction.
+        """
+        # DataUpdateCoordinator handles concurrency, so we don't need manual locking
+        # if self._update_lock.locked():  # REMOVED - coordinator handles this
+        
+        try:
                 # Track authentication state at start of update
                 authentication_active = self._authentication_in_progress
                 if authentication_active:
