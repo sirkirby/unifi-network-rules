@@ -39,7 +39,7 @@ def sanitize_sensitive_data(data: Any) -> Any:
     
     elif isinstance(data, str) and len(data) > 20:
         # Check if string looks like a token or key (long alphanumeric strings)
-        if re.match(r'^[a-fA-F0-9]{20,}$', data) or re.match(r'^[a-zA-Z0-9_-]{20,}$', data):
+        if HEX_TOKEN_PATTERN.match(data) or ALNUM_TOKEN_PATTERN.match(data):
             return "***REDACTED***"
     
     return data
