@@ -12,6 +12,10 @@ from homeassistant.core import HomeAssistant
 
 from ..const import LOGGER, DOMAIN
 
+# Regular expressions for detecting token-like strings
+HEX_TOKEN_PATTERN = re.compile(r'^[0-9a-fA-F]{32,}$')
+ALNUM_TOKEN_PATTERN = re.compile(r'^[a-zA-Z0-9]{32,}$')
+
 def sanitize_sensitive_data(data: Any) -> Any:
     """Sanitize sensitive data for diagnostics.
     

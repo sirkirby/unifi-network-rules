@@ -318,47 +318,38 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self) -> Dict[str, List[Any]]:
         """Fetch data from API endpoint.
         
-        DataUpdateCoordinator provides built-in concurrency control, but we keep some
-        custom logic for authentication and error handling specific to UniFi.
+        DataUpdateCoordinator provides built-in concurrency control for us,
+        eliminating the need for manual locks. We focus on UniFi-specific
+        authentication and error handling logic.
         """
-        # Check if another update is in progress (DataUpdateCoordinator helps with this)
-        if self._update_lock.locked():
-            LOGGER.debug("Another update is already in progress, waiting for it to complete")
-            # If an update is already in progress, wait for it to complete and use its result
-            if self.data:
-                return self.data
-            elif self._last_successful_data:
-                return self._last_successful_data
-        
-        async with self._update_lock:
-            try:
-                # Track authentication state at start of update
-                authentication_active = self._authentication_in_progress
-                if authentication_active:
-                    LOGGER.warning("Update started while authentication is in progress - using cached data")
-                    if self.data:
-                        return self.data
-                    elif self._last_successful_data:
-                        return self._last_successful_data
+        try:
+            # Track authentication state at start of update
+            authentication_active = self._authentication_in_progress
+            if authentication_active:
+                LOGGER.warning("Update started while authentication is in progress - using cached data")
+                if self.data:
+                    return self.data
+                elif self._last_successful_data:
+                    return self._last_successful_data
 
-                # Proactively refresh the session to prevent 403 errors
-                # Only refresh every 5 minutes to avoid excessive API calls
-                refresh_interval = 300  # seconds
-                current_time = asyncio.get_event_loop().time()
-                last_refresh = getattr(self, "_last_session_refresh", 0)
+            # Proactively refresh the session to prevent 403 errors
+            # Only refresh every 5 minutes to avoid excessive API calls
+            refresh_interval = 300  # seconds
+            current_time = asyncio.get_event_loop().time()
+            last_refresh = getattr(self, "_last_session_refresh", 0)
 
-                if current_time - last_refresh > refresh_interval:
-                    LOGGER.debug("Proactively refreshing session")
-                    try:
-                        # We'll track successful refreshes but not fail the update if refresh fails
-                        refresh_success = await self.api.refresh_session()
-                        if refresh_success:
-                            self._last_session_refresh = current_time
-                            LOGGER.debug("Session refresh successful")
-                        else:
-                            LOGGER.warning("Session refresh skipped or failed, continuing with update")
-                    except Exception as refresh_err:
-                        LOGGER.warning("Failed to refresh session: %s", str(refresh_err))
+            if current_time - last_refresh > refresh_interval:
+                LOGGER.debug("Proactively refreshing session")
+                try:
+                    # We'll track successful refreshes but not fail the update if refresh fails
+                    refresh_success = await self.api.refresh_session()
+                    if refresh_success:
+                        self._last_session_refresh = current_time
+                        LOGGER.debug("Session refresh successful")
+                    else:
+                        LOGGER.warning("Session refresh skipped or failed, continuing with update")
+                except Exception as refresh_err:
+                    LOGGER.warning("Failed to refresh session: %s", str(refresh_err))
 
                 # Initialize with empty lists for each rule type
                 rules_data: Dict[str, List[Any]] = {
@@ -598,45 +589,45 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                                len(self.vpn_servers),
                                len(self.devices))
 
-                return rules_data
+            return rules_data
 
-            except Exception as err:
-                LOGGER.error("Error updating coordinator data: %s", err)
+        except Exception as err:
+            LOGGER.error("Error updating coordinator data: %s", err)
 
-                # Check if this is an authentication error
-                auth_error = False
-                error_str = str(err).lower()
-                if "401 unauthorized" in error_str or "403 forbidden" in error_str:
-                    auth_error = True
-                    self._auth_failures += 1
-                    self._authentication_in_progress = True
-                    try:
-                        LOGGER.warning("Authentication failure #%d during data update", self._auth_failures)
+            # Check if this is an authentication error
+            auth_error = False
+            error_str = str(err).lower()
+            if "401 unauthorized" in error_str or "403 forbidden" in error_str:
+                auth_error = True
+                self._auth_failures += 1
+                self._authentication_in_progress = True
+                try:
+                    LOGGER.warning("Authentication failure #%d during data update", self._auth_failures)
 
-                        # Signal auth failure to entities
-                        async_dispatcher_send(self.hass, f"{DOMAIN}_auth_failure")
+                    # Signal auth failure to entities
+                    async_dispatcher_send(self.hass, f"{DOMAIN}_auth_failure")
 
-                        # Try to refresh the session if we haven't exceeded max failures
-                        if self._auth_failures < self._max_auth_failures:
-                            LOGGER.info("Attempting to refresh authentication session")
-                            try:
-                                await self.api.refresh_session(force=True)
-                                # If we succeeded in refreshing, notify components
-                                async_dispatcher_send(self.hass, f"{DOMAIN}_auth_restored")
-                                # Return the previous data
-                                if self.data:
-                                    return self.data
-                            except Exception as refresh_err:
-                                LOGGER.error("Failed to refresh session: %s", refresh_err)
-                    finally:
-                        self._authentication_in_progress = False
+                    # Try to refresh the session if we haven't exceeded max failures
+                    if self._auth_failures < self._max_auth_failures:
+                        LOGGER.info("Attempting to refresh authentication session")
+                        try:
+                            await self.api.refresh_session(force=True)
+                            # If we succeeded in refreshing, notify components
+                            async_dispatcher_send(self.hass, f"{DOMAIN}_auth_restored")
+                            # Return the previous data
+                            if self.data:
+                                return self.data
+                        except Exception as refresh_err:
+                            LOGGER.error("Failed to refresh session: %s", refresh_err)
+                finally:
+                    self._authentication_in_progress = False
 
-                # Return previous data during errors if available to prevent entity flickering
-                if self.data:
-                    LOGGER.info("Returning previous data during error")
-                    return self.data
+            # Return previous data during errors if available to prevent entity flickering
+            if self.data:
+                LOGGER.info("Returning previous data during error")
+                return self.data
 
-                raise UpdateFailed(f"Error updating data: {err}")
+            raise UpdateFailed(f"Error updating data: {err}")
 
     def _check_for_deleted_rules(self, new_data: Dict[str, List[Any]]) -> None:
         """Check for rules previously known but not in the new data, and trigger their removal."""
