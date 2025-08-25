@@ -64,7 +64,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self.config_entry = None
         
         # DataUpdateCoordinator handles concurrency internally, reducing need for manual locks
-        self._update_lock = asyncio.Lock()  # Keep for now, but coordinator provides built-in concurrency control
 
         # Authentication state
         self._authentication_in_progress = False
