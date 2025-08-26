@@ -5,33 +5,22 @@ import logging
 from typing import Any, Final, Optional, Set, Dict
 import time  # Add this import
 import asyncio
-import contextlib
-import re
-import copy
 
-from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription, SwitchDeviceClass, PLATFORM_SCHEMA
+from homeassistant.components.switch import SwitchEntity, SwitchDeviceClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.entity import DeviceInfo, EntityCategory
+from homeassistant.helpers.entity import DeviceInfo, EntityCategory, generate_entity_id
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
-from homeassistant.helpers.device_registry import async_get as async_get_entity_registry
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
-import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers.entity import generate_entity_id
 from homeassistant.exceptions import HomeAssistantError
+from .services.constants import SIGNAL_ENTITIES_CLEANUP
 
-from aiounifi.models.traffic_route import TrafficRoute
-from aiounifi.models.firewall_policy import FirewallPolicy
-from aiounifi.models.traffic_rule import TrafficRule
-from aiounifi.models.port_forward import PortForward
-from aiounifi.models.firewall_zone import FirewallZone
-from aiounifi.models.wlan import Wlan
+# from aiounifi.models.wlan import Wlan  # Imported elsewhere when needed
 from aiounifi.models.device import Device  # For LED toggle
 
 from .const import DOMAIN, MANUFACTURER, SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS, LOG_TRIGGERS
-from .helpers.rule import sanitize_entity_id
 from .coordinator import UnifiRuleUpdateCoordinator
 from .helpers.rule import (
     get_rule_id, 
@@ -43,11 +32,8 @@ from .helpers.rule import (
     get_child_entity_id,
     extract_descriptive_name
 )
-from .models.firewall_rule import FirewallRule  # Import FirewallRule
-from .models.traffic_route import TrafficRoute  # Import TrafficRoute
-from .models.qos_rule import QoSRule
 from .models.vpn_config import VPNConfig
-from .services.constants import SIGNAL_ENTITIES_CLEANUP
+from .models.port_profile import PortProfile
 
 LOGGER = logging.getLogger(__name__)
 
@@ -123,6 +109,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         ("wlans", coordinator.wlans, UnifiWlanSwitch),
         ("vpn_clients", coordinator.vpn_clients, UnifiVPNClientSwitch),
         ("vpn_servers", coordinator.vpn_servers, UnifiVPNServerSwitch),
+        ("port_profiles", coordinator.port_profiles, UnifiPortProfileSwitch),
     ]
 
     for rule_type, rules, entity_class in all_rule_sources:
@@ -174,7 +161,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
                 }
                 LOGGER.info("Gathered potential LED switch: %s for device %s", unique_id, getattr(device, 'name', device.mac))
     else:
-        LOGGER.warning("No LED-capable devices found in coordinator. Coordinator devices: %s", 
+        LOGGER.warning("No LED-capable devices found in coordinator. Coordinator devices:", 
                       getattr(coordinator, 'devices', 'NOT_SET'))
 
         # --- Step 2: Create entity instances for unique IDs ---
@@ -245,12 +232,12 @@ async def create_traffic_route_kill_switch(hass, coordinator, rule, config_entry
     # Check if this rule has kill switch support
     if not hasattr(rule, 'raw') or "kill_switch_enabled" not in rule.raw:
         return None if return_entity else False
-        
+    
     # Import necessary components
     from homeassistant.helpers.entity_registry import async_get as get_entity_registry
     import copy
     from .helpers.rule import get_child_unique_id, get_rule_id
-    
+
     try:
         # Get the parent rule ID
         parent_rule_id = get_rule_id(rule)
@@ -260,11 +247,11 @@ async def create_traffic_route_kill_switch(hass, coordinator, rule, config_entry
             
         # Generate kill switch ID
         kill_switch_id = get_child_unique_id(parent_rule_id, "kill_switch")
-        
+
         # Check if already exists in registry
         entity_registry = get_entity_registry(hass)
-        existing_entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, kill_switch_id)
-        
+        _existing_entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, kill_switch_id)
+
         # Don't create if already created this session
         if kill_switch_id in _CREATED_UNIQUE_IDS:
             LOGGER.debug("Kill switch already created in this session: %s", kill_switch_id)
@@ -341,7 +328,7 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         self._rule_id = get_rule_id(rule_data)
         if not self._rule_id:
             raise ValueError("Rule must have an ID")
-            
+        
         # Get rule name using helper function - rely entirely on rule.py for naming
         # Pass coordinator to get_rule_name to enable zone name lookups for FirewallPolicy objects
         self._attr_name = get_rule_name(rule_data, coordinator) or f"Rule {self._rule_id}"
@@ -791,6 +778,28 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                 toggle_func = self.coordinator.api.toggle_vpn_client
             elif self._rule_type == "vpn_servers":
                 toggle_func = self.coordinator.api.toggle_vpn_server
+            elif self._rule_type == "port_profiles":
+                async def port_profile_toggle_wrapper(profile_obj):
+                    # When enabling, provide a native_networkconf_id if missing by
+                    # using coordinator.networks preference. The API function itself
+                    # will also try to discover a default if needed, but we prefer
+                    # to choose deterministically here.
+                    native_id = None
+                    try:
+                        # If current state is disabled, supply target native id
+                        current = self._get_current_rule()
+                        is_currently_on = bool(current and getattr(current, 'enabled', False))
+                        if not is_currently_on and hasattr(self.coordinator, 'networks'):
+                            networks = self.coordinator.networks or []
+                            # Prefer corporate/LAN
+                            preferred = next((n for n in networks if getattr(n, 'purpose', '') == 'corporate'), None)
+                            if not preferred and networks:
+                                preferred = networks[0]
+                            native_id = preferred.id if preferred else None
+                    except Exception:
+                        native_id = None
+                    return await self.coordinator.api.toggle_port_profile(profile_obj, native_id)
+                toggle_func = port_profile_toggle_wrapper
             elif self._rule_type == "devices":
                 # For device LED toggles, use a special wrapper function
                 async def led_toggle_wrapper(device, state):
@@ -1786,3 +1795,32 @@ class UnifiVPNServerSwitch(UnifiRuleSwitch):
             attributes["subnet"] = current_server.server.get("subnet")
         
         return attributes
+
+class UnifiPortProfileSwitch(UnifiRuleSwitch):
+    """Switch to enable/disable a UniFi Port Profile.
+
+    Treats a profile as enabled when it has a native network configured and
+    management VLAN tagging is not blocking, per PortProfile.enabled.
+    """
+
+    def __init__(
+        self,
+        coordinator: UnifiRuleUpdateCoordinator,
+        rule_data: PortProfile,
+        rule_type: str = "port_profiles",
+        entry_id: str | None = None,
+    ) -> None:
+        super().__init__(coordinator, rule_data, rule_type, entry_id)
+        self._attr_icon = "mdi:ethernet"
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        attrs: Dict[str, Any] = {}
+        profile = self._get_current_rule()
+        if profile and hasattr(profile, "raw"):
+            raw = profile.raw
+            attrs["native_networkconf_id"] = raw.get("native_networkconf_id")
+            attrs["tagged_vlan_mgmt"] = raw.get("tagged_vlan_mgmt")
+            attrs["op_mode"] = raw.get("op_mode")
+            attrs["poe_mode"] = raw.get("poe_mode")
+        return attrs

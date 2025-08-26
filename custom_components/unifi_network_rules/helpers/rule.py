@@ -16,6 +16,7 @@ from aiounifi.models.device import Device
 from ..models.firewall_rule import FirewallRule
 from ..models.qos_rule import QoSRule
 from ..models.vpn_config import VPNConfig
+from ..models.port_profile import PortProfile
 from ..const import DOMAIN
 
 LOGGER = logging.getLogger(__name__)
@@ -35,6 +36,9 @@ def get_rule_enabled(rule: Any) -> bool:
     # Check different rule types and return appropriate enabled status
     if isinstance(rule, (PortForward, TrafficRoute, FirewallPolicy, TrafficRule, Wlan, QoSRule, VPNConfig)):
         return getattr(rule, "enabled", False)
+    # Port Profile enabled state (computed)
+    if isinstance(rule, PortProfile):
+        return rule.enabled
     
     # Special handling for Device LED state
     if isinstance(rule, Device):
@@ -154,6 +158,14 @@ def get_rule_id(rule: Any) -> str | None:
             LOGGER.warning("Device without mac attribute: %s", rule)
             return None
     
+    # Port Profile unique id
+    if isinstance(rule, PortProfile):
+        if rule.id:
+            return f"unr_port_profile_{rule.id}"
+        else:
+            LOGGER.warning("PortProfile without id attribute: %s", rule)
+            return None
+    
     # Dictionary fallback - this should not happen with properly typed data
     if isinstance(rule, dict):
         _id = rule.get("_id") or rule.get("id")
@@ -186,7 +198,8 @@ def get_rule_prefix(rule_type: str) -> str:
         "legacy_firewall_rules": "Legacy Rule",
         "qos_rules": "QoS",
         "wlans": "WLAN",
-        "devices": "Device"
+        "devices": "Device",
+        "port_profiles": "Port Profile"
     }
     
     return rule_types.get(rule_type, "Rule")
@@ -331,6 +344,13 @@ def extract_descriptive_name(rule: Any, coordinator=None) -> str | None:
                 return f"{vpn_type} VPN {rule.id}"
             return f"{vpn_type} VPN"
         
+        return None
+    
+    elif isinstance(rule, PortProfile):
+        # For port profiles, prefer the name
+        name = rule.name
+        if name:
+            return name
         return None
         
     elif isinstance(rule, Device):

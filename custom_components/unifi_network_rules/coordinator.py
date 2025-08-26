@@ -8,10 +8,9 @@ import time
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 
 from aiounifi.models.traffic_route import TrafficRoute
@@ -22,14 +21,16 @@ from aiounifi.models.firewall_zone import FirewallZone
 from aiounifi.models.wlan import Wlan
 from aiounifi.models.device import Device
 
-from .const import DOMAIN, LOGGER, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DEBUG_WEBSOCKET, LOG_TRIGGERS
+from .const import DOMAIN, LOGGER, DEFAULT_UPDATE_INTERVAL, LOG_TRIGGERS
 from .udm import UDMAPI
-from .websocket import SIGNAL_WEBSOCKET_MESSAGE, UnifiRuleWebsocket
-from .helpers.rule import get_rule_id, get_rule_name, get_rule_enabled, get_child_unique_id
+from .websocket import UnifiRuleWebsocket
+from .helpers.rule import get_rule_id, get_child_unique_id
 from .utils.logger import log_data, log_websocket
 from .models.firewall_rule import FirewallRule
 from .models.qos_rule import QoSRule
 from .models.vpn_config import VPNConfig
+from .models.port_profile import PortProfile
+from .models.network import NetworkConf
 
 # This is a fallback if no update_interval is specified
 SCAN_INTERVAL = timedelta(seconds=60)
@@ -110,6 +111,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self.vpn_clients: List[VPNConfig] = []
         self.vpn_servers: List[VPNConfig] = []
         self.devices: List[Device] = []  # For LED toggle switches
+        self.port_profiles: List[PortProfile] = []
+        self.networks: List[NetworkConf] = []
 
         # For dynamic entity creation
         self.async_add_entities_callback: AddEntitiesCallback | None = None
@@ -370,6 +373,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     "vpn_clients": [],
                     "vpn_servers": [],
                     "devices": [],
+                    "port_profiles": [],
+                    "networks": [],
                 }
 
                 # Store the previous data to detect deletions and protect against API failures
@@ -418,7 +423,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                             LOGGER.warning("Authentication failure detected during initial fetch: %s", error_msg)
                             # Trigger auth recovery but continue trying other endpoints
                             if hasattr(self.api, "handle_auth_failure"):
-                                recovery_task = asyncio.create_task(self.api.handle_auth_failure(error_msg))
+                                asyncio.create_task(self.api.handle_auth_failure(error_msg))
 
                             # Preserve previous port forwards data if available
                             if previous_data and "port_forwards" in previous_data and previous_data["port_forwards"]:
@@ -467,6 +472,14 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 
                 # Then devices (for LED switches)
                 await self._update_devices_in_dict(rules_data)
+                await asyncio.sleep(api_call_delay)
+
+                # Then port profiles
+                await self._update_port_profiles_in_dict(rules_data)
+                await asyncio.sleep(api_call_delay)
+
+                # Then networks
+                await self._update_networks_in_dict(rules_data)
 
                 # Verify the data is valid - check if we have at least some data in key categories
                 # This helps prevent entity removal during temporary API errors
@@ -582,6 +595,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     self.vpn_clients = rules_data.get("vpn_clients", [])
                     self.vpn_servers = rules_data.get("vpn_servers", [])
                     self.devices = rules_data.get("devices", [])
+                    self.port_profiles = rules_data.get("port_profiles", [])
+                    self.networks = rules_data.get("networks", [])
 
                     LOGGER.info("Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d, QoS Rules=%d, VPN Clients=%d, VPN Servers=%d, Devices=%d", 
                                len(self.port_forwards),
@@ -601,10 +616,11 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 LOGGER.error("Error updating coordinator data: %s", err)
 
                 # Check if this is an authentication error
-                auth_error = False
+                # Track auth errors for control flow only (no use afterwards)
+                _auth_error = False
                 error_str = str(err).lower()
                 if "401 unauthorized" in error_str or "403 forbidden" in error_str:
-                    auth_error = True
+                    _auth_error = True
                     self._auth_failures += 1
                     self._authentication_in_progress = True
                     try:
@@ -659,6 +675,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             "wlans",
             "vpn_clients",
             "vpn_servers",
+            "port_profiles",
+            "networks",
         ]
         
         for rule_type in all_rule_sources_types:
@@ -845,6 +863,49 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             if not hasattr(self, 'devices'):
                 self.devices = []
 
+    async def _update_port_profiles_in_dict(self, data: Dict[str, List[Any]]) -> None:
+        """Update port profiles in the data dictionary and convert to typed objects."""
+        try:
+            LOGGER.info("Fetching port profiles...")
+            future = await self.api.queue_api_operation(self.api.get_port_profiles)
+            profiles = await future if hasattr(future, "__await__") else future
+            typed: List[PortProfile] = []
+            for item in profiles or []:
+                try:
+                    typed.append(PortProfile(item))
+                except Exception as err:
+                    LOGGER.warning("Error converting port profile: %s", err)
+            data["port_profiles"] = typed
+            self.port_profiles = typed
+            LOGGER.info("Updated %d port profiles", len(typed))
+        except Exception as err:
+            LOGGER.error("Failed to update port profiles: %s", err)
+            data["port_profiles"] = []
+            if not hasattr(self, 'port_profiles'):
+                self.port_profiles = []
+
+    async def _update_networks_in_dict(self, data: Dict[str, List[Any]]) -> None:
+        """Update networks list in the data dictionary and convert to typed objects."""
+        try:
+            LOGGER.info("Fetching networks...")
+            future = await self.api.queue_api_operation(self.api.get_networks)
+            networks = await future if hasattr(future, "__await__") else future
+            typed: List[NetworkConf] = []
+            for item in networks or []:
+                try:
+                    # item is already NetworkConf from API layer
+                    typed.append(item)
+                except Exception as err:
+                    LOGGER.warning("Error converting network: %s", err)
+            data["networks"] = typed
+            self.networks = typed
+            LOGGER.info("Updated %d networks", len(typed))
+        except Exception as err:
+            LOGGER.error("Failed to update networks: %s", err)
+            data["networks"] = []
+            if not hasattr(self, 'networks'):
+                self.networks = []
+
     async def _update_rule_type(self, rule_type: str, fetch_method: Callable) -> None:
         """Update a specific rule type in self.data.
         
@@ -994,7 +1055,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             log_websocket("Starting forced refresh after rule change detected")
             
             # Store previous data for deletion detection
-            previous_data = self.data.copy() if self.data else {}
+            _unused_previous = self.data.copy() if self.data else {}
             
             # Clear the API cache to ensure we get fresh data
             # But do so without disrupting authentication

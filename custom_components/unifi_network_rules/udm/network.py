@@ -1,7 +1,8 @@
 """Module for UniFi network operations."""
 
-import logging
-from typing import Any, Dict, List, Optional, Tuple
+from __future__ import annotations
+
+from typing import Any, List
 
 # Import directly from specific modules
 from aiounifi.models.firewall_zone import FirewallZoneListRequest, FirewallZone
@@ -13,11 +14,12 @@ from aiounifi.models.wlan import (
 
 from ..const import (
     LOGGER,
-    API_PATH_WLAN_DETAIL
+    API_PATH_WLAN_DETAIL,
+    API_PATH_NETWORK_CONF,
 )
 
-from aiounifi.models.device import Device, DeviceSetLedStatus
-from aiounifi.models.api import ApiRequest
+from aiounifi.models.device import Device
+from ..models.network import NetworkConf
 
 class NetworkMixin:
     """Mixin class for network operations."""
@@ -238,4 +240,18 @@ class NetworkMixin:
             return []
         except Exception as err:
             LOGGER.error("Failed to get device LED states: %s", str(err))
+            return []
+
+    async def get_networks(self) -> List[NetworkConf]:
+        """Get all network configurations (networkconf)."""
+        try:
+            request = self.create_api_request("GET", API_PATH_NETWORK_CONF)
+            data = await self.controller.request(request)
+            items: List[NetworkConf] = []
+            if data and isinstance(data, dict) and "data" in data:
+                for n in data["data"]:
+                    items.append(NetworkConf(n))
+            return items
+        except Exception as err:
+            LOGGER.error("Failed to get networks: %s", str(err))
             return []
