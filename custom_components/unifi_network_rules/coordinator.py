@@ -454,6 +454,10 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 await self._update_traffic_rules_in_dict(rules_data)
                 await asyncio.sleep(api_call_delay)
 
+                # Then networks (source of truth for VPN derivation)
+                await self._update_networks_in_dict(rules_data)
+                await asyncio.sleep(api_call_delay)
+
                 # Then legacy firewall rules
                 await self._update_legacy_firewall_rules_in_dict(rules_data)
                 await asyncio.sleep(api_call_delay)
@@ -462,11 +466,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 await self._update_qos_rules_in_dict(rules_data)
                 await asyncio.sleep(api_call_delay)
                 
-                # Then VPN clients
+                # Then derive VPN clients and servers from networks
                 await self._update_vpn_clients_in_dict(rules_data)
                 await asyncio.sleep(api_call_delay)
-                
-                # Then VPN servers
                 await self._update_vpn_servers_in_dict(rules_data)
                 await asyncio.sleep(api_call_delay)
                 
@@ -476,10 +478,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
 
                 # Then port profiles
                 await self._update_port_profiles_in_dict(rules_data)
-                await asyncio.sleep(api_call_delay)
-
-                # Then networks
-                await self._update_networks_in_dict(rules_data)
 
                 # Verify the data is valid - check if we have at least some data in key categories
                 # This helps prevent entity removal during temporary API errors
@@ -824,12 +822,57 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         await self._update_rule_type_in_dict(data, "qos_rules", self.api.get_qos_rules)
 
     async def _update_vpn_clients_in_dict(self, data: Dict[str, List[Any]]) -> None:
-        """Update VPN clients in the given data dictionary."""
-        await self._update_rule_type_in_dict(data, "vpn_clients", self.api.get_vpn_clients)
+        """Update VPN clients from already-fetched networks."""
+        try:
+            # Derive from networks if available; otherwise, fall back to API
+            networks = data.get("networks") or self.networks
+            if networks:
+                from .models.vpn_config import VPNConfig
+                clients = []
+                for n in networks:
+                    raw = getattr(n, 'raw', {}) if hasattr(n, 'raw') else {}
+                    purpose = raw.get("purpose", "")
+                    vpn_type = raw.get("vpn_type", "")
+                    is_client = purpose == "vpn-client" or vpn_type in ["openvpn-client", "wireguard-client"]
+                    if is_client:
+                        try:
+                            clients.append(VPNConfig(raw))
+                        except Exception as err:
+                            LOGGER.debug("Skipping VPN client conversion error: %s", err)
+                data["vpn_clients"] = clients
+                return
+            # Fallback to API method if networks missing
+            await self._update_rule_type_in_dict(data, "vpn_clients", self.api.get_vpn_clients)
+        except Exception as err:
+            LOGGER.error("Error deriving VPN clients: %s", err)
+            if "vpn_clients" not in data:
+                data["vpn_clients"] = []
 
     async def _update_vpn_servers_in_dict(self, data: Dict[str, List[Any]]) -> None:
-        """Update VPN servers in the given data dictionary."""
-        await self._update_rule_type_in_dict(data, "vpn_servers", self.api.get_vpn_servers)
+        """Update VPN servers from already-fetched networks."""
+        try:
+            networks = data.get("networks") or self.networks
+            if networks:
+                from .models.vpn_config import VPNConfig
+                servers = []
+                for n in networks:
+                    raw = getattr(n, 'raw', {}) if hasattr(n, 'raw') else {}
+                    purpose = raw.get("purpose", "")
+                    vpn_type = raw.get("vpn_type", "")
+                    is_server = purpose == "vpn-server" or vpn_type in ["openvpn-server", "wireguard-server"]
+                    if is_server:
+                        try:
+                            servers.append(VPNConfig(raw))
+                        except Exception as err:
+                            LOGGER.debug("Skipping VPN server conversion error: %s", err)
+                data["vpn_servers"] = servers
+                return
+            # Fallback to API method if networks missing
+            await self._update_rule_type_in_dict(data, "vpn_servers", self.api.get_vpn_servers)
+        except Exception as err:
+            LOGGER.error("Error deriving VPN servers: %s", err)
+            if "vpn_servers" not in data:
+                data["vpn_servers"] = []
         
     async def _update_devices_in_dict(self, data: Dict[str, List[Any]]) -> None:
         """Update devices in the data dictionary."""

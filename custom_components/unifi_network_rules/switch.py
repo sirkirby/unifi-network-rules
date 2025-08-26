@@ -30,10 +30,12 @@ from .helpers.rule import (
     get_child_entity_name, 
     get_child_unique_id, 
     get_child_entity_id,
-    extract_descriptive_name
+    extract_descriptive_name,
+    filter_switchable_networks,
 )
 from .models.vpn_config import VPNConfig
 from .models.port_profile import PortProfile
+from .models.network import NetworkConf
 
 LOGGER = logging.getLogger(__name__)
 
@@ -110,6 +112,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         ("vpn_clients", coordinator.vpn_clients, UnifiVPNClientSwitch),
         ("vpn_servers", coordinator.vpn_servers, UnifiVPNServerSwitch),
         ("port_profiles", coordinator.port_profiles, UnifiPortProfileSwitch),
+        # Filter networks to exclude all VPN forms (purpose and vpn_type)
+        ("networks", filter_switchable_networks(coordinator.networks or []), UnifiNetworkSwitch),
     ]
 
     for rule_type, rules, entity_class in all_rule_sources:
@@ -1823,4 +1827,57 @@ class UnifiPortProfileSwitch(UnifiRuleSwitch):
             attrs["tagged_vlan_mgmt"] = raw.get("tagged_vlan_mgmt")
             attrs["op_mode"] = raw.get("op_mode")
             attrs["poe_mode"] = raw.get("poe_mode")
+        return attrs
+
+class UnifiNetworkSwitch(UnifiRuleSwitch):
+    """Switch to enable/disable a UniFi Network (LAN)."""
+
+    def __init__(
+        self,
+        coordinator: UnifiRuleUpdateCoordinator,
+        rule_data: NetworkConf,
+        rule_type: str = "networks",
+        entry_id: str | None = None,
+    ) -> None:
+        super().__init__(coordinator, rule_data, rule_type, entry_id)
+        self._attr_icon = "mdi:lan"
+
+    async def _async_toggle_rule(self, enable: bool) -> None:
+        network = self._get_current_rule()
+        if network is None:
+            raise HomeAssistantError(f"Cannot find network with ID: {self._rule_id}")
+
+        # Optimistic
+        self.mark_pending_operation(enable)
+        self.async_write_ha_state()
+
+        async def handle_operation_complete(f):
+            try:
+                ok = f.result()
+                if not ok:
+                    self.mark_pending_operation(not enable)
+                self.async_write_ha_state()
+            except Exception:
+                self.mark_pending_operation(not enable)
+                self.async_write_ha_state()
+
+        # Queue via API
+        async def toggle_wrapper(n: NetworkConf):
+            # Force desired enabled in payload
+            n.raw["enabled"] = enable
+            return await self.coordinator.api.update_network(n)
+
+        future = await self.coordinator.api.queue_api_operation(toggle_wrapper, network)
+        future.add_done_callback(lambda f: self.hass.async_create_task(handle_operation_complete(f)))
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        attrs: Dict[str, Any] = {}
+        net = self._get_current_rule()
+        if net and hasattr(net, "raw"):
+            raw = net.raw
+            attrs["purpose"] = raw.get("purpose")
+            attrs["ip_subnet"] = raw.get("ip_subnet")
+            attrs["vlan_enabled"] = raw.get("vlan_enabled")
+            attrs["networkgroup"] = raw.get("networkgroup")
         return attrs

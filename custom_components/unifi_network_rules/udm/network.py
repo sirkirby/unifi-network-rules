@@ -16,6 +16,7 @@ from ..const import (
     LOGGER,
     API_PATH_WLAN_DETAIL,
     API_PATH_NETWORK_CONF,
+    API_PATH_NETWORK_CONF_DETAIL,
 )
 
 from aiounifi.models.device import Device
@@ -255,3 +256,32 @@ class NetworkMixin:
         except Exception as err:
             LOGGER.error("Failed to get networks: %s", str(err))
             return []
+
+    async def update_network(self, network: NetworkConf) -> bool:
+        """Update a network configuration."""
+        try:
+            payload = dict(network.raw)
+            path = API_PATH_NETWORK_CONF_DETAIL.format(network_id=network.id)
+            req = self.create_api_request("PUT", path, data=payload)
+            await self.controller.request(req)
+            return True
+        except Exception as err:
+            LOGGER.error("Failed to update network %s: %s", getattr(network, 'id', 'unknown'), err)
+            return False
+
+    async def toggle_network(self, network: NetworkConf) -> bool:
+        """Enable/disable a network by flipping 'enabled' key if present."""
+        try:
+            payload = dict(network.raw)
+            # Only corporate LANs generally have 'enabled'
+            if 'enabled' not in payload:
+                LOGGER.error("Network %s does not support enable/disable", network.id)
+                return False
+            payload['enabled'] = not bool(payload.get('enabled', True))
+            path = API_PATH_NETWORK_CONF_DETAIL.format(network_id=network.id)
+            req = self.create_api_request("PUT", path, data=payload)
+            await self.controller.request(req)
+            return True
+        except Exception as err:
+            LOGGER.error("Failed to toggle network %s: %s", getattr(network, 'id', 'unknown'), err)
+            return False
