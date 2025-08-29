@@ -57,6 +57,67 @@ class PortProfilesMixin:
             LOGGER.error("Failed to remove port profile %s: %s", profile_id, str(err))
             return False
 
+    async def toggle_port_profile(self, profile: dict[str, Any] | Any, native_networkconf_id: Optional[str] = None) -> bool:
+        """Enable/disable a port profile by toggling native network assignment.
+
+        Behavior follows sub-issue #99 example payloads: enabling ensures
+        native_networkconf_id is set and tagged_vlan_mgmt not blocking; disabling
+        clears native_networkconf_id and sets tagged_vlan_mgmt to block_all.
+        """
+        try:
+            if not isinstance(profile, dict):
+                # Allow passing a typed wrapper that exposes raw
+                profile = getattr(profile, "raw", None) or {}
+            if not profile:
+                return False
+
+            payload = dict(profile)
+            profile_id = payload.get("_id") or payload.get("id")
+            if not profile_id:
+                return False
+
+            # Determine current state and desired new state (invert)
+            has_native = bool(payload.get("native_networkconf_id"))
+            is_blocking = payload.get("tagged_vlan_mgmt") in {"block_all", "block-custom"}
+            currently_enabled = has_native and not is_blocking
+
+            if currently_enabled:
+                # Disable: clear native and block mgmt VLAN tagging (matches example)
+                payload["port_security_enabled"] = True
+                payload["native_networkconf_id"] = ""
+                payload["tagged_vlan_mgmt"] = "block_all"
+            else:
+                # Enable: keep existing native if present or leave as-is; minimally set fields
+                payload["port_security_enabled"] = False
+                # Determine the native network id to set
+                desired_native = payload.get("native_networkconf_id") or native_networkconf_id
+                if not desired_native:
+                    # As a fallback, retrieve networks and prefer the default LAN/corporate
+                    try:
+                        networks = await self.get_networks()
+                        # Prefer LAN/corporate
+                        preferred = next((n for n in networks if getattr(n, "purpose", "") == "corporate"), None)
+                        if not preferred:
+                            preferred = next((n for n in networks if getattr(n, "name", "").upper() in {"LAN", "DEFAULT"}), None)
+                        if preferred:
+                            desired_native = preferred.id
+                    except Exception:
+                        desired_native = None
+                if not desired_native:
+                    # Cannot enable without a network id
+                    LOGGER.error("Cannot enable port profile %s - missing native_networkconf_id", profile_id)
+                    return False
+                payload["native_networkconf_id"] = desired_native
+                payload["tagged_vlan_mgmt"] = "auto"
+
+            path = API_PATH_PORT_PROFILE_DETAIL.format(profile_id=profile_id)
+            request = self.create_api_request("PUT", path, data=payload)
+            await self.controller.request(request)
+            return True
+        except Exception as err:
+            LOGGER.error("Failed to toggle port profile: %s", str(err))
+            return False
+
 
 class WlanRateProfilesMixin:
     async def get_wlan_rate_profiles(self) -> list[dict[str, Any]]:

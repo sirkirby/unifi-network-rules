@@ -1,7 +1,8 @@
 """Module for UniFi network operations."""
 
-import logging
-from typing import Any, Dict, List, Optional, Tuple
+from __future__ import annotations
+
+from typing import Any, List
 
 # Import directly from specific modules
 from aiounifi.models.firewall_zone import FirewallZoneListRequest, FirewallZone
@@ -13,11 +14,13 @@ from aiounifi.models.wlan import (
 
 from ..const import (
     LOGGER,
-    API_PATH_WLAN_DETAIL
+    API_PATH_WLAN_DETAIL,
+    API_PATH_NETWORK_CONF,
+    API_PATH_NETWORK_CONF_DETAIL,
 )
 
-from aiounifi.models.device import Device, DeviceSetLedStatus
-from aiounifi.models.api import ApiRequest
+from aiounifi.models.device import Device
+from ..models.network import NetworkConf
 
 class NetworkMixin:
     """Mixin class for network operations."""
@@ -239,3 +242,46 @@ class NetworkMixin:
         except Exception as err:
             LOGGER.error("Failed to get device LED states: %s", str(err))
             return []
+
+    async def get_networks(self) -> List[NetworkConf]:
+        """Get all network configurations (networkconf)."""
+        try:
+            request = self.create_api_request("GET", API_PATH_NETWORK_CONF)
+            data = await self.controller.request(request)
+            items: List[NetworkConf] = []
+            if data and isinstance(data, dict) and "data" in data:
+                for n in data["data"]:
+                    items.append(NetworkConf(n))
+            return items
+        except Exception as err:
+            LOGGER.error("Failed to get networks: %s", str(err))
+            return []
+
+    async def update_network(self, network: NetworkConf) -> bool:
+        """Update a network configuration."""
+        try:
+            payload = dict(network.raw)
+            path = API_PATH_NETWORK_CONF_DETAIL.format(network_id=network.id)
+            req = self.create_api_request("PUT", path, data=payload)
+            await self.controller.request(req)
+            return True
+        except Exception as err:
+            LOGGER.error("Failed to update network %s: %s", getattr(network, 'id', 'unknown'), err)
+            return False
+
+    async def toggle_network(self, network: NetworkConf) -> bool:
+        """Enable/disable a network by flipping 'enabled' key if present."""
+        try:
+            payload = dict(network.raw)
+            # Only corporate LANs generally have 'enabled'
+            if 'enabled' not in payload:
+                LOGGER.error("Network %s does not support enable/disable", network.id)
+                return False
+            payload['enabled'] = not bool(payload.get('enabled', True))
+            path = API_PATH_NETWORK_CONF_DETAIL.format(network_id=network.id)
+            req = self.create_api_request("PUT", path, data=payload)
+            await self.controller.request(req)
+            return True
+        except Exception as err:
+            LOGGER.error("Failed to toggle network %s: %s", getattr(network, 'id', 'unknown'), err)
+            return False
