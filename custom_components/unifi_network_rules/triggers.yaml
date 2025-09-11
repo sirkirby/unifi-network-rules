@@ -1,12 +1,9 @@
 # Unified trigger system
 unr_changed:
-  description: "When any UniFi Network Rules entity changes"
   fields:
     entity_id:
-      description: "Specific entity to monitor (optional)"
       example: "switch.unr_firewall_policy_abc123"
     change_type:
-      description: "Type of entity to monitor (optional)"
       example: "firewall_policy"
       selector:
         select:
@@ -24,7 +21,6 @@ unr_changed:
             - port_profile
             - network
     change_action:
-      description: "Type of change to monitor (optional)"
       example: "enabled"
       selector:
         select:
@@ -36,5 +32,4 @@ unr_changed:
             - disabled
             - modified
     name_filter:
-      description: "Filter by entity name (case-insensitive substring match)"
       example: "Guest Network"
