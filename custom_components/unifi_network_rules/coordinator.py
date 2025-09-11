@@ -587,7 +587,10 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     len(rules_data["port_forwards"]) > 0 or
                     len(rules_data["qos_rules"]) > 0 or
                     len(rules_data["traffic_routes"]) > 0 or
-                    len(rules_data["legacy_firewall_rules"]) > 0
+                    len(rules_data["legacy_firewall_rules"]) > 0 or
+                    len(rules_data["port_profiles"]) > 0 or
+                    len(rules_data["networks"]) > 0 or
+                    len(rules_data["devices"]) > 0
                 )
 
                 # Special handling for authentication failures detected during update

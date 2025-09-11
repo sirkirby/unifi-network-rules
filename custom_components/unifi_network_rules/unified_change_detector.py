@@ -338,6 +338,11 @@ class UnifiedChangeDetector:
                         # This is a typed aiounifi object with raw data
                         entity_data = entity.raw.copy()
                         entity_id = entity_data.get('_id') or entity_data.get('id')
+                        
+                        # For objects with computed properties (like PortProfile.enabled), 
+                        # we need to capture those properties in the state snapshot
+                        if hasattr(entity, 'enabled'):
+                            entity_data['enabled'] = entity.enabled
                     elif isinstance(entity, dict):
                         # This is a raw dictionary
                         entity_data = entity.copy()
