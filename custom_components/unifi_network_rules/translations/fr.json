@@ -1,0 +1,120 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Règles Réseau UniFi",
+        "description": "Configurez les Règles Réseau UniFi pour gérer votre UniFi Dream Machine.",
+        "data": {
+          "host": "Hôte",
+          "username": "Nom d'utilisateur",
+          "password": "Mot de passe",
+          "site": "Nom du site (par défaut 'default')",
+          "update_interval": "Intervalle de mise à jour (minutes)",
+          "verify_ssl": "Vérifier le certificat SSL (désactiver pour les certificats auto-signés)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Échec de la connexion",
+      "invalid_auth": "Authentification invalide",
+      "no_capabilities": "Aucune capacité de pare-feu prise en charge détectée sur cet appareil.",
+      "unknown": "Erreur inattendue"
+    },
+    "abort": {
+      "already_configured": "L'appareil est déjà configuré"
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "unr_changed": "Configuration UniFi modifiée"
+    },
+    "trigger_subtype": {
+      "firewall_policies": "Politique de Pare-feu",
+      "traffic_routes": "Route de Trafic",
+      "port_forwards": "Redirection de Port",
+      "qos_rules": "Règle QoS",
+      "vpn_clients": "Client VPN",
+      "vpn_servers": "Serveur VPN",
+      "legacy_firewall_rules": "Règle de Pare-feu Héritée",
+      "traffic_rules": "Règle de Trafic",
+      "wlans": "WLAN",
+      "port_profiles": "Profil de Port",
+      "networks": "Réseau",
+      "devices": "Appareil"
+    }
+  },
+  "triggers": {
+    "unr_changed": {
+      "name": "Configuration UniFi modifiée",
+      "description": "Déclenché lorsque toute configuration du Réseau UniFi change (règles, profils, réseaux, appareils)",
+      "description_configured": "Configuration UniFi modifiée"
+    }
+  },
+  "services": {
+    "refresh": {
+      "name": "Actualiser",
+      "description": "Actualiser les données des Règles Réseau UniFi"
+    },
+    "backup_rules": {
+      "name": "Sauvegarder les Règles",
+      "description": "Sauvegarder les règles de pare-feu et de trafic dans un fichier",
+      "fields": {
+        "filename": {
+          "name": "Nom du Fichier",
+          "description": "Nom du fichier de sauvegarde (sera stocké dans le répertoire de configuration de Home Assistant)"
+        }
+      }
+    },
+    "restore_rules": {
+      "name": "Restaurer les Règles",
+      "description": "Restaurer les règles de pare-feu et de trafic à partir d'un fichier de sauvegarde",
+      "fields": {
+        "filename": {
+          "name": "Nom du Fichier",
+          "description": "Nom du fichier de sauvegarde à restaurer (doit exister dans le répertoire de configuration de Home Assistant)"
+        },
+        "rule_ids": {
+          "name": "IDs des Règles",
+          "description": "Liste optionnelle d'IDs spécifiques de règles à restaurer"
+        },
+        "name_filter": {
+          "name": "Filtre par Nom",
+          "description": "Filtre optionnel - ne restaurer que les règles contenant ce texte dans leur nom"
+        },
+        "rule_types": {
+          "name": "Types de Règles",
+          "description": "Liste optionnelle de types de règles à restaurer (policy, route, port_forward, qos_rule, vpn_client, port_profile, network)"
+        }
+      }
+    },
+    "bulk_update_rules": {
+      "name": "Mise à Jour en Masse des Règles",
+      "description": "Activer ou désactiver plusieurs règles basées sur la correspondance de nom",
+      "fields": {
+        "name_filter": {
+          "name": "Filtre par Nom",
+          "description": "Texte à faire correspondre avec les noms de règles"
+        },
+        "state": {
+          "name": "État",
+          "description": "Vrai pour activer les règles correspondantes, Faux pour les désactiver"
+        }
+      }
+    },
+    "delete_rule": {
+      "name": "Supprimer la Règle",
+      "description": "Supprimer une règle",
+      "fields": {
+        "rule_id": {
+          "name": "ID de la Règle",
+          "description": "L'ID de la règle à supprimer"
+        },
+        "rule_type": {
+          "name": "Type de Règle",
+          "description": "Le type de règle à supprimer. Prend en charge les politiques de pare-feu, règles de trafic, redirections de port, routes de trafic, règles QoS, configurations VPN et profils de port"
+        }
+      }
+    }
+  },
+  "title": "Règles Réseau UniFi"
+}

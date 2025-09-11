@@ -1,0 +1,120 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "UniFi Netwerkregels",
+        "description": "Stel UniFi Netwerkregels in om uw UniFi Dream Machine te beheren.",
+        "data": {
+          "host": "Host",
+          "username": "Gebruikersnaam",
+          "password": "Wachtwoord",
+          "site": "Site naam (standaard 'default')",
+          "update_interval": "Update interval (minuten)",
+          "verify_ssl": "SSL-certificaat verifiëren (uitschakelen voor zelfondertekende certificaten)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbinding mislukt",
+      "invalid_auth": "Ongeldige authenticatie",
+      "no_capabilities": "Geen ondersteunde firewall-mogelijkheden gedetecteerd op dit apparaat.",
+      "unknown": "Onverwachte fout"
+    },
+    "abort": {
+      "already_configured": "Apparaat is al geconfigureerd"
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "unr_changed": "UniFi-configuratie gewijzigd"
+    },
+    "trigger_subtype": {
+      "firewall_policies": "Firewall-beleid",
+      "traffic_routes": "Verkeersroute",
+      "port_forwards": "Poort doorsturen",
+      "qos_rules": "QoS-regel",
+      "vpn_clients": "VPN-client",
+      "vpn_servers": "VPN-server",
+      "legacy_firewall_rules": "Legacy Firewall-regel",
+      "traffic_rules": "Verkeersregel",
+      "wlans": "WLAN",
+      "port_profiles": "Poortprofiel",
+      "networks": "Netwerk",
+      "devices": "Apparaat"
+    }
+  },
+  "triggers": {
+    "unr_changed": {
+      "name": "UniFi-configuratie gewijzigd",
+      "description": "Geactiveerd wanneer elke UniFi-netwerkconfiguratie wijzigt (regels, profielen, netwerken, apparaten)",
+      "description_configured": "UniFi-configuratie gewijzigd"
+    }
+  },
+  "services": {
+    "refresh": {
+      "name": "Vernieuwen",
+      "description": "UniFi Netwerkregels gegevens vernieuwen"
+    },
+    "backup_rules": {
+      "name": "Backup Regels",
+      "description": "Backup firewall- en verkeersregels naar een bestand",
+      "fields": {
+        "filename": {
+          "name": "Bestandsnaam",
+          "description": "Naam van het backup-bestand (wordt opgeslagen in de configuratiemap van Home Assistant)"
+        }
+      }
+    },
+    "restore_rules": {
+      "name": "Herstel Regels",
+      "description": "Herstel firewall- en verkeersregels vanuit een backup-bestand",
+      "fields": {
+        "filename": {
+          "name": "Bestandsnaam",
+          "description": "Naam van het backup-bestand om te herstellen (moet bestaan in de configuratiemap van Home Assistant)"
+        },
+        "rule_ids": {
+          "name": "Regel-ID's",
+          "description": "Optionele lijst van specifieke regel-ID's om te herstellen"
+        },
+        "name_filter": {
+          "name": "Naamfilter",
+          "description": "Optioneel filter - herstel alleen regels die deze tekst in hun naam bevatten"
+        },
+        "rule_types": {
+          "name": "Regeltypen",
+          "description": "Optionele lijst van regeltypen om te herstellen (policy, route, port_forward, qos_rule, vpn_client, port_profile, network)"
+        }
+      }
+    },
+    "bulk_update_rules": {
+      "name": "Bulk Update van Regels",
+      "description": "Meerdere regels in- of uitschakelen op basis van naamovereenkomst",
+      "fields": {
+        "name_filter": {
+          "name": "Naamfilter",
+          "description": "Tekst om overeen te komen met regelnamen"
+        },
+        "state": {
+          "name": "Status",
+          "description": "Waar om overeenkomende regels in te schakelen, Onwaar om ze uit te schakelen"
+        }
+      }
+    },
+    "delete_rule": {
+      "name": "Verwijder Regel",
+      "description": "Een regel verwijderen",
+      "fields": {
+        "rule_id": {
+          "name": "Regel-ID",
+          "description": "Het ID van de regel om te verwijderen"
+        },
+        "rule_type": {
+          "name": "Regeltype",
+          "description": "Het type regel om te verwijderen. Ondersteunt firewall-beleid, verkeersregels, poort doorsturen, verkeersroutes, QoS-regels, VPN-configuraties en poortprofielen"
+        }
+      }
+    }
+  },
+  "title": "UniFi Netwerkregels"
+}
