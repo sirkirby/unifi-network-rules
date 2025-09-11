@@ -151,7 +151,9 @@ def get_rule_id(rule: Any) -> str | None:
             elif rule.is_server:
                 return f"unr_vpn_server_{rule.id}"
             else:
-                return f"unr_vpn_{rule.id}"
+                # Default to client when type is unclear (most VPN configs are clients)
+                LOGGER.debug("VPN config %s has unclear client/server type, defaulting to client", rule.id)
+                return f"unr_vpn_client_{rule.id}"
         else:
             LOGGER.warning("VPNConfig without id: %s", rule)
             return None
@@ -687,10 +689,72 @@ def is_vpn_network(network: Any) -> bool:
     )
 
 
+def classify_vpn_type(purpose: str, vpn_type: str) -> tuple[bool, bool]:
+    """Classify VPN configuration as client or server based on purpose and vpn_type.
+    
+    Args:
+        purpose: The purpose field from VPN config
+        vpn_type: The vpn_type field from VPN config
+        
+    Returns:
+        Tuple of (is_client, is_server)
+    """
+    purpose = str(purpose).lower() if purpose else ""
+    vpn_type = str(vpn_type).lower() if vpn_type else ""
+    
+    # Client indicators
+    is_client = (
+        purpose in ["vpn-client", "remote-user-vpn"]
+        or vpn_type in ["openvpn-client", "wireguard-client"]
+        or (purpose.startswith("vpn") and "client" in purpose)
+        or (vpn_type and "client" in vpn_type)
+    )
+    
+    # Server indicators  
+    is_server = (
+        purpose == "vpn-server"
+        or vpn_type in ["openvpn-server", "wireguard-server"] 
+        or (purpose.startswith("vpn") and "server" in purpose)
+        or (vpn_type and "server" in vpn_type)
+    )
+    
+    return is_client, is_server
+
+
+def is_default_network(network: Any) -> bool:
+    """Return True if a network represents the default LAN network.
+    
+    The default network cannot be disabled, deleted, or modified in UniFi,
+    so it should not be exposed as a switch entity. It's identified by:
+    - attr_hidden_id being exactly "LAN"
+    - attr_no_delete being true (additional confirmation)
+    - vlan_enabled being false (no VLAN means default)
+    """
+    raw = getattr(network, "raw", {}) if hasattr(network, "raw") else (network if isinstance(network, dict) else {})
+    
+    # Primary identifier: attr_hidden_id is exactly "LAN"
+    hidden_id = raw.get("attr_hidden_id", "")
+    if hidden_id == "LAN":
+        return True
+    
+    # Secondary check: attr_no_delete + vlan_enabled false + corporate purpose
+    # This provides additional safety in case attr_hidden_id is missing
+    attr_no_delete = raw.get("attr_no_delete", False)
+    vlan_enabled = raw.get("vlan_enabled", False)
+    purpose = str(raw.get("purpose", "")).lower()
+    
+    if attr_no_delete and not vlan_enabled and purpose == "corporate":
+        # Log this case as it might indicate the default network without hidden_id
+        LOGGER.debug("Potential default network detected without hidden_id: %s", raw.get("name", "unknown"))
+        return True
+    
+    return False
+
+
 def filter_switchable_networks(networks: list[Any]) -> list[Any]:
-    """Filter out VPN networks; keep networks suitable for switch entities."""
+    """Filter out VPN networks and default network; keep networks suitable for switch entities."""
     try:
-        return [n for n in networks if not is_vpn_network(n)]
+        return [n for n in networks if not is_vpn_network(n) and not is_default_network(n)]
     except Exception:
         # Fail-safe: if anything goes wrong, return original list
         return networks

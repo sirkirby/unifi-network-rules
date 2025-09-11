@@ -23,14 +23,15 @@ from aiounifi.models.device import Device
 
 from .const import DOMAIN, LOGGER, DEFAULT_UPDATE_INTERVAL, LOG_TRIGGERS
 from .udm import UDMAPI
-from .websocket import UnifiRuleWebsocket
-from .helpers.rule import get_rule_id, get_child_unique_id
-from .utils.logger import log_data, log_websocket
+from .helpers.rule import get_rule_id, get_child_unique_id, is_vpn_network, is_default_network
+from .utils.logger import log_data
 from .models.firewall_rule import FirewallRule
 from .models.qos_rule import QoSRule
 from .models.vpn_config import VPNConfig
 from .models.port_profile import PortProfile
 from .models.network import NetworkConf
+from .smart_polling import SmartPollingManager, SmartPollingConfig
+from .unified_change_detector import UnifiedChangeDetector
 
 # This is a fallback if no update_interval is specified
 SCAN_INTERVAL = timedelta(seconds=60)
@@ -45,9 +46,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self, 
         hass: HomeAssistant, 
         api: UDMAPI, 
-        websocket: UnifiRuleWebsocket,
         update_interval: int = DEFAULT_UPDATE_INTERVAL,
         platforms: Optional[List[Platform]] = None,
+        smart_polling_config: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Initialize the coordinator with API and update interval."""
         super().__init__(
@@ -57,12 +58,25 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=update_interval),
         )
 
-        # Keep a reference to the API and websocket
+        # Keep a reference to the API
         self.api = api
-        self.websocket = websocket
         
         # Initialize config_entry to None - it will be looked up when needed
         self.config_entry = None
+        
+        # Initialize Smart Polling Manager
+        polling_config = SmartPollingConfig(
+            base_interval=smart_polling_config.get('base_interval', 300) if smart_polling_config else 300,
+            active_interval=smart_polling_config.get('active_interval', 30) if smart_polling_config else 30,
+            realtime_interval=smart_polling_config.get('realtime_interval', 10) if smart_polling_config else 10,
+            activity_timeout=smart_polling_config.get('activity_timeout', 120) if smart_polling_config else 120,
+            debounce_seconds=smart_polling_config.get('debounce_seconds', 10) if smart_polling_config else 10,
+            optimistic_timeout=smart_polling_config.get('optimistic_timeout', 15) if smart_polling_config else 15,
+        )
+        self.smart_polling = SmartPollingManager(self, polling_config)
+        
+        # Initialize Unified Change Detector
+        self.change_detector = UnifiedChangeDetector(hass, self)
         
         # Update lock - prevent simultaneous updates
         self._update_lock = asyncio.Lock()
@@ -90,7 +104,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         # to prevent the trigger from causing a redundant refresh and to prevent a potential race condition
         self._ha_initiated_operations: Dict[str, float] = {}
         
-        # Websocket processing is now handled by trigger system
+        # Change detection is now handled by unified change detector
         
         # Track entities we added or removed
         # By unique ID rather than the objects themselves
@@ -131,21 +145,28 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self._consecutive_errors = 0
         self._api_errors = 0
 
-    def register_ha_initiated_operation(self, rule_id: str, timeout: int = 15) -> None:
+    def register_ha_initiated_operation(self, rule_id: str, entity_id: str, change_type: str = "modified", timeout: int = 15) -> None:
         """Register that a rule change was initiated from HA.
         
         This is called by a switch entity just before it queues an API call.
-        The trigger system will check this to avoid a redundant refresh.
+        The smart polling system will use this for debounced refresh.
         
         Args:
             rule_id: The ID of the rule being changed.
+            entity_id: The entity ID that initiated the change.
+            change_type: Type of change (enabled, disabled, modified).
             timeout: How long (in seconds) to keep the registration active.
         """
         self._ha_initiated_operations[rule_id] = time.time()
         LOGGER.debug("[CQRS] Registered HA-initiated operation for rule_id: %s", rule_id)
         
+        # Register with smart polling system for debounced refresh
+        self.hass.async_create_task(
+            self.smart_polling.register_entity_change(entity_id, change_type)
+        )
+        
         # Schedule cleanup to prevent the dictionary from growing indefinitely
-        # if a corresponding websocket event never arrives.
+        # if a corresponding change detection never occurs.
         async def cleanup_op(op_rule_id):
             await asyncio.sleep(timeout)
             if op_rule_id in self._ha_initiated_operations:
@@ -213,11 +234,94 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         except Exception as err:
             LOGGER.error("Error dispatching device trigger: %s", err)
 
+    async def register_external_change_detected(self) -> None:
+        """Register that external changes were detected during polling.
+        
+        This helps the smart polling system maintain appropriate polling intervals
+        when changes are detected via periodic polling (not HA-initiated).
+        """
+        await self.smart_polling.register_external_change_detected()
+        
+    def get_smart_polling_status(self) -> Dict[str, Any]:
+        """Get smart polling status for diagnostics.
+        
+        Returns:
+            Dictionary with current smart polling status
+        """
+        return self.smart_polling.get_status()
+    
+    def get_change_detector_status(self) -> Dict[str, Any]:
+        """Get change detector status for diagnostics.
+        
+        Returns:
+            Dictionary with current change detector status
+        """
+        return self.change_detector.get_status()
+    
+    def _data_has_changes(self, previous_data: Dict[str, List[Any]], new_data: Dict[str, List[Any]]) -> bool:
+        """Check if data has changed between polling cycles.
+        
+        This is used to detect external changes (not HA-initiated) during polling.
+        
+        Args:
+            previous_data: The previous data from coordinator
+            new_data: The new data from coordinator
+            
+        Returns:
+            True if changes were detected, False otherwise
+        """
+        if not previous_data or not new_data:
+            return False
+            
+        # Quick check: compare collection sizes first
+        for rule_type in ["port_forwards", "traffic_routes", "firewall_policies", 
+                         "traffic_rules", "legacy_firewall_rules", "wlans", 
+                         "firewall_zones", "qos_rules", "vpn_clients", "vpn_servers", 
+                         "devices", "port_profiles", "networks"]:
+            prev_count = len(previous_data.get(rule_type, []))
+            new_count = len(new_data.get(rule_type, []))
+            if prev_count != new_count:
+                LOGGER.debug("[SMART_POLL] Count change detected in %s: %d → %d", rule_type, prev_count, new_count)
+                return True
+        
+        # If counts are the same, do a deeper check on enabled states and key attributes
+        # This is a lightweight check focused on the most common changes
+        for rule_type in ["port_forwards", "traffic_routes", "firewall_policies", 
+                         "traffic_rules", "legacy_firewall_rules", "wlans", "qos_rules"]:
+            prev_rules = previous_data.get(rule_type, [])
+            new_rules = new_data.get(rule_type, [])
+            
+            # Create lookup dictionaries for efficient comparison
+            prev_lookup = {}
+            new_lookup = {}
+            
+            for rule in prev_rules:
+                rule_id = getattr(rule, 'id', None) or (rule.raw.get('_id') if hasattr(rule, 'raw') else None)
+                if rule_id:
+                    enabled = getattr(rule, 'enabled', None) or (rule.raw.get('enabled') if hasattr(rule, 'raw') else None)
+                    prev_lookup[rule_id] = enabled
+                    
+            for rule in new_rules:
+                rule_id = getattr(rule, 'id', None) or (rule.raw.get('_id') if hasattr(rule, 'raw') else None)
+                if rule_id:
+                    enabled = getattr(rule, 'enabled', None) or (rule.raw.get('enabled') if hasattr(rule, 'raw') else None)
+                    new_lookup[rule_id] = enabled
+            
+            # Check for enabled state changes
+            for rule_id in prev_lookup:
+                if rule_id in new_lookup:
+                    if prev_lookup[rule_id] != new_lookup[rule_id]:
+                        LOGGER.debug("[SMART_POLL] Enabled state change detected in %s rule %s: %s → %s", 
+                                   rule_type, rule_id, prev_lookup[rule_id], new_lookup[rule_id])
+                        return True
+        
+        return False
+
     def _check_for_device_state_changes(self, previous_data: Dict[str, List[Any]], new_data: Dict[str, List[Any]]) -> None:
         """Check for LED state changes on devices and fire device triggers accordingly.
         
-        This provides eventual consistency by detecting LED changes during regular 
-        coordinator polling cycles, in case websocket events are not received.
+        This detects LED changes during regular coordinator polling cycles as part
+        of the unified change detection system.
         
         Note: Only monitors LED state changes for devices we manage (LED-capable access points).
         Connection state monitoring is handled by the core UniFi integration.
@@ -466,11 +570,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 await self._update_qos_rules_in_dict(rules_data)
                 await asyncio.sleep(api_call_delay)
                 
-                # Then derive VPN clients and servers from networks
-                await self._update_vpn_clients_in_dict(rules_data)
-                await asyncio.sleep(api_call_delay)
-                await self._update_vpn_servers_in_dict(rules_data)
-                await asyncio.sleep(api_call_delay)
+                # VPN clients and servers are now extracted during network processing
                 
                 # Then devices (for LED switches)
                 await self._update_devices_in_dict(rules_data)
@@ -607,6 +707,26 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                                len(self.vpn_clients),
                                len(self.vpn_servers),
                                len(self.devices))
+
+                    # Check if external changes were detected during baseline polling cycle
+                    # Only register external changes if this wasn't triggered by our own smart polling
+                    if previous_data and self._data_has_changes(previous_data, rules_data):
+                        # Avoid feedback loop: don't register external changes during smart polling cycles
+                        if not self.smart_polling.is_in_smart_poll_cycle():
+                            LOGGER.debug("[SMART_POLL] External changes detected during baseline polling cycle")
+                            await self.register_external_change_detected()
+                        else:
+                            LOGGER.debug("[SMART_POLL] Changes detected during smart polling cycle - not registering as external")
+
+                    # Run unified change detection and fire triggers
+                    try:
+                        changes = await self.change_detector.detect_and_fire_changes(rules_data)
+                        if changes:
+                            LOGGER.info("[UNIFIED_TRIGGERS] Detected %d changes, fired unified triggers", len(changes))
+                        else:
+                            LOGGER.debug("[UNIFIED_TRIGGERS] No changes detected during this update cycle")
+                    except Exception as change_err:
+                        LOGGER.error("[UNIFIED_TRIGGERS] Error in change detection: %s", change_err)
 
                 return rules_data
 
@@ -821,58 +941,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         """Update QoS rules in the given data dictionary."""
         await self._update_rule_type_in_dict(data, "qos_rules", self.api.get_qos_rules)
 
-    async def _update_vpn_clients_in_dict(self, data: Dict[str, List[Any]]) -> None:
-        """Update VPN clients from already-fetched networks."""
-        try:
-            # Derive from networks if available; otherwise, fall back to API
-            networks = data.get("networks") or self.networks
-            if networks:
-                from .models.vpn_config import VPNConfig
-                clients = []
-                for n in networks:
-                    raw = getattr(n, 'raw', {}) if hasattr(n, 'raw') else {}
-                    purpose = raw.get("purpose", "")
-                    vpn_type = raw.get("vpn_type", "")
-                    is_client = purpose == "vpn-client" or vpn_type in ["openvpn-client", "wireguard-client"]
-                    if is_client:
-                        try:
-                            clients.append(VPNConfig(raw))
-                        except Exception as err:
-                            LOGGER.debug("Skipping VPN client conversion error: %s", err)
-                data["vpn_clients"] = clients
-                return
-            # Fallback to API method if networks missing
-            await self._update_rule_type_in_dict(data, "vpn_clients", self.api.get_vpn_clients)
-        except Exception as err:
-            LOGGER.error("Error deriving VPN clients: %s", err)
-            if "vpn_clients" not in data:
-                data["vpn_clients"] = []
-
-    async def _update_vpn_servers_in_dict(self, data: Dict[str, List[Any]]) -> None:
-        """Update VPN servers from already-fetched networks."""
-        try:
-            networks = data.get("networks") or self.networks
-            if networks:
-                from .models.vpn_config import VPNConfig
-                servers = []
-                for n in networks:
-                    raw = getattr(n, 'raw', {}) if hasattr(n, 'raw') else {}
-                    purpose = raw.get("purpose", "")
-                    vpn_type = raw.get("vpn_type", "")
-                    is_server = purpose == "vpn-server" or vpn_type in ["openvpn-server", "wireguard-server"]
-                    if is_server:
-                        try:
-                            servers.append(VPNConfig(raw))
-                        except Exception as err:
-                            LOGGER.debug("Skipping VPN server conversion error: %s", err)
-                data["vpn_servers"] = servers
-                return
-            # Fallback to API method if networks missing
-            await self._update_rule_type_in_dict(data, "vpn_servers", self.api.get_vpn_servers)
-        except Exception as err:
-            LOGGER.error("Error deriving VPN servers: %s", err)
-            if "vpn_servers" not in data:
-                data["vpn_servers"] = []
         
     async def _update_devices_in_dict(self, data: Dict[str, List[Any]]) -> None:
         """Update devices in the data dictionary."""
@@ -928,26 +996,93 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 self.port_profiles = []
 
     async def _update_networks_in_dict(self, data: Dict[str, List[Any]]) -> None:
-        """Update networks list in the data dictionary and convert to typed objects."""
+        """Update networks and extract VPNs in a single pass.
+        
+        Fetches all network configs once, then splits them into clean collections:
+        - networks: Only manageable LAN networks (no VPN, no default)
+        - vpn_clients: VPN client configs (extracted during processing)  
+        - vpn_servers: VPN server configs (extracted during processing)
+        
+        This prevents duplication and double-matching in triggers while maintaining
+        single API call efficiency.
+        """
         try:
-            LOGGER.info("Fetching networks...")
+            LOGGER.info("Fetching all network configurations...")
             future = await self.api.queue_api_operation(self.api.get_networks)
-            networks = await future if hasattr(future, "__await__") else future
-            typed: List[NetworkConf] = []
-            for item in networks or []:
+            all_networks = await future if hasattr(future, "__await__") else future
+            
+            # Prepare collections
+            networks: List[NetworkConf] = []
+            vpn_clients = []
+            vpn_servers = []
+            
+            skipped_vpn = 0
+            skipped_default = 0
+            
+            for item in all_networks or []:
                 try:
-                    # item is already NetworkConf from API layer
-                    typed.append(item)
+                    # Filter out default network (non-modifiable)
+                    if is_default_network(item):
+                        skipped_default += 1
+                        continue
+                    
+                    # Extract VPN configs into separate collections
+                    if is_vpn_network(item):
+                        skipped_vpn += 1
+                        from .models.vpn_config import VPNConfig
+                        try:
+                            raw = getattr(item, 'raw', {}) if hasattr(item, 'raw') else {}
+                            purpose = raw.get("purpose", "")
+                            vpn_type = raw.get("vpn_type", "")
+                            
+                            # Determine if client or server using helper function
+                            from .helpers.rule import classify_vpn_type
+                            is_client, is_server = classify_vpn_type(purpose, vpn_type)
+                            
+                            # If still unclear, default to client (most VPNs are client connections)
+                            if not is_client and not is_server:
+                                LOGGER.debug("VPN config %s has unclear type (purpose=%s, vpn_type=%s), defaulting to client", 
+                                           raw.get("_id", "unknown"), purpose, vpn_type)
+                                is_client = True
+                            
+                            if is_client:
+                                vpn_clients.append(VPNConfig(raw))
+                            elif is_server:
+                                vpn_servers.append(VPNConfig(raw))
+                        except Exception as vpn_err:
+                            LOGGER.debug("Skipping VPN conversion error: %s", vpn_err)
+                        continue
+                    
+                    # Keep as regular network (manageable LAN networks only)
+                    networks.append(item)
+                    
                 except Exception as err:
-                    LOGGER.warning("Error converting network: %s", err)
-            data["networks"] = typed
-            self.networks = typed
-            LOGGER.info("Updated %d networks", len(typed))
+                    LOGGER.warning("Error processing network: %s", err)
+            
+            # Store in data collections
+            data["networks"] = networks
+            data["vpn_clients"] = vpn_clients
+            data["vpn_servers"] = vpn_servers
+            
+            # Store in coordinator attributes
+            self.networks = networks
+            self.vpn_clients = vpn_clients
+            self.vpn_servers = vpn_servers
+            
+            LOGGER.info("Processed network configs: %d networks, %d VPN clients, %d VPN servers (skipped %d VPN, %d default)", 
+                       len(networks), len(vpn_clients), len(vpn_servers), skipped_vpn, skipped_default)
+                       
         except Exception as err:
             LOGGER.error("Failed to update networks: %s", err)
             data["networks"] = []
+            data["vpn_clients"] = []
+            data["vpn_servers"] = []
             if not hasattr(self, 'networks'):
                 self.networks = []
+            if not hasattr(self, 'vpn_clients'):
+                self.vpn_clients = []
+            if not hasattr(self, 'vpn_servers'):
+                self.vpn_servers = []
 
     async def _update_rule_type(self, rule_type: str, fetch_method: Callable) -> None:
         """Update a specific rule type in self.data.
@@ -1054,18 +1189,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             if rule_type not in target_data:
                 target_data[rule_type] = []
 
-    @callback
-    def _handle_websocket_message(self, message: dict[str, Any]) -> None:
-        """Handle a message from the WebSocket connection.
-        
-        NOTE: This method is now primarily handled by the trigger system.
-        Triggers detect config changes and dispatch refreshes directly via _dispatch_coordinator_refresh().
-        This keeps the detection logic DRY and centralized in one place.
-        """
-        # The trigger system now handles all websocket message detection and dispatches
-        # coordinator refreshes when config changes are detected. This method is kept
-        # for backward compatibility but should only be called as a fallback.
-        pass
+    # WebSocket message handling removed - using smart polling only
 
     async def _controlled_refresh_wrapper(self):
         """Wrapper for the controlled refresh process to ensure proper semaphore handling."""
@@ -1083,19 +1207,16 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
     async def _force_refresh_with_cache_clear(self) -> None:
         """Force a refresh with cache clearing to ensure fresh data.
         
-        This method is triggered by WebSocket events and follows the same core refresh
+        This method is triggered by smart polling and follows the same core refresh
         and entity management logic as the regular polling updates:
         1. Clear API cache (but preserve authentication)
         2. Call async_refresh() which updates rule collections
         3. Process new entities through the same entity creation path
         4. Check for deleted rules to maintain consistency with polling
-        
-        The only major difference is the explicit call to _check_for_deleted_rules()
-        which happens automatically during polling updates.
         """
         try:
             # Log that we're starting a refresh
-            log_websocket("Starting forced refresh after rule change detected")
+            LOGGER.debug("Starting forced refresh after change detected")
             
             # Store previous data for deletion detection
             _unused_previous = self.data.copy() if self.data else {}
@@ -1125,9 +1246,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 # Force an update of all entities
                 self.async_update_listeners()
                 
-                log_data("Refresh completed successfully after WebSocket event")
+                log_data("Refresh completed successfully after change detection")
             else:
-                LOGGER.error("WebSocket-triggered refresh failed")
+                LOGGER.error("Change-triggered refresh failed")
         except Exception as err:
             LOGGER.error("Error during forced refresh: %s", err)
 
@@ -1139,6 +1260,10 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             
     async def async_shutdown(self) -> None:
         """Clean up resources asynchronously."""
+        # Clean up smart polling first
+        if hasattr(self, 'smart_polling'):
+            await self.smart_polling.cleanup()
+        
         # Call the synchronous shutdown method
         self.shutdown()
         
@@ -1437,6 +1562,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         )
 
         # Define mappings from rule types to entities
+        # Note: VPN entities are created during initial setup, not dynamically discovered
         rule_type_entity_map = [
             ("port_forwards", UnifiPortForwardSwitch),
             ("traffic_rules", UnifiTrafficRuleSwitch),
@@ -1445,8 +1571,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             ("legacy_firewall_rules", UnifiLegacyFirewallRuleSwitch), 
             ("qos_rules", UnifiQoSRuleSwitch),
             ("wlans", UnifiWlanSwitch),
-            ("vpn_clients", UnifiVPNClientSwitch),
-            ("vpn_servers", UnifiVPNServerSwitch),
+            # VPN clients/servers excluded - handled during initial setup
         ]
 
         # Gather potential entities from the NEW data
@@ -1487,6 +1612,18 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                             LOGGER.debug("Coordinator: Discovered potential new kill switch: %s (for parent %s)", kill_switch_id, rule_id)
                 except Exception as err:
                     LOGGER.warning("Coordinator: Error processing rule during dynamic discovery: %s", err)
+
+        # Track VPN entity IDs for cleanup purposes (without creating them dynamically)
+        for vpn_rule_type in ["vpn_clients", "vpn_servers"]:
+            vpn_rules = new_data.get(vpn_rule_type, [])
+            for vpn_rule in vpn_rules:
+                try:
+                    vpn_rule_id = get_rule_id(vpn_rule)
+                    if vpn_rule_id:
+                        all_current_unique_ids.add(vpn_rule_id)
+                        LOGGER.debug("Coordinator: Tracking VPN entity ID for cleanup: %s", vpn_rule_id)
+                except Exception as err:
+                    LOGGER.warning("Coordinator: Error tracking VPN rule ID: %s", err)
 
         # Special handling for LED-capable devices
         devices = new_data.get("devices", [])

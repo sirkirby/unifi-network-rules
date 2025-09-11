@@ -41,7 +41,6 @@ from .const import (
 from .udm.api import UDMAPI
 
 # Import local modules at the module level - ORDER MATTERS HERE
-from .websocket import UnifiRuleWebsocket
 from .coordinator import UnifiRuleUpdateCoordinator
 from .services import async_setup_services, async_unload_services
 from .helpers.rule import get_rule_id
@@ -91,18 +90,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # Initialize interfaces
             await api.controller.initialize()
 
-        # Create websocket
-        websocket_handler = UnifiRuleWebsocket(hass, api, entry.entry_id)
+        # Get smart polling configuration from entry options
+        smart_polling_config = {
+            "base_interval": entry.options.get("base_interval", 300),
+            "active_interval": entry.options.get("active_interval", 30),
+            "realtime_interval": entry.options.get("realtime_interval", 10),
+            "activity_timeout": entry.options.get("activity_timeout", 120),
+            "debounce_seconds": entry.options.get("debounce_seconds", 10),
+            "optimistic_timeout": entry.options.get("optimistic_timeout", 15),
+        }
         
-        # Setup the coordinator
-        coordinator = UnifiRuleUpdateCoordinator(hass, api, websocket_handler)
+        # Setup the coordinator with smart polling
+        # Use baseline interval from smart polling config for the coordinator
+        baseline_interval = smart_polling_config.get("base_interval", 300)
+        coordinator = UnifiRuleUpdateCoordinator(
+            hass, 
+            api, 
+            update_interval=baseline_interval,  # Use baseline for coordinator's built-in polling
+            smart_polling_config=smart_polling_config
+        )
         
         # Explicitly set the config_entry reference
         coordinator.config_entry = entry
         
-        # Connect the websocket handler to the coordinator
-        websocket_handler.set_callback(coordinator._handle_websocket_message)
-        LOGGER.debug("Set websocket handler callback to coordinator's message handler")
+        # WebSocket removed - using smart polling only
+        LOGGER.info("Smart polling architecture enabled - WebSocket disabled")
         
         # Define entity removal callback
         @callback
@@ -135,7 +147,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN][entry.entry_id] = {
             "api": api,
             "coordinator": coordinator,
-            "websocket": websocket_handler,
         }
         
         # Start initial data refresh
@@ -144,13 +155,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Setup platforms
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         
-        # Start the websocket connection
-        try:
-            websocket_handler.start()
-            LOGGER.info("WebSocket connection established successfully")
-        except Exception as ws_err:  # pylint: disable=broad-except
-            LOGGER.error("Error setting up WebSocket: %s", ws_err)
-            # Continue even if WebSocket fails - we can still use polling
+        # WebSocket removed - smart polling handles all updates
+        LOGGER.info("Integration initialized with smart polling architecture")
         
         # Register the coordinator with the services registry
         if "services" in hass.data[DOMAIN] and "register_coordinator" in hass.data[DOMAIN]["services"]:
@@ -255,7 +261,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if unload_ok:
             # Clean up data if unload was successful
             api: UDMAPI = entry_data["api"]
-            websocket: UnifiRuleWebsocket = entry_data["websocket"]
             coordinator: UnifiRuleUpdateCoordinator = entry_data["coordinator"]
             
             # Clean up additional listeners if they exist
@@ -265,7 +270,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             
             # Clean up everything
             await coordinator.async_shutdown()
-            await websocket.async_stop()
             await api.cleanup()
             
             # Remove entry from hass.data
@@ -382,6 +386,9 @@ async def async_create_entity(hass: HomeAssistant, rule_type: str, rule: Any) ->
         elif rule_type == "vpn_clients":
             from .switch import UnifiVPNClientSwitch
             entity = UnifiVPNClientSwitch(coordinator, rule, rule_type, config_entry_id)
+        elif rule_type == "vpn_servers":
+            from .switch import UnifiVPNServerSwitch
+            entity = UnifiVPNServerSwitch(coordinator, rule, rule_type, config_entry_id)
         else:
             LOGGER.warning("Unknown rule type for entity creation: %s", rule_type)
             return False
