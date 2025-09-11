@@ -527,7 +527,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                             LOGGER.warning("Authentication failure detected during initial fetch: %s", error_msg)
                             # Trigger auth recovery but continue trying other endpoints
                             if hasattr(self.api, "handle_auth_failure"):
-                                asyncio.create_task(self.api.handle_auth_failure(error_msg))
+                                self.hass.async_create_task(self.api.handle_auth_failure(error_msg))
 
                             # Preserve previous port forwards data if available
                             if previous_data and "port_forwards" in previous_data and previous_data["port_forwards"]:
@@ -1217,9 +1217,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         try:
             # Log that we're starting a refresh
             LOGGER.debug("Starting forced refresh after change detected")
-            
-            # Store previous data for deletion detection
-            _unused_previous = self.data.copy() if self.data else {}
             
             # Clear the API cache to ensure we get fresh data
             # But do so without disrupting authentication
