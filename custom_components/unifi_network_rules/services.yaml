@@ -20,9 +20,10 @@ toggle_rule:
   fields:
     rule_id:
       name: Rule ID
-      description: ID of the rule to toggle
+      description: >-
+        UniFi rule ID to toggle. Use trigger.rule_id in automations.
       required: true
-      example: "123456789"
+      example: "6786d55a88d13a5ebfc7fc26"
       selector:
         text:
     enabled:
@@ -34,19 +35,25 @@ toggle_rule:
     rule_type:
       name: Rule Type
       description: >-
-        Type of rule (optional, will try to auto-detect if not provided).
-        Note: Both "legacy_firewall" and "legacy_traffic" are older versions of "policy".
+        Type of rule (optional, auto-detected from entity/unique ID if not provided).
+        Only required when using raw UniFi IDs.
       required: false
-      example: "policy"
+      example: "firewall_policies"
       selector:
         select:
           options:
-            - "policy"
-            - "route"
-            - "port_forward"
-            - "legacy_firewall"
-            - "legacy_traffic"
-            - "qos_rule"
+            - "firewall_policies"
+            - "traffic_routes"
+            - "port_forwards"
+            - "traffic_rules"
+            - "legacy_firewall_rules"
+            - "qos_rules"
+            - "wlans"
+            - "vpn_clients"
+            - "vpn_servers"
+            - "port_profiles"
+            - "networks"
+            - "devices"
 
 backup_rules:
   name: Backup rules
@@ -95,9 +102,10 @@ restore_rules:
         boolean:
     rule_ids:
       name: Rule IDs
-      description: List of specific rule IDs to restore (optional)
+      description: >-
+        List of specific UniFi rule IDs to restore (optional). Use trigger.rule_id values from automations.
       required: false
-      example: '["123456789", "987654321"]'
+      example: '["abc123", "def456"]'
       selector:
         object:
     name_filter:
@@ -115,7 +123,9 @@ restore_rules:
         "route" (traffic routes only),
         "port_forward" (port forwarding rules),
         "qos_rule" (QoS quality of service rules),
-        "vpn_client" (VPN client configurations)
+        "vpn_client" (VPN client configurations),
+        "port_profile" (switch port profiles),
+        "network" (network configurations)
       required: false
       example: '["policy", "route", "qos_rule"]'
       selector:
@@ -126,6 +136,8 @@ restore_rules:
             - "port_forward"
             - "qos_rule"
             - "vpn_client"
+            - "port_profile"
+            - "network"
           multiple: true
 
 bulk_update_rules:
@@ -152,27 +164,32 @@ delete_rule:
   fields:
     rule_id:
       name: Rule ID
-      description: ID of the rule to delete
+      description: >-
+        UniFi rule ID to delete. Use trigger.rule_id in automations.
       required: true
-      example: "123456789"
+      example: "abc123"
       selector:
         text:
     rule_type:
       name: Rule Type
       description: >-
-        Type of rule (optional, will try to auto-detect if not provided).
-        Note: Both "legacy_firewall" and "legacy_traffic" are older versions of "policy".
+        Type of rule (optional, auto-detected from entity/unique ID if not provided).
+        Only required when using raw UniFi IDs.
       required: false
-      example: "policy"
+      example: "firewall_policies"
       selector:
         select:
           options:
-            - "policy"
-            - "route"
-            - "port_forward"
-            - "legacy_firewall"
-            - "legacy_traffic"
-            - "qos_rule"
+            - "firewall_policies"
+            - "traffic_routes"
+            - "port_forwards"
+            - "traffic_rules"
+            - "legacy_firewall_rules"
+            - "qos_rules"
+            - "wlans"
+            - "vpn_clients"
+            - "vpn_servers"
+            - "port_profiles"
 
 apply_template:
   name: Apply template
@@ -195,32 +212,45 @@ apply_template:
 
 save_template:
   name: Save template
-  description: Save a rule template
+  description: Save a rule as a reusable template
   fields:
+    rule_id:
+      name: Rule ID
+      description: >-
+        UniFi rule ID to save as template. Use trigger.rule_id in automations.
+      required: true
+      example: "abc123"
+      selector:
+        text:
     template_id:
       name: Template ID
-      description: ID for the template
+      description: ID for the new template
       required: true
-      example: "guest_network"
+      example: "guest_network_template"
       selector:
         text:
     rule_type:
       name: Rule type
-      description: Type of rule this template creates
-      required: true
+      description: >-
+        Type of rule (optional, auto-detected from entity/unique ID if not provided).
+        Only required when using raw UniFi IDs.
+      required: false
+      example: "firewall_policies"
       selector:
         select:
           options:
-            - "firewall_policy"
-            - "traffic_route"
-            - "port_forward"
-    template:
-      name: Template
-      description: The template definition
-      required: true
-      example: '{"name": "Guest Network {network_id}", "enabled": true}'
-      selector:
-        object:
+            - "firewall_policies"
+            - "traffic_routes"
+            - "port_forwards"
+            - "traffic_rules"
+            - "legacy_firewall_rules"
+            - "qos_rules"
+            - "wlans"
+            - "vpn_clients"
+            - "vpn_servers"
+            - "port_profiles"
+            - "networks"
+            - "devices"
 
 force_cleanup:
   name: Force Cleanup

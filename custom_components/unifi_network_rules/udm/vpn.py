@@ -50,8 +50,8 @@ class VPNMixin:
                 vpn_type = network.get("vpn_type", "")
                 
                 # Check for both purpose and vpn_type to catch all VPN configs
-                is_client = purpose == "vpn-client" or vpn_type in ["openvpn-client", "wireguard-client"]
-                is_server = purpose == "vpn-server" or vpn_type in ["openvpn-server", "wireguard-server"]
+                from ..helpers.rule import classify_vpn_type
+                is_client, is_server = classify_vpn_type(purpose, vpn_type)
                 
                 if (include_clients and is_client) or (include_servers and is_server):
                     try:

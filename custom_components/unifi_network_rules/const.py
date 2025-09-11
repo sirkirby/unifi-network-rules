@@ -23,6 +23,14 @@ CONF_PORT = "port"
 CONF_USERNAME = "username"
 CONF_VERIFY_SSL = "verify_ssl"
 
+# Smart Polling Configuration Options
+CONF_SMART_POLLING_BASE_INTERVAL = "base_interval"
+CONF_SMART_POLLING_ACTIVE_INTERVAL = "active_interval"
+CONF_SMART_POLLING_REALTIME_INTERVAL = "realtime_interval"
+CONF_SMART_POLLING_ACTIVITY_TIMEOUT = "activity_timeout"
+CONF_SMART_POLLING_DEBOUNCE_SECONDS = "debounce_seconds"
+CONF_SMART_POLLING_OPTIMISTIC_TIMEOUT = "optimistic_timeout"
+
 # Default values
 DEFAULT_SITE = "default"
 DEFAULT_PORT = 443

@@ -1,0 +1,120 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Reglas de Red UniFi",
+        "description": "Configure las Reglas de Red UniFi para gestionar su UniFi Dream Machine.",
+        "data": {
+          "host": "Host",
+          "username": "Usuario",
+          "password": "Contraseña",
+          "site": "Nombre del sitio (por defecto 'default')",
+          "update_interval": "Intervalo de actualización (minutos)",
+          "verify_ssl": "Verificar certificado SSL (desactive para certificados autofirmados)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "No se pudo conectar",
+      "invalid_auth": "Autenticación inválida",
+      "no_capabilities": "No se detectaron capacidades de firewall compatibles en este dispositivo.",
+      "unknown": "Error inesperado"
+    },
+    "abort": {
+      "already_configured": "El dispositivo ya está configurado"
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "unr_changed": "Configuración UniFi modificada"
+    },
+    "trigger_subtype": {
+      "firewall_policies": "Política de Firewall",
+      "traffic_routes": "Ruta de Tráfico",
+      "port_forwards": "Reenvío de Puerto",
+      "qos_rules": "Regla de QoS",
+      "vpn_clients": "Cliente VPN",
+      "vpn_servers": "Servidor VPN",
+      "legacy_firewall_rules": "Regla de Firewall Heredada",
+      "traffic_rules": "Regla de Tráfico",
+      "wlans": "WLAN",
+      "port_profiles": "Perfil de Puerto",
+      "networks": "Red",
+      "devices": "Dispositivo"
+    }
+  },
+  "triggers": {
+    "unr_changed": {
+      "name": "Configuración UniFi modificada",
+      "description": "Se activa cuando cualquier configuración de la Red UniFi cambia (reglas, perfiles, redes, dispositivos)",
+      "description_configured": "Configuración UniFi modificada"
+    }
+  },
+  "services": {
+    "refresh": {
+      "name": "Actualizar",
+      "description": "Actualizar datos de Reglas de Red UniFi"
+    },
+    "backup_rules": {
+      "name": "Respaldar Reglas",
+      "description": "Respaldar reglas de firewall y tráfico en un archivo",
+      "fields": {
+        "filename": {
+          "name": "Nombre del Archivo",
+          "description": "Nombre del archivo de respaldo (se guardará en el directorio de configuración de Home Assistant)"
+        }
+      }
+    },
+    "restore_rules": {
+      "name": "Restaurar Reglas",
+      "description": "Restaurar reglas de firewall y tráfico desde un archivo de respaldo",
+      "fields": {
+        "filename": {
+          "name": "Nombre del Archivo",
+          "description": "Nombre del archivo de respaldo para restaurar (debe existir en el directorio de configuración de Home Assistant)"
+        },
+        "rule_ids": {
+          "name": "IDs de Reglas",
+          "description": "Lista opcional de IDs específicos de reglas para restaurar"
+        },
+        "name_filter": {
+          "name": "Filtro por Nombre",
+          "description": "Filtro opcional - solo restaurar reglas que contengan este texto en su nombre"
+        },
+        "rule_types": {
+          "name": "Tipos de Reglas",
+          "description": "Lista opcional de tipos de reglas para restaurar (policy, route, port_forward, qos_rule, vpn_client, port_profile, network)"
+        }
+      }
+    },
+    "bulk_update_rules": {
+      "name": "Actualización Masiva de Reglas",
+      "description": "Habilitar o deshabilitar múltiples reglas basándose en coincidencias de nombre",
+      "fields": {
+        "name_filter": {
+          "name": "Filtro por Nombre",
+          "description": "Texto para coincidir con nombres de reglas"
+        },
+        "state": {
+          "name": "Estado",
+          "description": "Verdadero para habilitar reglas coincidentes, Falso para deshabilitarlas"
+        }
+      }
+    },
+    "delete_rule": {
+      "name": "Eliminar Regla",
+      "description": "Eliminar una regla",
+      "fields": {
+        "rule_id": {
+          "name": "ID de Regla",
+          "description": "El ID de la regla a eliminar"
+        },
+        "rule_type": {
+          "name": "Tipo de Regla",
+          "description": "El tipo de regla a eliminar. Soporta políticas de firewall, reglas de tráfico, reenvíos de puerto, rutas de tráfico, reglas de QoS, configuraciones VPN y perfiles de puerto"
+        }
+      }
+    }
+  },
+  "title": "Reglas de Red UniFi"
+}

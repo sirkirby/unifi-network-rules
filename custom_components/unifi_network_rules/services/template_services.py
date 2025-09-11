@@ -19,6 +19,7 @@ from .constants import (
     CONF_RULE_ID,
     CONF_RULE_TYPE,
 )
+from ..helpers.id_parser import parse_rule_id, validate_rule_type
 
 # Schema for apply_template service
 APPLY_TEMPLATE_SCHEMA = vol.Schema(
@@ -60,6 +61,17 @@ async def async_save_template(hass: HomeAssistant, coordinators: Dict, call: Ser
     
     if not rule_id or not template_id:
         raise HomeAssistantError("Rule ID and Template ID are required")
+    
+    # Parse and normalize the rule ID using helper
+    original_rule_id = rule_id
+    rule_id, detected_rule_type = parse_rule_id(rule_id, rule_type)
+    
+    # Use detected rule type if none was provided
+    if not rule_type and detected_rule_type:
+        rule_type = detected_rule_type
+    
+    LOGGER.debug("Save template service: parsed rule_id %s -> %s (type: %s)", 
+                original_rule_id, rule_id, rule_type)
         
     # TODO: Implement template saving
     LOGGER.warning("The save_template service is not fully implemented yet.")

@@ -25,6 +25,8 @@ from .constants import (
     CONF_NAME_FILTER,
     CONF_RULE_TYPES,
 )
+from ..helpers.id_parser import parse_rule_id
+from ..helpers.rule import is_default_network, is_vpn_network
 
 # Import the typed model classes for conversion
 from aiounifi.models.traffic_route import TrafficRoute
@@ -50,8 +52,8 @@ RESTORE_RULES_SCHEMA = vol.Schema(
         vol.Optional(CONF_NAME_FILTER): cv.string,
         vol.Optional(CONF_RULE_TYPES): vol.All(
             cv.ensure_list, 
-            [vol.In(["policy", "port_forward", "route", "qos_rule", "vpn_client"])],
-            description="Types of rules to restore: policy (firewall), port_forward, route (traffic routes), qos_rule (QoS rules), vpn_client (VPN clients)"
+            [vol.In(["policy", "port_forward", "route", "qos_rule", "vpn_client", "port_profile", "network"])],
+            description="Types of rules to restore: policy (firewall), port_forward, route (traffic routes), qos_rule (QoS rules), vpn_client (VPN clients), port_profile (switch port configurations), network (network configurations)"
         ),
     }
 )
@@ -85,7 +87,7 @@ def create_backup_from_coordinator(coordinator, filename: str, hostname: str = N
         if not rules:
             continue
             
-        # Serialize rules for backup
+        # Serialize rules for backup (data is now pre-filtered in coordinator)
         serialized_rules = []
         for rule in rules:
             if hasattr(rule, "raw"):
@@ -156,6 +158,15 @@ async def async_restore_rules_service(hass: HomeAssistant, coordinators: Dict, c
     filename = call.data.get("filename")
     force_restore = call.data.get("force_restore", False)
     rule_ids = call.data.get("rule_ids", [])
+    
+    # Normalize rule_ids to handle entity IDs and unique IDs
+    if rule_ids:
+        normalized_rule_ids = []
+        for rid in rule_ids:
+            normalized_id, _ = parse_rule_id(rid)  # Extract clean UniFi ID
+            normalized_rule_ids.append(normalized_id)
+        rule_ids = normalized_rule_ids
+        LOGGER.debug("Normalized rule_ids for restore: %s", rule_ids)
     name_filter = call.data.get("name_filter", "")
     rule_types = call.data.get("rule_types", [])
     
@@ -302,7 +313,9 @@ async def async_restore_rules_service(hass: HomeAssistant, coordinators: Dict, c
                 "traffic_rule": "policy",      # Maps to policy as it's the older version of firewall rules
                 "legacy_traffic": "policy",     # Maps to policy as it's the older version of firewall rules
                 "qos_rule": "qos_rule",        # Maps to qos_rule as it's the newer version of QoS rules
-                "vpn_client": "vpn_client"      # Maps to vpn_client as it's the newer version of VPN clients
+                "vpn_client": "vpn_client",    # Maps to vpn_client as it's the newer version of VPN clients
+                "port_profile": "port_profile", # Switch port profiles
+                "network": "network"           # Network configurations
             }
             mapped_type = rule_type_map.get(rule_type)
             
@@ -723,6 +736,113 @@ async def async_restore_rules_service(hass: HomeAssistant, coordinators: Dict, c
                   restore_counts["vpn_clients"], 
                   skip_counts["vpn_clients"])
 
+    # Restore port profiles
+    if "port_profiles" in backup_entry and hasattr(api, "update_port_profile"):
+        restore_counts["port_profiles"] = 0
+        skip_counts["port_profiles"] = 0
+        LOGGER.info("Restoring port profiles...")
+        for rule_dict in backup_entry["port_profiles"]:
+            rule_id = rule_dict.get("_id", "")
+            
+            # Apply filters first
+            should_restore_rule = await should_restore(rule_dict, "port_profile")
+            
+            if should_restore_rule:
+                # Check if this rule already exists in the system
+                rule_exists = False
+                if "port_profiles" in coordinator.data:
+                    rule_exists = rule_exists_in_collection(rule_dict, coordinator.data["port_profiles"])
+                
+                try:
+                    if rule_exists and force_restore:
+                        # Use update method when the rule exists and we're forcing an update
+                        LOGGER.debug("Rule %s exists and force_restore is True, updating existing rule", rule_id)
+                        await api.queue_api_operation(api.update_port_profile, rule_dict)
+                    elif rule_exists:
+                        # Rule exists but force_restore is False, so skip it
+                        LOGGER.debug("Rule %s already exists, skipping (use force_restore=True to update existing rules)", rule_id)
+                        skip_counts["port_profiles"] += 1
+                    else:
+                        # Use add method when the rule doesn't exist
+                        LOGGER.debug("Creating new port profile based on %s", rule_id)
+                        # For adding new rules, create a copy without the _id field
+                        # to let the API assign a new ID
+                        add_rule_dict = rule_dict.copy()
+                        if '_id' in add_rule_dict:
+                            del add_rule_dict['_id']  # Remove ID to avoid InvalidObject errors
+                        
+                        await api.queue_api_operation(api.add_port_profile, add_rule_dict)
+                    
+                    restore_counts["port_profiles"] += 1
+                except Exception as err:
+                    LOGGER.error("Error restoring port profile %s: %s", rule_id, err)
+            else:
+                skip_counts["port_profiles"] += 1
+        
+        LOGGER.info("Processed %d port profiles (restored: %d, skipped: %d)", 
+                  restore_counts["port_profiles"] + skip_counts["port_profiles"],
+                  restore_counts["port_profiles"], 
+                  skip_counts["port_profiles"])
+
+    # Restore networks
+    if "networks" in backup_entry and hasattr(api, "update_network"):
+        restore_counts["networks"] = 0
+        skip_counts["networks"] = 0
+        LOGGER.info("Restoring networks...")
+        for rule_dict in backup_entry["networks"]:
+            rule_id = rule_dict.get("_id", "")
+            
+            # Apply filters first (networks are now pre-filtered during backup)
+            should_restore_rule = await should_restore(rule_dict, "network")
+            
+            if should_restore_rule:
+                # Check if this rule already exists in the system
+                rule_exists = False
+                if "networks" in coordinator.data:
+                    rule_exists = rule_exists_in_collection(rule_dict, coordinator.data["networks"])
+                
+                try:
+                    if rule_exists and force_restore:
+                        # Use update method when the rule exists and we're forcing an update
+                        LOGGER.debug("Rule %s exists and force_restore is True, updating existing rule", rule_id)
+                        # Create NetworkConf object for update
+                        from ..models.network import NetworkConf
+                        network_obj = NetworkConf(rule_dict)
+                        await api.queue_api_operation(api.update_network, network_obj)
+                    elif rule_exists:
+                        # Rule exists but force_restore is False, so skip it
+                        LOGGER.debug("Rule %s already exists, skipping (use force_restore=True to update existing rules)", rule_id)
+                        skip_counts["networks"] += 1
+                    else:
+                        # Networks are typically infrastructure - adding new ones should be rare
+                        # Log this as a warning since it might be unexpected
+                        LOGGER.warning("Creating new network based on %s - this may affect infrastructure", rule_id)
+                        # For adding new networks, we typically don't remove the ID as they might need specific IDs
+                        # But we should be careful about this operation
+                        add_rule_dict = rule_dict.copy()
+                        if '_id' in add_rule_dict:
+                            del add_rule_dict['_id']  # Remove ID to let UniFi assign one
+                        
+                        # Note: There might not be an add_network method - networks are often pre-existing
+                        # Check if the method exists before calling
+                        if hasattr(api, "add_network"):
+                            await api.queue_api_operation(api.add_network, add_rule_dict)
+                        else:
+                            LOGGER.warning("API does not support adding new networks, skipping creation of %s", rule_id)
+                            skip_counts["networks"] += 1
+                            continue
+                    
+                    restore_counts["networks"] += 1
+                except Exception as err:
+                    LOGGER.error("Error restoring network %s: %s", rule_id, err)
+            else:
+                skip_counts["networks"] += 1
+        
+        LOGGER.info("Processed %d networks (restored: %d, skipped: %d)", 
+                  restore_counts["networks"] + skip_counts["networks"],
+                  restore_counts["networks"], 
+                  skip_counts["networks"])
+
     # Refresh data after restore
     await coordinator.async_refresh()
     
@@ -784,8 +904,8 @@ async def async_setup_backup_services(hass: HomeAssistant, coordinators: Dict) -
             vol.Optional("name_filter"): cv.string,
             vol.Optional("rule_types"): vol.All(
                 cv.ensure_list, 
-                [vol.In(["policy", "port_forward", "route", "qos_rule", "vpn_client"])],
-                description="Types of rules to restore: policy (firewall), port_forward, route (traffic routes), qos_rule (QoS rules), vpn_client (VPN clients)"
+                [vol.In(["policy", "port_forward", "route", "qos_rule", "vpn_client", "port_profile", "network"])],
+                description="Types of rules to restore: policy (firewall), port_forward, route (traffic routes), qos_rule (QoS rules), vpn_client (VPN clients), port_profile (switch port configurations), network (network configurations)"
             ),
         })
     )
