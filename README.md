@@ -10,7 +10,7 @@
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/sirkirby)
 
-UniFi Network Rules is a custom integration for Home Assistant that integrates with your UniFi Dream Machine/Router to both provide and help you create useful interactions and automations for your Home Lab. The goal of this integration is to simplify policy and rule management for real world use cases. I built this because I wanted to unlock the power of my UniFi firewall. From simple things like screen time and game server access controls for my kids, to more advanced like getting notified when a critical rule is changed. And most importantly, make all of this easy to use and share with anyone in your home or home lab. I hope you find it useful!
+UniFi Network Rules is a custom integration for Home Assistant that integrates with your UniFi Dream Machine/Router to both provide and help you create useful interactions and automations for your Home Lab. The goal of this integration is to simplify policy and rule management for real world use cases. I built this because I wanted to unlock the power of my UniFi firewall. From simple things like screen time and game server access controls for my kids, to more advanced like getting notified when a critical rule is changed and automatically backing up your rules. And most importantly, make all of this easy to use and share with anyone in your home or home lab. I hope you find it useful!
 
 ## What this integration provides
 
@@ -25,6 +25,8 @@ UniFi Network Rules is a custom integration for Home Assistant that integrates w
 - WireGuard Client and Server configurations
 - UniFi Device LEDs
 - WLAN SSIDs
+- Port Profiles (switch port configurations)
+- Networks (network configurations)
 
 ### Advanced automations powered by [Custom Triggers](#real-time-triggers-) and [Custom Services](#services)
 
@@ -72,6 +74,24 @@ THEN
 
 **Verify SSL**: Enable SSL certificate verification (defaults to disabled for self-signed certificates).
 
+### Advanced Smart Polling Options
+
+These options configure the intelligent polling system that provides near real-time updates. You can access these settings by going to **Settings → Devices & Services → UniFi Network Rules → Configure → Options**.
+
+**Base Interval** (default: 300 seconds): The standard polling interval when the system is idle and no recent activity has been detected. This is the baseline refresh rate that maintains system state without excessive API calls.
+
+**Active Interval** (default: 30 seconds): The faster polling interval used when recent activity has been detected. The system automatically switches to this mode after detecting changes to maintain responsiveness.
+
+**Realtime Interval** (default: 10 seconds): The fastest polling interval used immediately after detecting changes, providing near real-time updates. The system uses this for a short period after activity before stepping down to the active interval.
+
+**Activity Timeout** (default: 120 seconds): How long (in seconds) the system remains in active/realtime polling mode after the last detected activity before returning to the base interval. This balances responsiveness with resource usage.
+
+**Debounce Seconds** (default: 10 seconds): The debounce window for Home Assistant-initiated changes. When you toggle a switch in HA, the system waits this long before polling to allow the change to propagate, preventing unnecessary API calls from rapid successive changes.
+
+**Optimistic Timeout** (default: 15 seconds): Maximum time to show optimistic state updates in the UI before requiring confirmation from the UniFi controller. This provides instant feedback while ensuring accuracy.
+
+> **💡 Tip**: The default values work well for most setups. Only adjust these if you need faster response times (lower values) or want to reduce API load (higher values). The smart polling system automatically adapts based on activity levels.
+
 ## Services
 
 The integration provides several services focused on managing and automating existing UniFi Network rules:
@@ -106,8 +126,6 @@ actions:
       filename: unr_daily_backup.json
 mode: single
 ```
-
-<img src="./assets/backup_unr_button.png" alt="Backup UNR Button" width="200" />
 
 #### Example 2: Using Scripts with a Lovelace Button Card (More Customizable)
 
@@ -146,7 +164,7 @@ See below for more automation examples using [Services with Triggers](#service-a
 |---------|-------------|------------|
 | `unifi_network_rules.refresh_rules` | Manually refresh all network rules from the UniFi controller | None |
 | `unifi_network_rules.backup_rules` | Create a backup of all firewall policies and traffic routes | `filename`: Name of the backup file to create |
-| `unifi_network_rules.restore_rules` | Restore rules from a backup file | `filename`: Backup file to restore from<br>`name_filter`: (Optional) Only restore rules containing this string<br>`rule_ids`: (Optional) List of specific rule IDs to restore<br>`rule_types`: (Optional) List of rule types to restore (policy, port_forward, route, qos_rule) |
+| `unifi_network_rules.restore_rules` | Restore rules from a backup file | `filename`: Backup file to restore from<br>`name_filter`: (Optional) Only restore rules containing this string<br>`rule_ids`: (Optional) List of specific rule IDs to restore<br>`rule_types`: (Optional) List of rule types to restore (policy, port_forward, route, qos_rule, port_profile, network) |
 | `unifi_network_rules.bulk_update_rules` | Enable or disable multiple rules by name pattern | `state`: true (enable) or false (disable)<br>`name_filter`: String to match in rule names |
 | `unifi_network_rules.delete_rule` | Delete an existing firewall policy by ID | `rule_id`: ID of the rule to delete |
 | `unifi_network_rules.refresh_data` | Refresh data for a specific integration instance or all | `entry_id`: (Optional) Specific integration instance ID |
@@ -154,61 +172,85 @@ See below for more automation examples using [Services with Triggers](#service-a
 | `unifi_network_rules.force_cleanup` | Force cleanup of all entities in the integration | None |
 | `unifi_network_rules.force_remove_stale` | Force removal of stale or broken entities | `remove_all`: (Optional) Remove all entities instead of just stale ones |
 | `unifi_network_rules.apply_template` | Apply a predefined rule template | `template_id`: ID of the template to apply<br>`variables`: (Optional) Variables to use in the template |
-| `unifi_network_rules.save_template` | Save a rule as a template for reuse | `rule_id`: ID of the rule to save<br>`template_id`: ID to save the template as<br>`rule_type`: (Optional) Type of rule |
-| `unifi_network_rules.toggle_rule` | Toggle a specific rule on or off | `rule_id`: ID of the rule to toggle<br>`rule_type`: Type of the rule |
+| `unifi_network_rules.save_template` | Save a rule as a template for reuse | `rule_id`: UniFi rule ID (use `trigger.rule_id` in automations)<br>`template_id`: ID to save the template as<br>`rule_type`: (Optional) Type of rule - auto-detected if not provided |
+| `unifi_network_rules.toggle_rule` | Toggle a specific rule on or off | `rule_id`: UniFi rule ID (use `trigger.rule_id` in automations)<br>`rule_type`: (Optional) Type of the rule - auto-detected if not provided |
 
-> **Note**: For `rule_types` parameter, you can specify one or more of: `policy` (zone-based firewall rules), `port_forward` (port forwarding rules), `route` (traffic routes), or `qos_rule` (quality of service rules). See the "Understanding Rule Types" section for more details.
+> **Note**: For `rule_types` parameter, you can specify one or more of: `policy` (firewall policies), `port_forward` (port forwarding rules), `route` (traffic routes), `qos_rule` (quality of service rules), `port_profile` (switch port profiles), or `network` (network configurations). While not all of these are strictly "rules," they are all toggleable configuration entities. See the "Understanding Rule Types" section for more details.
 
-## Real-Time Triggers 🔔
+## Smart Polling Triggers 🔔
 
-UniFi Network Rules provides a **sophisticated trigger system** that gives you real-time notifications when network rules change, regardless of whether the changes originate from Home Assistant or directly from the UniFi console. This bi-directional monitoring enables powerful automations and monitoring scenarios.
+> **⚠️ BREAKING CHANGE**: Legacy triggers (`rule_enabled`, `rule_disabled`, `rule_changed`, `rule_deleted`, `device_changed`) have been **removed** and replaced with a unified `unr_changed` trigger system. See [Migration Guide](#trigger-migration-guide) below.
+
+UniFi Network Rules provides a **unified trigger system** powered by intelligent polling that gives you near real-time notifications when network rules change, regardless of whether the changes originate from Home Assistant or directly from the UniFi console.
 
 ### Key Features
 
 - **🔄 Bi-Directional Monitoring**: Triggers fire for changes made both from Home Assistant and directly from the UniFi console
-- **⚡ Real-Time Updates**: Uses UniFi OS websocket connections for instant notifications
-- **🎯 Granular Filtering**: Filter triggers by rule type, specific rule IDs, or rule name patterns
-- **📊 Rich Data**: Each trigger includes rule names, old/new states, and change details
-- **🛡️ Reliable Detection**: Smart state-diff approach ensures accurate change detection
+- **⚡ Smart Polling**: Intelligent polling with dynamic intervals (10s during activity, 5min when idle)
+- **🎯 Unified Interface**: Single `unr_changed` trigger with powerful filtering options
+- **📊 Rich Data**: Each trigger includes entity IDs, old/new states, timestamps, and metadata
+- **🛡️ Reliable Detection**: Centralized state comparison ensures accurate change detection
+- **🚀 Debounced Updates**: Batches rapid changes into single operations to prevent API spam
 
-### Trigger Types
+### The Unified Trigger
 
-| Trigger Type | Description | When It Fires |
-|--------------|-------------|---------------|
-| `rule_enabled` | Rule is enabled/activated | When a rule's enabled state changes from false to true |
-| `rule_disabled` | Rule is disabled/deactivated | When a rule's enabled state changes from true to false |
-| `rule_changed` | Rule configuration is modified | When any rule settings change (ports, IPs, names, etc.) |
-| `rule_deleted` | Rule is completely removed | When a rule is deleted from UniFi |
+**All events now use a single trigger type:** `unr_changed`
 
-### Supported Rule Types
+| Filter | Description | Example |
+|--------|-------------|---------|
+| `entity_id` | Monitor specific entity | `switch.unr_firewall_policy_abc123` |
+| `change_type` | Monitor entity type | `firewall_policy`, `traffic_route`, `port_forward` |
+| `change_action` | Monitor action type | `enabled`, `disabled`, `modified`, `created`, `deleted` |
+| `name_filter` | Filter by entity name | `"Guest Network"` (case-insensitive substring) |
 
-- **Firewall Policies** (`firewall_policies`): Zone-based firewall rules
-- **Port Forwards** (`port_forwards`): Port forwarding rules
-- **Traffic Routes** (`traffic_routes`): Network routing rules
-- **QoS Rules** (`qos_rules`): Quality of Service rules
-- **VPN Clients** (`vpn_clients`): VPN client configurations
-- **VPN Servers** (`vpn_servers`): VPN server configurations
-- **WLANs** (`wlans`): Wireless network configurations
+### Supported Entity Types
+
+- **Firewall Policies** (`firewall_policy`): Zone-based firewall rules
+- **Port Forwards** (`port_forward`): Port forwarding rules  
+- **Traffic Routes** (`traffic_route`): Network routing rules
+- **Traffic Rules** (`traffic_rule`): Legacy firewall rules
+- **QoS Rules** (`qos_rule`): Quality of Service rules
+- **VPN Clients** (`vpn_client`): VPN client configurations
+- **VPN Servers** (`vpn_server`): VPN server configurations
+- **WLANs** (`wlan`): Wireless network configurations
+- **Devices** (`device`): Device LED controls
+- **Port Profiles** (`port_profile`): Switch port profiles
+- **Networks** (`network`): Network configurations
 
 ### Setting Up Triggers
-
-#### Using the Automation UI
-
-**Note:** The VS Code editor validation and UI trigger selectors may show errors since Home Assistant's automation validator hasn't been updated to recognize custom trigger platforms in HA 2025.7.0. However, the triggers work correctly when configured in YAML format as shown below.
-
-1. Go to Settings → Automations & Scenes → Create Automation
-2. Choose "When" → Manual trigger
-3. Click "Edit in YAML" and use the YAML format shown below
-4. Configure your automation actions in the UI or YAML
 
 #### YAML Configuration
 
 ```yaml
 triggers:
   - trigger: unifi_network_rules
-    type: rule_enabled
-    rule_type: port_forwards  # Optional: filter by rule type
-    name_filter: "Minecraft"  # Optional: filter by rule name
+    type: unr_changed
+    change_type: firewall_policy    # Optional: filter by entity type
+    change_action: enabled          # Optional: filter by action type
+    name_filter: "Minecraft"       # Optional: filter by entity name
+```
+
+#### Advanced Examples
+
+```yaml
+# Monitor any firewall policy change
+triggers:
+  - trigger: unifi_network_rules
+    type: unr_changed
+    change_type: firewall_policy
+
+# Monitor specific entity
+triggers:  
+  - trigger: unifi_network_rules
+    type: unr_changed
+    entity_id: switch.unr_firewall_policy_abc123
+
+# Monitor multiple actions
+triggers:
+  - trigger: unifi_network_rules
+    type: unr_changed
+    change_action: [enabled, disabled]
+    name_filter: "Gaming"
 ```
 
 ### Available Trigger Data
@@ -217,16 +259,175 @@ Each trigger provides rich data you can use in conditions and actions:
 
 ```yaml
 # Available in automations as trigger.*
-rule_id: "64f1a2b3c4d5e6f7g8h9i0j1"  # Unique rule identifier (trigger.rule_id)
-rule_name: "Minecraft Server Access"    # Human-readable rule name (trigger.rule_name)
-rule_type: "port_forwards"              # Type of rule that changed (trigger.rule_type)
-type: "rule_enabled"                    # Which trigger fired (trigger.type)
-
-# Also available as trigger.event.* for some data:
-old_state: { ... }                      # Previous rule configuration (trigger.event.old_state)
-new_state: { ... }                      # New rule configuration (trigger.event.new_state)
-trigger_type: "rule_enabled"            # Which trigger fired (trigger.event.trigger_type)
+platform: "unifi_network_rules"         # Platform name
+type: "unr_changed"                      # Trigger type (always unr_changed)
+entity_id: "switch.unr_firewall_policy_abc123"  # HA entity ID
+unique_id: "unr_firewall_policy_abc123"  # Unique identifier
+rule_id: "64f1a2b3c4d5e6f7g8h9i0j1"     # UniFi rule ID
+change_type: "firewall_policy"           # Entity type that changed
+change_action: "enabled"                 # What happened (enabled/disabled/modified/created/deleted)
+entity_name: "Minecraft Server Access"   # Human-readable entity name
+old_state: { ... }                       # Previous rule configuration
+new_state: { ... }                       # New rule configuration  
+timestamp: "2025-08-27T10:30:00Z"        # When the change occurred
+source: "polling"                        # Always "polling" in new architecture
 ```
+
+### Example Usage in Templates
+
+```yaml
+# Use trigger data in notifications
+action: notify.mobile_app
+data:
+  title: "🔥 Network Rule Changed"
+  message: >
+    {{ trigger.entity_name }} was {{ trigger.change_action }}
+    Entity: {{ trigger.entity_id }}
+    Time: {{ trigger.timestamp }}
+
+# Use trigger data in service calls
+action: unifi_network_rules.toggle_rule
+data:
+  rule_id: "{{ trigger.rule_id }}"        # Clean UniFi rule ID from trigger
+  enabled: true
+
+# Example service calls
+action: unifi_network_rules.delete_rule
+data:
+  rule_id: "{{ trigger.rule_id }}"        # Use trigger data for clean automation
+  
+action: unifi_network_rules.save_template  
+data:
+  rule_id: "{{ trigger.rule_id }}"        # Consistent approach across all services
+  template_id: "my_vpn_template"
+```
+
+## Trigger Migration Guide 📝
+
+> **Required for users upgrading from previous versions with legacy triggers**
+
+### Overview
+
+**Legacy triggers have been completely removed** in favor of a unified, more powerful `unr_changed` trigger system. This is a **breaking change** that requires updating your automation files.
+
+### Migration Options
+
+#### Option 1: Automated Migration (Recommended)
+
+Use the migration utility script to automatically convert your automations:
+
+```bash
+# 1. Scan for legacy triggers
+python scripts/migrate_triggers.py --scan /config/automations.yaml
+
+# 2. Preview migration (dry-run)
+python scripts/migrate_triggers.py --migrate /config/automations.yaml --dry-run
+
+# 3. Apply migration (creates backup automatically)
+python scripts/migrate_triggers.py --migrate /config/automations.yaml --apply
+```
+
+#### Option 2: Manual Migration
+
+Update your automation triggers manually using the examples below.
+
+### Common Migration Patterns
+
+#### Basic State Changes
+```yaml
+# OLD (removed)
+trigger:
+  platform: unifi_network_rules
+  type: rule_enabled
+  rule_type: firewall_policies
+
+# NEW (required)
+trigger:
+  platform: unifi_network_rules
+  type: unr_changed
+  change_type: firewall_policy
+  change_action: enabled
+```
+
+#### Rule Disabled
+```yaml  
+# OLD (removed)
+trigger:
+  platform: unifi_network_rules
+  type: rule_disabled
+  rule_id: "abc123"
+
+# NEW (required)
+trigger:
+  platform: unifi_network_rules
+  type: unr_changed
+  entity_id: "switch.unr_firewall_policy_abc123"  # Convert rule_id to entity_id
+  change_action: disabled
+```
+
+#### Any Rule Change
+```yaml
+# OLD (removed) 
+trigger:
+  platform: unifi_network_rules
+  type: rule_changed
+  rule_type: port_forwards
+
+# NEW (required)
+trigger:
+  platform: unifi_network_rules
+  type: unr_changed
+  change_type: port_forward
+  change_action: [enabled, disabled, modified]
+```
+
+#### Rule Deletion
+```yaml
+# OLD (removed)
+trigger:
+  platform: unifi_network_rules
+  type: rule_deleted
+  name_filter: "Guest*"
+
+# NEW (required)
+trigger:
+  platform: unifi_network_rules
+  type: unr_changed
+  change_action: deleted
+  name_filter: "Guest"
+```
+
+#### Device Changes (LED)
+```yaml
+# OLD (removed)
+trigger:
+  platform: unifi_network_rules
+  type: device_changed
+  device_id: "aa:bb:cc:dd:ee:ff"
+  change_type: "led_toggled"
+
+# NEW (required)
+trigger:
+  platform: unifi_network_rules
+  type: unr_changed
+  change_type: device
+  entity_id: "switch.unr_device_aabbccddeeff_led"
+  change_action: [enabled, disabled]
+```
+
+### Benefits of New System
+
+- **🎯 More Precise Filtering**: Target specific entities, actions, or patterns
+- **📊 Richer Data**: Access to entity IDs, timestamps, and structured state data
+- **🔧 Simpler Configuration**: One trigger type instead of five
+- **⚡ Better Performance**: Smart polling reduces API load while maintaining responsiveness  
+- **🛡️ More Reliable**: No WebSocket dependency, consistent behavior
+
+### Need Help?
+
+- **Questions about migration?** [Open a Discussion](https://github.com/sirkirby/unifi-network-rules/discussions)
+- **Found a migration issue?** [Report a Bug](https://github.com/sirkirby/unifi-network-rules/issues)
+- **See examples below** for updated automation patterns
 
 ## Trigger Automation Examples
 
@@ -239,19 +440,18 @@ alias: Security Alert - Firewall Changes
 description: Alert when firewall rules are modified outside of HA
 triggers:
   - trigger: unifi_network_rules
-    type: rule_changed
-    rule_type: firewall_policies
-  - trigger: unifi_network_rules
-    type: rule_deleted
-    rule_type: firewall_policies
+    type: unr_changed
+    change_type: firewall_policy
+    change_action: [modified, deleted]
 conditions: []
 actions:
   - action: notify.mobile_app_admin_phone
     data:
       title: "🚨 Network Security Alert"
       message: >
-        Firewall rule "{{ trigger.event.rule_name }}" was {{ trigger.event.rule_type.replace('rule_', '') }}
-        Rule ID: {{ trigger.event.rule_id }}
+        Firewall rule "{{ trigger.entity_name }}" was {{ trigger.change_action }}
+        Entity: {{ trigger.entity_id }}
+        Time: {{ trigger.timestamp }}
       data:
         priority: high
         category: security
@@ -265,19 +465,19 @@ alias: UniFi Policy Changed
 description: UniFi Rule Changed Trigger
 triggers:
   - trigger: unifi_network_rules
-    type: rule_changed
-    rule_type: firewall_policies
+    type: unr_changed
+    change_type: firewall_policy
+    change_action: [enabled, disabled, modified]
 conditions: []
 actions:
   - data:
       title: >-
-        Firewall Policy {{ trigger.event.rule_name }} was {{
-        trigger.event.trigger_type.replace('rule_', '').upper() }}
+        Firewall Policy {{ trigger.entity_name }} was {{ trigger.change_action.upper() }}
       message: |-
-        {% if trigger.event.new_state %}
-          The {{ trigger.event.new_state.action }} policy '{{ trigger.event.rule_name }}' was updated. It is now {{ 'enabled' if trigger.event.new_state.enabled else 'disabled' }}.
+        {% if trigger.new_state %}
+          The {{ trigger.new_state.action }} policy '{{ trigger.entity_name }}' was updated. It is now {{ 'enabled' if trigger.new_state.enabled else 'disabled' }}.
         {% else %}
-          The policy '{{ trigger.event.rule_name }}' was deleted.
+          The policy '{{ trigger.entity_name }}' was deleted.
         {% endif %}
     action: persistent_notification.create
 mode: single
@@ -292,7 +492,8 @@ alias: Game Server Auto-Disable
 description: Disable Minecraft server if enabled during school hours
 triggers:
   - trigger: unifi_network_rules
-    type: rule_enabled
+    type: unr_changed
+    change_action: enabled
     name_filter: "Minecraft"
 conditions:
   - condition: time
@@ -308,12 +509,10 @@ conditions:
 actions:
   - delay:
       minutes: 5  # Give a 5-minute grace period
-  - action: switch.turn_off
-    target:
-      entity_id: >
-        {% set rule_id = trigger.event.rule_id %}
-        {% set entities = states.switch | selectattr('attributes.rule_id', 'eq', rule_id) | map(attribute='entity_id') | list %}
-        {{ entities[0] if entities else none }}
+  - action: unifi_network_rules.toggle_rule
+    data:
+      rule_id: "{{ trigger.rule_id }}"
+      enabled: false
   - action: notify.family_devices
     data:
       title: "🎮 Game Server Disabled"
@@ -330,14 +529,13 @@ alias: Auto-Backup on Critical Changes
 description: Backup rules when important firewall or VPN changes occur
 triggers:
   - trigger: unifi_network_rules
-    type: rule_changed
-    rule_type: firewall_policies
+    type: unr_changed
+    change_type: firewall_policy
+    change_action: [modified, deleted]
   - trigger: unifi_network_rules
-    type: rule_deleted
-    rule_type: firewall_policies
-  - trigger: unifi_network_rules
-    type: rule_changed
-    rule_type: vpn_servers
+    type: unr_changed
+    change_type: vpn_server
+    change_action: [enabled, disabled, modified]
 conditions:
   # Only backup if it's been more than 1 hour since last backup
   - condition: template
@@ -353,8 +551,8 @@ actions:
     data:
       title: "📁 Network Rules Backed Up"
       message: >
-        Automatic backup created due to {{ trigger.event.trigger_type.replace('rule_', '') }} 
-        of {{ trigger.event.rule_type.replace('_', ' ').title() }}: "{{ trigger.event.rule_name }}"
+        Automatic backup created due to {{ trigger.change_action }} 
+        of {{ trigger.change_type.replace('_', ' ').title() }}: "{{ trigger.entity_name }}"
 mode: single
 ```
 
@@ -367,19 +565,21 @@ alias: Reconnect VPN Client
 description: Monitor when a specific VPN client disconnects and reconnect
 triggers:
   - trigger: unifi_network_rules
-    type: rule_disabled
-    rule_type: vpn_clients
+    type: unr_changed
+    change_type: vpn_client
+    change_action: disabled
     name_filter: "NordVPN-Chicago"
 actions:
   - action: unifi_network_rules.toggle_rule
     data:
-      rule_id: "{{ trigger.event.rule_id }}"
+      rule_id: "{{ trigger.rule_id }}"      # Direct UniFi ID (recommended)
       enabled: true
+      # Note: rule_type auto-detected from ID, no need to specify
   - action: persistent_notification.create
     data:
       title: "🔒 Attempting to reconnect VPN"
       message: >
-        VPN "{{ trigger.event.rule_name }}" was disconnected, attempting to reconnect
+        VPN "{{ trigger.entity_name }}" was disconnected, attempting to reconnect
 mode: parallel
 ```
 
@@ -388,13 +588,15 @@ alias: VPN Client connected
 description: Notify when VPN clients connect
 triggers:
   - trigger: unifi_network_rules
-    type: rule_enabled
-    rule_type: vpn_clients
+    type: unr_changed
+    change_type: vpn_client
+    change_action: enabled
+actions:
   - action: persistent_notification.create
     data:
       title: "🔒 VPN Connected"
       message: >
-        VPN "{{ trigger.event.rule_name }}" was connected
+        VPN "{{ trigger.entity_name }}" was connected
 ```
 
 ### 5. Kids' Device Management with Notifications
@@ -406,23 +608,22 @@ alias: Parental Control Monitor
 description: Track changes to kids' internet access rules
 triggers:
   - trigger: unifi_network_rules
-    type: rule_enabled
+    type: unr_changed
+    change_action: [enabled, disabled]
     name_filter: "Kid"
   - trigger: unifi_network_rules
-    type: rule_disabled
-    name_filter: "Kid"
-  - trigger: unifi_network_rules
-    type: rule_changed
+    type: unr_changed
+    change_action: modified
     name_filter: "Block"
 actions:
   - action: logbook.log
     data:
       name: "Parental Controls"
       message: >
-        {{ trigger.event.rule_name }} was {{ trigger.event.trigger_type.replace('rule_', '') }}
-        {% if trigger.event.trigger_type == 'rule_enabled' %}
+        {{ trigger.entity_name }} was {{ trigger.change_action }}
+        {% if trigger.change_action == 'enabled' %}
         ✅ Internet access restored
-        {% elif trigger.event.trigger_type == 'rule_disabled' %}
+        {% elif trigger.change_action == 'disabled' %}
         🚫 Internet access blocked
         {% else %}
         🔧 Settings modified
@@ -431,7 +632,7 @@ actions:
   - action: notify.parents_devices
     data:
       title: "👨‍👩‍👧‍👦 Parental Control Update"
-      message: "{{ trigger.event.rule_name }} - {{ trigger.event.trigger_type.replace('rule_', '').title() }}"
+      message: "{{ trigger.entity_name }} - {{ trigger.change_action.title() }}"
 mode: parallel
 ```
 
@@ -444,11 +645,8 @@ alias: Update Network Stats
 description: Update dashboard counters for network changes
 triggers:
   - trigger: unifi_network_rules
-    type: rule_enabled
-  - trigger: unifi_network_rules
-    type: rule_disabled
-  - trigger: unifi_network_rules
-    type: rule_changed
+    type: unr_changed
+    change_action: [enabled, disabled, modified]
 actions:
   - action: counter.increment
     target:
@@ -458,7 +656,7 @@ actions:
       entity_id: input_text.last_network_change
     data:
       value: >
-        {{ now().strftime('%H:%M') }}: {{ trigger.event.rule_name }} ({{ trigger.event.trigger_type.replace('rule_', '') }})
+        {{ now().strftime('%H:%M') }}: {{ trigger.entity_name }} ({{ trigger.change_action }})
   - action: input_datetime.set_datetime
     target:
       entity_id: input_datetime.last_rule_change
@@ -474,11 +672,13 @@ mode: parallel
 ```yaml
 triggers:
   - trigger: unifi_network_rules
-    type: rule_changed
-    rule_type: port_forwards
+    type: unr_changed
+    change_type: port_forward
+    change_action: [enabled, disabled, modified]
   - trigger: unifi_network_rules
-    type: rule_changed
-    rule_type: vpn_clients
+    type: unr_changed
+    change_type: vpn_client
+    change_action: [enabled, disabled, modified]
 ```
 
 #### Filter by Specific Rule Names
@@ -486,17 +686,19 @@ triggers:
 ```yaml
 triggers:
   - trigger: unifi_network_rules
-    type: rule_enabled
+    type: unr_changed
+    change_action: enabled
     name_filter: "Gaming"  # Matches any rule containing "Gaming"
 ```
 
-#### Monitor Specific Rule ID
+#### Monitor Specific Entity
 
 ```yaml
 triggers:
   - trigger: unifi_network_rules
-    type: rule_changed
-    rule_id: "64f1a2b3c4d5e6f7g8h9i0j1"  # Monitor one specific rule
+    type: unr_changed
+    entity_id: "switch.unr_firewall_policy_abc123"  # Monitor one specific entity
+    change_action: [enabled, disabled, modified]
 ```
 
 ### Best Practices for Triggers
@@ -676,7 +878,11 @@ The UniFi Network Rules integration supports several types of rules:
 
 4. **QoS Rules (qos_rule)**: Quality of Service rules that prioritize certain types of traffic on your network. These rules can ensure critical applications (like video conferencing) get bandwidth priority over less time-sensitive applications.
 
-5. **Legacy Rules**: For older UniFi OS versions, there are also legacy_firewall and legacy_traffic rule types, which are mapped to "policy" when using the service.
+5. **Port Profiles (port_profile)**: Switch port configurations that define how network ports are configured, including VLAN assignments, PoE settings, and operational modes. These control the behavior of individual switch ports.
+
+6. **Networks (network)**: Network configurations that define VLANs and network segments in your UniFi environment. These control the fundamental network infrastructure and IP addressing schemes.
+
+7. **Legacy Rules**: For older UniFi OS versions, there are also legacy_firewall and legacy_traffic rule types, which are mapped to "policy" when using the service.
 
 ## Local Development
 
