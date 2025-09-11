@@ -112,8 +112,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         ("vpn_clients", coordinator.vpn_clients, UnifiVPNClientSwitch),
         ("vpn_servers", coordinator.vpn_servers, UnifiVPNServerSwitch),
         ("port_profiles", coordinator.port_profiles, UnifiPortProfileSwitch),
-        # Filter networks to exclude all VPN forms (purpose and vpn_type)
-        ("networks", filter_switchable_networks(coordinator.networks or []), UnifiNetworkSwitch),
+        # Networks are now pre-filtered in coordinator (no VPN, no default)
+        ("networks", coordinator.networks or [], UnifiNetworkSwitch),
     ]
 
     for rule_type, rules, entity_class in all_rule_sources:
@@ -700,7 +700,9 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                    self._rule_id, enable)
         
         # Register the operation with the coordinator to prevent redundant refreshes.
-        self.coordinator.register_ha_initiated_operation(self._rule_id)
+        change_type = "enabled" if enable else "disabled"
+        entity_id = self.entity_id or f"switch.{self._rule_id}"
+        self.coordinator.register_ha_initiated_operation(self._rule_id, entity_id, change_type)
         
         # Define callback to handle operation completion
         async def handle_operation_complete(future):
@@ -1438,7 +1440,9 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
             self.coordinator._pending_operations[kill_switch_operation_id] = enable
         
         # Register the operation with the coordinator to prevent redundant refreshes.
-        self.coordinator.register_ha_initiated_operation(self._rule_id)
+        change_type = "enabled" if enable else "disabled"
+        entity_id = self.entity_id or f"switch.{self._rule_id}_kill_switch"
+        self.coordinator.register_ha_initiated_operation(self._rule_id, entity_id, change_type)
         
         # Queue the toggle operation
         try:
@@ -1588,7 +1592,9 @@ class UnifiLedToggleSwitch(UnifiRuleSwitch):
             device_id = getattr(self._device, 'mac', self._rule_id)
             
             # Use existing CQRS pattern to track this HA-initiated operation
-            self.coordinator.register_ha_initiated_operation(device_id)
+            change_type = "enabled" if enable else "disabled"
+            entity_id = self.entity_id or f"switch.{self._rule_id}_led"
+            self.coordinator.register_ha_initiated_operation(device_id, entity_id, change_type)
             
             if LOG_TRIGGERS:
                 LOGGER.info("🔥 LED IMMEDIATE TRIGGER: Firing device trigger for %s (%s): LED %s → %s", 

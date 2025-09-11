@@ -21,6 +21,7 @@ from .constants import (
     CONF_NAME_FILTER,
     CONF_STATE,
 )
+from ..helpers.id_parser import parse_rule_id, validate_rule_type
 
 # Schema for toggle_rule service
 TOGGLE_RULE_SCHEMA = vol.Schema(
@@ -69,6 +70,8 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
     enabled = call.data["enabled"]
     rule_type = call.data.get(CONF_RULE_TYPE)
     
+    LOGGER.debug("Toggle rule service called with rule_id: %s, enabled: %s, rule_type: %s", rule_id, enabled, rule_type)
+    
     # Check if we have any coordinators
     if not coordinators:
         LOGGER.error("No UniFi Network Rules coordinators available")
@@ -78,16 +81,25 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
     if not rule_id:
         raise HomeAssistantError("Rule ID is required")
     
-    # The rule_id might be prefixed with our custom prefix (e.g., unr_route_abc123)
-    # Extract just the real ID if needed
-    if "_" in rule_id:
-        parts = rule_id.split("_", 2)
-        if len(parts) == 3 and parts[0] == "unr":
-            # This appears to be our prefixed ID format
-            # parts[1] would be the type hint (route, policy, etc)
-            real_id = parts[2]
-            LOGGER.debug("Extracted ID %s from prefixed ID %s", real_id, rule_id)
-            rule_id = real_id
+    # Parse and normalize the rule ID using helper
+    original_rule_id = rule_id  # Keep for logging
+    LOGGER.debug("[TOGGLE_RULE] Original rule_id from automation: %s", original_rule_id)
+    rule_id, detected_rule_type = parse_rule_id(rule_id, rule_type)
+    LOGGER.debug("[TOGGLE_RULE] Parsed rule_id: %s, detected_type: %s", rule_id, detected_rule_type)
+    
+    # Validate we got a clean ID
+    if not rule_id:
+        raise HomeAssistantError(f"Invalid rule_id format: {original_rule_id}")
+    
+    # Use detected rule type if none was provided
+    if not rule_type and detected_rule_type:
+        rule_type = detected_rule_type
+        
+    # Validate rule type if provided
+    if rule_type:
+        LOGGER.debug("[TOGGLE_RULE] Validating rule_type: %s", rule_type)
+        if not validate_rule_type(rule_type):
+            raise HomeAssistantError(f"Unsupported rule type: {rule_type}")
     
     success = False
     
@@ -120,6 +132,15 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
         elif rule_type == "vpn_servers":
             servers = await api.get_vpn_servers()
             return next((s for s in servers if s.id == rule_id), None)
+        elif rule_type == "port_profiles":
+            profiles = await api.get_port_profiles()
+            return next((p for p in profiles if p.get("_id") == rule_id or p.get("id") == rule_id), None)
+        elif rule_type == "networks":
+            networks = await api.get_networks()
+            return next((n for n in networks if n.id == rule_id), None)
+        elif rule_type == "devices":
+            devices = await api.get_device_led_states()
+            return next((d for d in devices if d.mac == rule_id or d.id == rule_id), None)
         return None
         
     # Function to toggle rule based on its type
@@ -140,6 +161,19 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
             return await api.queue_api_operation(api.toggle_wlan, rule_obj)
         elif rule_type in ["vpn_clients", "vpn_servers"]:
             return await api.queue_api_operation(api.toggle_vpn_config, rule_obj)
+        elif rule_type == "port_profiles":
+            return await api.queue_api_operation(api.toggle_port_profile, rule_obj)
+        elif rule_type == "networks":
+            # Networks use custom toggle logic with enabled state
+            async def network_toggle_wrapper(network_obj):
+                # Force the desired enabled state in the payload
+                if hasattr(network_obj, 'raw'):
+                    network_obj.raw["enabled"] = enabled
+                return await api.update_network(network_obj)
+            return await api.queue_api_operation(network_toggle_wrapper, rule_obj)
+        elif rule_type == "devices":
+            # Device LEDs use set_device_led with enabled state
+            return await api.queue_api_operation(api.set_device_led, rule_obj, enabled)
         return False
 
     for coordinator in coordinators.values():
@@ -154,7 +188,7 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
                         break
             else:
                 # If rule_type is not specified, try all types
-                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules", "qos_rules", "wlans", "vpn_clients", "vpn_servers"]:
+                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules", "qos_rules", "wlans", "vpn_clients", "vpn_servers", "port_profiles", "networks", "devices"]:
                     try:
                         rule_obj = await get_rule_by_id(api, type_name, rule_id)
                         if rule_obj:
@@ -184,6 +218,8 @@ async def async_delete_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
     rule_id = call.data[CONF_RULE_ID]
     rule_type = call.data.get(CONF_RULE_TYPE)
     
+    LOGGER.debug("Delete rule service called with rule_id: %s, rule_type: %s", rule_id, rule_type)
+    
     # Check if we have any coordinators
     if not coordinators:
         LOGGER.error("No UniFi Network Rules coordinators available")
@@ -193,16 +229,21 @@ async def async_delete_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
     if not rule_id:
         raise HomeAssistantError("Rule ID is required")
     
-    # The rule_id might be prefixed with our custom prefix (e.g., unr_route_abc123)
-    # Extract just the real ID if needed
-    if "_" in rule_id:
-        parts = rule_id.split("_", 2)
-        if len(parts) == 3 and parts[0] == "unr":
-            # This appears to be our prefixed ID format
-            # parts[1] would be the type hint (route, policy, etc)
-            real_id = parts[2]
-            LOGGER.debug("Extracted ID %s from prefixed ID %s", real_id, rule_id)
-            rule_id = real_id
+    # Parse and normalize the rule ID using helper
+    original_rule_id = rule_id  # Keep for logging
+    rule_id, detected_rule_type = parse_rule_id(rule_id, rule_type)
+    
+    # Validate we got a clean ID
+    if not rule_id:
+        raise HomeAssistantError(f"Invalid rule_id format: {original_rule_id}")
+    
+    # Use detected rule type if none was provided
+    if not rule_type and detected_rule_type:
+        rule_type = detected_rule_type
+        
+    # Validate rule type if provided
+    if rule_type and not validate_rule_type(rule_type):
+        raise HomeAssistantError(f"Unsupported rule type: {rule_type}")
             
     # Helper function to delete rule by type using the API queue
     async def delete_rule(api, rule_type, rule_id):
@@ -221,6 +262,10 @@ async def async_delete_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
             return await api.queue_api_operation(api.remove_qos_rule, rule_id)
         elif rule_type in ["vpn_clients", "vpn_servers"]:
             return await api.queue_api_operation(api.remove_vpn_config, rule_id)
+        elif rule_type == "port_profiles":
+            return await api.queue_api_operation(api.remove_port_profile, rule_id)
+        # Note: Networks and devices are not supported for deletion via this service
+        # Networks are infrastructure components and devices are physical hardware
         return False
     
     success = False
@@ -234,8 +279,8 @@ async def async_delete_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
                     LOGGER.info("Successfully deleted rule %s of type %s", rule_id, rule_type)
                     break
             else:
-                # Try all rule types that can be deleted
-                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules", "qos_rules", "vpn_clients", "vpn_servers"]:
+                # Try all rule types that can be deleted (excludes networks and devices)
+                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules", "qos_rules", "vpn_clients", "vpn_servers", "port_profiles"]:
                     try:
                         if await delete_rule(api, type_name, rule_id):
                             success = True
@@ -294,6 +339,18 @@ async def async_bulk_update_rules(hass: HomeAssistant, coordinators: Dict, call:
                 return await api.queue_api_operation(api.toggle_wlan, rule_obj)
             elif rule_type in ["vpn_clients", "vpn_servers"]:
                 return await api.queue_api_operation(api.toggle_vpn_config, rule_obj)
+            elif rule_type == "port_profiles":
+                return await api.queue_api_operation(api.toggle_port_profile, rule_obj)
+            elif rule_type == "networks":
+                # Networks use custom toggle logic with enabled state
+                async def network_toggle_wrapper(network_obj):
+                    if hasattr(network_obj, 'raw'):
+                        network_obj.raw["enabled"] = desired_state
+                    return await api.update_network(network_obj)
+                return await api.queue_api_operation(network_toggle_wrapper, rule_obj)
+            elif rule_type == "devices":
+                # Device LEDs use set_device_led with desired state
+                return await api.queue_api_operation(api.set_device_led, rule_obj, desired_state)
         return True  # Already in desired state
 
     entity_registry = async_get_entity_registry(hass)
