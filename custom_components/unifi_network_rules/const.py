@@ -36,10 +36,9 @@ DEFAULT_SITE = "default"
 DEFAULT_PORT = 443
 
 # Timers and retry values
-DEFAULT_UPDATE_INTERVAL: Final = 300  # 5 minutes - longer interval is fine since websocket provides real-time updates
+DEFAULT_UPDATE_INTERVAL: Final = 300  # 5 minutes - smart polling manages real-time updates
 DEFAULT_RETRY_TIMER = 30  # seconds - Time between retries for failed commands
 DEFAULT_TIMEOUT = 10
-DEFAULT_WEBSOCKET_RECONNECT_DELAY = 30  # seconds - Time to wait before reconnecting after websocket error
 
 # Web Socket Events
 WS_EVENT_TYPE = "type"
@@ -48,7 +47,7 @@ WS_EVENT_META = "meta"
 WS_EVENT_MESSAGE = "message"
 
 # Debug related constants
-DEBUG_WEBSOCKET = False  # Set to True to enable detailed WebSocket debug logging
+DEBUG_WEBSOCKET = False  # DEPRECATED
 
 # Define logger
 LOGGER = logging.getLogger(__package__)
@@ -61,29 +60,25 @@ LOGGER = logging.getLogger(__package__)
 #     aiounifi: debug
 
 # More targeted debugging flags - enable only what you need
-LOG_WEBSOCKET: Final = False  # WebSocket connection/reconnection logs
+LOG_WEBSOCKET: Final = False  # DEPRECATED
 LOG_API_CALLS: Final = False  # API requests and responses
 LOG_DATA_UPDATES: Final = False  # Data refresh and update cycles 
 LOG_ENTITY_CHANGES: Final = False  # Entity addition/removal/state changes
-LOG_TRIGGERS: Final = False  # Trigger detection and firing logs - ENABLED FOR STATE-DIFF DEBUGGING
+LOG_TRIGGERS: Final = False  # Trigger detection and firing logs
 
-# For backwards compatibility - will be removed in a future update
-# Use LOG_WEBSOCKET instead
-DEBUG_WEBSOCKET: Final = LOG_WEBSOCKET  # Use LOG_WEBSOCKET instead
 
 # Integration services
 SERVICE_SYNC_DEVICE: Final = "sync_device"
 SERVICE_REFRESH_ALL: Final = "refresh_all"
 
 # Signal dispatchers
-SIGNAL_WEBSOCKET_EVENT = "unifi_network_rules_websocket"
 SIGNAL_ADD_FIREWALL_RULE = "unifi_network_rules_add_firewall_rule"
 
 # Default UniFi site
 DEFAULT_SITE: Final = "default"
 
 # Data update interval
-DEFAULT_UPDATE_INTERVAL: Final = 300  # 5 minutes - longer interval is fine since websocket provides real-time updates
+DEFAULT_UPDATE_INTERVAL: Final = 300  # 5 minutes - smart polling manages real-time updates
 
 # Maximum number of failed attempts
 MAX_FAILED_ATTEMPTS: Final = 5
@@ -103,8 +98,6 @@ DEFAULT_SITE = "default"
 EVENT_RULE_UPDATED = f"{DOMAIN}_rule_updated"
 EVENT_RULE_DELETED = f"{DOMAIN}_rule_deleted"
 
-# WebSocket signals
-SIGNAL_WEBSOCKET_EVENT = f"{DOMAIN}_websocket_event"
 
 # Services
 SERVICE_APPLY_TEMPLATE = "apply_template"

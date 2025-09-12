@@ -31,7 +31,6 @@ from .helpers.rule import (
     get_child_unique_id, 
     get_child_entity_id,
     extract_descriptive_name,
-    filter_switchable_networks,
 )
 from .models.vpn_config import VPNConfig
 from .models.port_profile import PortProfile
@@ -80,7 +79,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         and entry.platform == DOMAIN 
         and entry.unique_id
     }
-    # LOGGER.debug("Initialized known_unique_ids from registry (count: %d): %s", len(coordinator.known_unique_ids), sorted(list(coordinator.known_unique_ids))) # ADDED detailed log
     LOGGER.debug("Initialized known_unique_ids from registry: %d entries", len(coordinator.known_unique_ids))
     
     # --- Trigger an immediate refresh after initial known_ids population ---
@@ -90,8 +88,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     LOGGER.debug("Initial coordinator refresh completed")
 
     # Initialize as empty, coordinator will manage it
-    # if not hasattr(coordinator, 'known_unique_ids'): # Initialize only if it doesn't exist (e.g. first load)
-    #     coordinator.known_unique_ids = set()
     # Do NOT clear on reload, let coordinator handle sync
 
     # --- Store add_entities callback --- 
@@ -726,11 +722,11 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                     # if the change was confirmed by the trigger system (which consumes the
                     # HA-initiated operation flag). If not, it forces a refresh.
                     async def delayed_verification():
-                        await asyncio.sleep(SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS) # Wait 7 seconds for websocket event
+                        await asyncio.sleep(SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS) # Wait 7 seconds for smart polling update
                         if self.coordinator.check_and_consume_ha_initiated_operation(self._rule_id):
                             # If the flag was still present, it means the trigger system
-                            # did NOT get a websocket event. We must refresh.
-                            LOGGER.warning("Delayed verification: Trigger did not receive websocket event for %s. Forcing refresh.", self._rule_id)
+                            # did NOT get a change event. We must refresh.
+                            LOGGER.warning("Delayed verification: Trigger did not receive change event for %s. Forcing refresh.", self._rule_id)
                             await self.coordinator.async_request_refresh()
                         else:
                             # The flag was already consumed, so the trigger worked correctly.
@@ -865,7 +861,6 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         # This function is primarily for reacting to EXTERNAL removal signals.
         # Proactive removal initiated by _handle_coordinator_update uses async_initiate_self_removal.
         if removed_entity_id != self._rule_id:
-            # LOGGER.debug("Ignoring removal signal for %s (not matching %s)", removed_entity_id, self._rule_id)
             return
 
         LOGGER.info("Received external removal signal for entity %s (%s). Initiating cleanup.",
@@ -965,7 +960,7 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         self.hass.data[DOMAIN]['entities'][self.entity_id] = self
         LOGGER.debug("Stored entity %s in hass.data[%s]['entities']", self.entity_id, DOMAIN)
 
-        # ADDED: Perform global unique ID tracking here
+        # Perform global unique ID tracking here
         if self.unique_id in _CREATED_UNIQUE_IDS:
              # This case should ideally not happen if setup_entry filtering works,
              # but log if it does.
@@ -1027,9 +1022,6 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         )
 
         # --- Ensure initial state is based on current coordinator data --- 
-        # LOGGER.debug("%s(%s): Explicitly calling _handle_coordinator_update in async_added_to_hass.",
-        #              type(self).__name__, self.entity_id or self.unique_id)
-        # self._handle_coordinator_update() # REMOVED - Process current data before first write
 
         # Make sure the entity is properly registered in the entity registry
         try:
@@ -1047,7 +1039,6 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                 LOGGER.debug("Entity already exists in registry: %s", existing_entity)
                 # Don't try to update the entity_id - this has been causing problems
                 # Just force a state update to ensure it's current
-                # self.async_write_ha_state() # Moved lower
             else:
                 # Register the entity with our consistent ID format
                 try:

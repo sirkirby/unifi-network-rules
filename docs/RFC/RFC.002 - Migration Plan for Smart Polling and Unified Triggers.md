@@ -15,6 +15,7 @@ Provide a comprehensive migration strategy for users to transition from the lega
 ## Current Implementation Status
 
 ### ✅ **Phase 1: Foundation (Completed)**
+
 - Smart polling architecture implemented
 - Unified change detection system active
 - New `unr_changed` trigger available
@@ -22,12 +23,14 @@ Provide a comprehensive migration strategy for users to transition from the lega
 - **Dual trigger emission** - Both legacy AND new triggers fire simultaneously
 
 ### 🔄 **Phase 2: Transition Period (Current)**
+
 - Legacy triggers marked as deprecated but fully functional
 - New `unr_changed` trigger available for early adopters
 - Documentation and migration examples provided
 - User education and community engagement
 
 ### 📋 **Phase 3: Legacy Removal (Future)**
+
 - Timeline: TBD based on adoption metrics
 - Complete removal of legacy trigger code
 - Performance optimizations post-cleanup
@@ -45,6 +48,7 @@ We implement a **clean architectural break** with comprehensive migration suppor
 5. **Clear error messages** directing to migration guide
 
 ### **Benefits of This Approach**
+
 - ✅ **Clean, maintainable codebase** without legacy burden
 - ✅ **Simplified architecture** - no dual system complexity
 - ✅ **Better performance** without legacy overhead
@@ -59,6 +63,7 @@ We implement a **clean architectural break** with comprehensive migration suppor
 **Status:** Implemented
 
 **Deliverables:**
+
 - [x] Smart polling system with dynamic intervals
 - [x] Unified change detection engine
 - [x] New `unr_changed` trigger implementation
@@ -67,6 +72,7 @@ We implement a **clean architectural break** with comprehensive migration suppor
 - [x] Updated `triggers.yaml` with new trigger definition
 
 **Technical Details:**
+
 ```python
 # Both triggers fire for the same event
 await self._fire_new_unified_trigger(change)  # New system
@@ -79,6 +85,7 @@ await self._fire_legacy_triggers(change)      # Legacy compatibility
 **Status:** In Progress
 
 **Objectives:**
+
 - Educate users about new trigger system
 - Provide migration tools and documentation
 - Monitor adoption metrics
@@ -86,6 +93,7 @@ await self._fire_legacy_triggers(change)      # Legacy compatibility
 - Maintain full backward compatibility
 
 **Deliverables:**
+
 - [ ] Comprehensive migration documentation
 - [ ] Automation migration utility (optional)
 - [ ] Community education and examples
@@ -94,6 +102,7 @@ await self._fire_legacy_triggers(change)      # Legacy compatibility
 - [ ] User feedback collection
 
 **Migration Documentation:**
+
 ```yaml
 # Example migration patterns:
 
@@ -114,6 +123,7 @@ trigger:
 ```
 
 **Success Criteria:**
+
 - Legacy triggers continue to work without issues
 - New triggers demonstrate improved reliability
 - Community feedback is positive
@@ -126,12 +136,14 @@ trigger:
 **Status:** Planning
 
 **Trigger Conditions:**
+
 - >80% of active users have migrated to new triggers
 - New system proven stable for >6 months
 - Community consensus for migration
 - No major blocking issues reported
 
 **Implementation Steps:**
+
 1. **Final migration notice** (3 months advance warning)
 2. **Enhanced deprecation warnings** (1 month before removal)
 3. **Legacy trigger removal** from codebase
@@ -139,6 +151,7 @@ trigger:
 5. **Documentation updates**
 
 **Deliverables:**
+
 - [ ] Final migration timeline announcement
 - [ ] Enhanced deprecation warnings with specific migration guidance
 - [ ] Legacy code removal
@@ -164,6 +177,7 @@ python scripts/migrate_triggers.py --migrate /config/automations.yaml --apply
 ```
 
 **Features:**
+
 - Backup creation before changes
 - Dry-run mode for safe testing
 - Detailed migration report
@@ -173,6 +187,7 @@ python scripts/migrate_triggers.py --migrate /config/automations.yaml --apply
 ### **Migration Examples**
 
 #### **Basic Rule State Triggers**
+
 ```yaml
 # Before
 automation:
@@ -203,6 +218,7 @@ automation:
 ```
 
 #### **Complex Multi-Action Triggers**
+
 ```yaml
 # Before (multiple triggers needed)
 automation:
@@ -229,6 +245,7 @@ automation:
 ```
 
 #### **Device State Changes**
+
 ```yaml
 # Before
 automation:
@@ -253,18 +270,21 @@ automation:
 ## Monitoring and Success Metrics
 
 ### **Adoption Metrics**
+
 - Percentage of legacy vs unified triggers in active use
 - Number of automations using each trigger type
 - Community feedback and issue reports
 - Performance impact measurements
 
 ### **Quality Metrics**
+
 - Trigger reliability (false positives/negatives)
 - Response time consistency
 - Memory and CPU usage impact
 - Error rates in change detection
 
 ### **User Experience Metrics**
+
 - Documentation clarity ratings
 - Migration utility usage and success rates
 - Community forum feedback sentiment
@@ -275,24 +295,30 @@ automation:
 ### **High-Risk Items**
 
 #### **1. User Resistance to Migration**
+
 **Risk:** Users may not migrate during transition period
-**Mitigation:** 
+**Mitigation:**
+
 - Maintain full backward compatibility indefinitely if needed
 - Provide clear benefits documentation
 - Offer migration assistance
 - Gradual approach with no forced timeline
 
 #### **2. Dual System Complexity**
+
 **Risk:** Maintaining both systems increases complexity and potential bugs
 **Mitigation:**
+
 - Comprehensive testing of both systems
 - Clear separation of legacy and unified code paths
 - Monitoring for performance impact
 - Regular review of dual emission logic
 
 #### **3. New System Bugs**
+
 **Risk:** New trigger system may have undiscovered issues
 **Mitigation:**
+
 - Extensive testing in real environments
 - Gradual rollout approach
 - Easy rollback mechanisms
@@ -301,15 +327,19 @@ automation:
 ### **Medium-Risk Items**
 
 #### **4. Performance Impact**
+
 **Risk:** Dual trigger emission may impact performance
 **Mitigation:**
+
 - Performance monitoring and optimization
 - Conditional legacy emission (opt-in/opt-out)
 - Efficient signal dispatch implementation
 
 #### **5. Documentation Maintenance**
+
 **Risk:** Maintaining docs for both systems is complex
 **Mitigation:**
+
 - Clear versioning of documentation
 - Automated generation where possible
 - Community contribution encouragement
@@ -318,31 +348,36 @@ automation:
 
 ### **Phase 2: Transition Period (6-12 months)**
 
-**Month 1-2: Documentation and Tools**
+#### **Month 1-2: Documentation and Tools**
+
 - [ ] Complete migration documentation
 - [ ] Release migration utility (if needed)
 - [ ] Community announcement and education
 - [ ] Performance baseline establishment
 
-**Month 3-4: Early Adoption**
+#### **Month 3-4: Early Adoption**
+
 - [ ] Encourage early adopter feedback
 - [ ] Monitor new trigger system stability
 - [ ] Address any reported issues
 - [ ] Refine documentation based on feedback
 
-**Month 5-6: Mid-Transition Assessment**
+#### **Month 5-6: Mid-Transition Assessment**
+
 - [ ] Analyze adoption metrics
 - [ ] Performance impact assessment
 - [ ] Community feedback evaluation
 - [ ] Decide on Phase 3 timeline
 
-**Month 7-12: Continued Support**
+#### **Month 7-12: Continued Support**
+
 - [ ] Ongoing support for both systems
 - [ ] Performance optimizations
 - [ ] Additional migration examples
 - [ ] Prepare for Phase 3 if metrics support it
 
 ### **Phase 3: Legacy Sunset (TBD)**
+
 - Final timeline will be determined based on Phase 2 success metrics
 - Minimum 3-month advance notice before any breaking changes
 - Community consensus required before proceeding
@@ -350,18 +385,21 @@ automation:
 ## Communication Plan
 
 ### **User Education**
+
 - Blog posts explaining benefits of new trigger system
 - Video tutorials for common migration patterns
 - Community forum discussions and Q&A
 - Updated integration documentation
 
 ### **Developer Communication**
+
 - Clear commit messages and PR descriptions
 - Changelog entries with migration guidance
 - Release notes highlighting deprecation timeline
 - Community Discord/forum engagement
 
 ### **Support Strategy**
+
 - Dedicated support for migration questions
 - FAQ document for common migration issues
 - Template automations using new trigger format
@@ -370,6 +408,7 @@ automation:
 ## Success Criteria
 
 **Phase 2 Success:**
+
 - [ ] Legacy triggers continue working without regression
 - [ ] New trigger system demonstrates improved reliability
 - [ ] >50% of active users try new triggers
@@ -377,6 +416,7 @@ automation:
 - [ ] Positive community feedback on new system
 
 **Phase 3 Readiness:**
+
 - [ ] >80% adoption of new trigger system
 - [ ] 6+ months of stable new system operation
 - [ ] Community consensus for legacy removal
@@ -390,6 +430,7 @@ This migration plan provides a **risk-averse, user-friendly approach** to transi
 The key insight is that **both systems can coexist temporarily**, allowing for gradual migration and real-world validation of the new approach before any breaking changes are introduced.
 
 **Timeline Summary:**
+
 - **Phase 1:** ✅ Complete (Smart polling + unified triggers + backward compatibility)
 - **Phase 2:** 🔄 6-12 months (Education + gradual migration + metrics collection)
 - **Phase 3:** 📋 TBD (Legacy removal based on success criteria)

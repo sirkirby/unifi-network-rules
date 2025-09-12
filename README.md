@@ -28,9 +28,9 @@ UniFi Network Rules is a custom integration for Home Assistant that integrates w
 - Port Profiles (switch port configurations)
 - Networks (network configurations)
 
-### Advanced automations powered by [Custom Triggers](#real-time-triggers-) and [Custom Services](#services)
+### Advanced automations powered by [Custom Triggers](#smart-polling-triggers) and [Custom Services](#services)
 
-The included [Triggers](#real-time-triggers-) and [Services](#services) provide a framework for building custom UDM automations to cover a wide range of use cases. For example, you can [backup](#3-backup-trigger---save-config-on-important-changes) and [restore](#full-and-selective-restore) all rules when a change is detected, ensure game server port [forwarding rules get disabled](#2-game-server-management---auto-disable-after-hours) at bedtime, [create and maintain an audit log](#1-security-monitoring---alert-on-unexpected-rule-changes) of all UDM configuration changes, and so much more. Get inspired by the many examples below.
+The included [Triggers](#smart-polling-triggers) and [Services](#services) provide a framework for building custom UDM automations to cover a wide range of use cases. For example, you can [backup](#3-backup-trigger---save-config-on-important-changes) and [restore](#full-and-selective-restore) all rules when a change is detected, ensure game server port [forwarding rules get disabled](#2-game-server-management---auto-disable-after-hours) at bedtime, [create and maintain an audit log](#1-security-monitoring---alert-on-unexpected-rule-changes) of all UDM configuration changes, and so much more. Get inspired by the many examples below.
 
 > Questions, ideas, help, or feedback? [Discussions](https://github.com/sirkirby/unifi-network-rules/discussions). Errors or bugs? [Issues](https://github.com/sirkirby/unifi-network-rules/issues).
 
@@ -177,9 +177,9 @@ See below for more automation examples using [Services with Triggers](#service-a
 
 > **Note**: For `rule_types` parameter, you can specify one or more of: `policy` (firewall policies), `port_forward` (port forwarding rules), `route` (traffic routes), `qos_rule` (quality of service rules), `port_profile` (switch port profiles), or `network` (network configurations). While not all of these are strictly "rules," they are all toggleable configuration entities. See the "Understanding Rule Types" section for more details.
 
-## Smart Polling Triggers 🔔
+## Smart Polling Triggers
 
-> **⚠️ BREAKING CHANGE**: Legacy triggers (`rule_enabled`, `rule_disabled`, `rule_changed`, `rule_deleted`, `device_changed`) have been **removed** and replaced with a unified `unr_changed` trigger system. See [Migration Guide](#trigger-migration-guide) below.
+> **⚠️ BREAKING CHANGE**: Legacy triggers (`rule_enabled`, `rule_disabled`, `rule_changed`, `rule_deleted`, `device_changed`) have been **removed** and replaced with a unified `unr_changed` trigger system. See [Migration Guide](#migration-options) below.
 
 UniFi Network Rules provides a **unified trigger system** powered by intelligent polling that gives you near real-time notifications when network rules change, regardless of whether the changes originate from Home Assistant or directly from the UniFi console.
 
@@ -334,6 +334,7 @@ Update your automation triggers manually using the examples below.
 ### Common Migration Patterns
 
 #### Basic State Changes
+
 ```yaml
 # OLD (removed)
 trigger:
@@ -350,6 +351,7 @@ trigger:
 ```
 
 #### Rule Disabled
+
 ```yaml  
 # OLD (removed)
 trigger:
@@ -366,6 +368,7 @@ trigger:
 ```
 
 #### Any Rule Change
+
 ```yaml
 # OLD (removed) 
 trigger:
@@ -382,6 +385,7 @@ trigger:
 ```
 
 #### Rule Deletion
+
 ```yaml
 # OLD (removed)
 trigger:
@@ -398,6 +402,7 @@ trigger:
 ```
 
 #### Device Changes (LED)
+
 ```yaml
 # OLD (removed)
 trigger:

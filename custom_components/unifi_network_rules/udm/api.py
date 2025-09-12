@@ -1,6 +1,5 @@
 """Complete UniFi Dream Machine API implementation."""
 
-import logging
 from typing import Dict, Any, Callable, Awaitable
 import asyncio
 
@@ -9,7 +8,6 @@ from .capabilities import CapabilitiesMixin
 from .firewall import FirewallMixin
 from .authentication import AuthenticationMixin  
 from .api_handlers import ApiHandlerMixin
-from .websocket import WebSocketMixin
 from .traffic import TrafficMixin
 from .port_forward import PortForwardMixin
 from .routes import RoutesMixin
@@ -33,7 +31,6 @@ class UDMAPI(
     PortForwardMixin,
     TrafficMixin,
     FirewallMixin,
-    WebSocketMixin,
     AuthenticationMixin,
     ApiHandlerMixin,
     CapabilitiesMixin,
@@ -129,10 +126,6 @@ class UDMAPI(
                 self._consecutive_auth_failures = 0
                 self._rate_limited = False
                 
-                # Reconnect WebSocket if available
-                if hasattr(self, "websocket") and hasattr(self.websocket, "reconnect"):
-                    LOGGER.debug("Reconnecting WebSocket after successful auth refresh")
-                    await self.websocket.reconnect()
                     
                 # Execute callback if registered
                 if self._auth_failure_callback:
