@@ -268,10 +268,6 @@ force_remove_stale:
       selector:
         boolean:
 
-websocket_diagnostics:
-  name: WebSocket Diagnostics
-  description: Run diagnostics on the WebSocket connection and attempt to repair if needed
-
 sync_remote_curated:
   name: Sync Remote Curated Groups
   description: >-

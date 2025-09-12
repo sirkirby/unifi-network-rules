@@ -9,7 +9,6 @@ import asyncio
 from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.data_entry_flow import FlowResult
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.core import HomeAssistant, callback
 
 from .const import (
@@ -29,7 +28,6 @@ from .const import (
 from .udm import CannotConnect, InvalidAuth, UDMAPI
 
 from aiounifi.errors import (
-    AiounifiException,
     LoginRequired,
     RequestError,
     ResponseError,

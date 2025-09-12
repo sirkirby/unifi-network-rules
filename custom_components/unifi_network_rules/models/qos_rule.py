@@ -1,7 +1,7 @@
 """QoS rule model for UniFi Network Rules integration."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union, Literal
+from typing import Any, Dict, List, Literal
 from dataclasses import dataclass
 
 @dataclass

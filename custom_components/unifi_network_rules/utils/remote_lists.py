@@ -1,8 +1,7 @@
 """Utilities for fetching and parsing curated lists from remote repos."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 from urllib.parse import urlparse
 
 

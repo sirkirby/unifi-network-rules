@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable, Dict, Optional, List
+from typing import Any, Dict, Optional
 import voluptuous as vol
 
 from homeassistant.const import CONF_TYPE, CONF_PLATFORM

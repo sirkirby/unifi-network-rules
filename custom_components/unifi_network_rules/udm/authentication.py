@@ -2,11 +2,7 @@
 
 import asyncio
 import time
-from typing import Any, Callable, Dict, Optional, Tuple
-
 import aiohttp
-from http.cookies import SimpleCookie
-import logging
 
 from ..const import LOGGER
 from .api_base import CannotConnect, InvalidAuth
@@ -55,7 +51,6 @@ class AuthenticationMixin:
         # We'll use port 443 explicitly for all UniFi connections
         port = 443
         
-        # For debugging - always log the exact host and port we're using
         LOGGER.debug("Using base_host=%s and port=%d for UniFi connection", base_host, port)
         
         # Important: Store base_host (without port) in self.host to avoid port duplication issues
@@ -262,7 +257,6 @@ class AuthenticationMixin:
         # Save existing path configuration before refresh
         original_base_path = getattr(self.controller, "_base_path", "")
         original_site_path = getattr(self.controller, "_site_path", "")
-        has_proxy_prefix = original_base_path and "/proxy/network" in original_base_path
         
         # Log current path configuration
         LOGGER.debug("Current path config before refresh - base: %s, site: %s", 

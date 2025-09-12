@@ -1,40 +1,18 @@
 """Services for UniFi Network Rules integration."""
 from __future__ import annotations
 
-import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant
 
 from ..const import DOMAIN, LOGGER
 
 # Import services from service modules
-from .rule_services import (
-    async_setup_rule_services,
-    async_toggle_rule,
-    async_delete_rule,
-    async_bulk_update_rules,
-)
-from .template_services import (
-    async_setup_template_services,
-    async_apply_template,
-    async_save_template,
-)
-from .backup_services import (
-    async_setup_backup_services,
-    async_backup_rules_service,
-    async_restore_rules_service,
-)
-from .system_services import (
-    async_setup_system_services,
-    async_refresh_service,
-    async_websocket_diagnostics,
-)
-from .cleanup_services import (
-    async_setup_cleanup_services,
-    async_force_cleanup,
-    async_force_remove_stale,
-)
+from .rule_services import async_setup_rule_services
+from .template_services import async_setup_template_services
+from .backup_services import async_setup_backup_services
+from .system_services import async_setup_system_services
+from .cleanup_services import async_setup_cleanup_services
 
 # Centralized service name constants
 from .constants import (
@@ -48,7 +26,6 @@ from .constants import (
     SERVICE_SAVE_TEMPLATE,
     SERVICE_FORCE_CLEANUP,
     SERVICE_FORCE_REMOVE_STALE,
-    SERVICE_WEBSOCKET_DIAGNOSTICS,
     SERVICE_TOGGLE_RULE,
 )
 
@@ -103,7 +80,6 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_SAVE_TEMPLATE,
         SERVICE_FORCE_CLEANUP,
         SERVICE_FORCE_REMOVE_STALE,
-        SERVICE_WEBSOCKET_DIAGNOSTICS
     ]
     
     for service in services_to_remove:

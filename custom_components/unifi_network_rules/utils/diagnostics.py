@@ -1,7 +1,6 @@
 """Diagnostics module for UniFi Network Rules."""
 from __future__ import annotations
 
-import logging
 from typing import Any, Dict
 
 from ..const import LOGGER, DOMAIN
@@ -16,35 +15,16 @@ def analyze_controller(controller: Any) -> Dict[str, Any]:
         
     result = {
         "class": controller.__class__.__name__,
-        "websocket": {
-            "available": False,
-            "connected": False,
-            "url": None
-        },
         "connectivity": {
             "is_unifi_os": None
         },
         "capabilities": []
     }
     
-    # Check for websocket capability
-    if hasattr(controller, "websocket"):
-        ws = getattr(controller, "websocket")
-        result["websocket"]["available"] = True
-        
-        # Only include most important websocket properties
-        if hasattr(ws, "url"):
-            result["websocket"]["url"] = ws.url
-        
-        # Check websocket connection state without doing deep inspection
-        if hasattr(ws, "state") and getattr(ws, "state", None) is not None:
-            result["websocket"]["connected"] = True
     
     # Check for method capabilities in a simplified way
     capabilities = []
-    for method in ["start_websocket", "stop_websocket"]:
-        if hasattr(controller, method) and callable(getattr(controller, method)):
-            capabilities.append(method)
+    # WebSocket capabilities removed - smart polling handles all updates
     result["capabilities"] = capabilities
     
     # Check UniFi OS detection
@@ -68,10 +48,7 @@ def log_controller_diagnostics(controller: Any, api_instance: Any = None) -> Non
         analysis = analyze_controller(controller)
         LOGGER.info("Controller type: %s", analysis["class"])
         
-        # Log websocket status
-        ws_info = analysis.get("websocket", {})
-        LOGGER.info("WebSocket: available=%s, connected=%s, url=%s", 
-                    ws_info.get("available"), ws_info.get("connected"), ws_info.get("url"))
+        # WebSocket status logging removed - smart polling architecture
         
         # Log connectivity information
         conn_info = analysis.get("connectivity", {})
@@ -80,7 +57,6 @@ def log_controller_diagnostics(controller: Any, api_instance: Any = None) -> Non
         # Log capabilities
         LOGGER.info("Controller capabilities: %s", ", ".join(analysis.get("capabilities", [])))
         
-        # API instance status (minimal info)
         if api_instance:
             LOGGER.info("API connection: %s@%s (site: %s)", 
                         getattr(api_instance, "username", "unknown"),

@@ -1,10 +1,9 @@
 """Tests for the UniFi Network Rules API functionality."""
-import asyncio
 import pytest
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 
 from custom_components.unifi_network_rules.udm.api import UDMAPI
-from custom_components.unifi_network_rules.udm.api_base import UnifiNetworkRulesError, CannotConnect, InvalidAuth
+from custom_components.unifi_network_rules.udm.api_base import InvalidAuth
 
 @pytest.fixture
 def api() -> UDMAPI:

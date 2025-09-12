@@ -1,8 +1,7 @@
 """Template services for UniFi Network Rules integration."""
 from __future__ import annotations
 
-import logging
-from typing import Any, Dict, List, Optional
+from typing import Dict
 
 import voluptuous as vol
 
@@ -19,7 +18,7 @@ from .constants import (
     CONF_RULE_ID,
     CONF_RULE_TYPE,
 )
-from ..helpers.id_parser import parse_rule_id, validate_rule_type
+from ..helpers.id_parser import parse_rule_id
 
 # Schema for apply_template service
 APPLY_TEMPLATE_SCHEMA = vol.Schema(
@@ -41,7 +40,7 @@ SAVE_TEMPLATE_SCHEMA = vol.Schema(
 async def async_apply_template(hass: HomeAssistant, coordinators: Dict, call: ServiceCall) -> None:
     """Handle applying a rule template."""
     template_id = call.data.get(CONF_TEMPLATE_ID)
-    variables = call.data.get(CONF_VARIABLES, {})
+    _variables = call.data.get(CONF_VARIABLES, {})  # Will be used when template feature is implemented
     
     if not template_id:
         raise HomeAssistantError("Template ID is required")

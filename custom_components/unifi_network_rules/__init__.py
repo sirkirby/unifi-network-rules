@@ -1,22 +1,14 @@
 """Support for UniFi Network Rules."""
 from __future__ import annotations
-from typing import Any, Dict, List
-from datetime import timedelta
-import logging
-import importlib
+from typing import Any
 import asyncio
-import async_timeout
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.const import CONF_HOST, CONF_USERNAME, CONF_PASSWORD, CONF_VERIFY_SSL, Platform, CONF_PORT
-from homeassistant.helpers.typing import ConfigType
-from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import config_validation as cv, entity_platform
+from homeassistant.const import CONF_HOST, CONF_USERNAME, CONF_PASSWORD, CONF_VERIFY_SSL
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 
 # Import interface classes from aiounifi
@@ -29,8 +21,6 @@ from aiounifi.interfaces.wlans import Wlans
 
 from .const import (
     DOMAIN,
-    CONF_UPDATE_INTERVAL,
-    DEFAULT_UPDATE_INTERVAL,
     DEFAULT_SITE,
     LOGGER,
     PLATFORMS,
@@ -42,7 +32,7 @@ from .udm.api import UDMAPI
 
 # Import local modules at the module level - ORDER MATTERS HERE
 from .coordinator import UnifiRuleUpdateCoordinator
-from .services import async_setup_services, async_unload_services
+from .services import async_setup_services
 from .helpers.rule import get_rule_id
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -213,7 +203,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 return
                 
             entity_id = event.data.get("entity_id", "")
-            if not entity_id.startswith("switch.") or not DOMAIN in entity_id:
+            if not entity_id.startswith("switch.") or DOMAIN not in entity_id:
                 return
                 
             unique_id = event.data.get("unique_id", "")

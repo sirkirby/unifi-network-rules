@@ -1,12 +1,10 @@
 """Module for UniFi traffic rule operations."""
 
-import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 # Import directly from specific module rather than models package
 from aiounifi.models.traffic_rule import (
     TrafficRuleListRequest,
-    TrafficRuleEnableRequest,
     TrafficRule
 )
 

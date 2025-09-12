@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional, List, Set, Tuple
+from typing import Any, Dict, Optional, List
 from dataclasses import dataclass
 
 from homeassistant.core import HomeAssistant

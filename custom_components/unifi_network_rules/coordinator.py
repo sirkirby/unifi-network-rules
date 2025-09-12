@@ -870,7 +870,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
 
         # Dispatch deletion events for each deleted rule
         for rule_id in deleted_ids:
-            # LOGGER.info("Processing deletion for rule_id: %s", rule_id)
             # Use _remove_entity which handles both callback and dispatching signals
             self.hass.async_create_task(self._remove_entity_async(rule_id))
 
@@ -954,7 +953,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             led_capable_devices = await self.api.get_device_led_states()
             LOGGER.info("Retrieved %d LED-capable Device objects", len(led_capable_devices))
             
-            # Debug: Print LED-capable devices found
             if led_capable_devices:
                 LOGGER.info("LED-capable devices found:")
                 for device in led_capable_devices:
@@ -1146,7 +1144,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                         # Don't update with untyped data
                         return
 
-                    # Log rule details for debugging
+                    # Log rule details
                     rule_id = getattr(first_rule, "id", "unknown")
                     LOGGER.debug(
                         "First %s rule: ID=%s, Type=%s",
@@ -1236,9 +1234,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             
             if refresh_successful:
                 # After refreshing data, discovery and deletion checks are handled within async_refresh -> _async_update_data
-                # REMOVED: await self.process_new_entities() # Redundant
-                # REMOVED: if previous_data: # Incorrect check
-                # REMOVED:     self._check_for_deleted_rules(previous_data) # Incorrect check
                 
                 # Update the data timestamp
                 self._last_update = self.hass.loop.time()
@@ -1556,8 +1551,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             UnifiQoSRuleSwitch,
             UnifiWlanSwitch,
             UnifiTrafficRouteKillSwitch,
-            UnifiVPNClientSwitch,
-            UnifiVPNServerSwitch,
             UnifiLedToggleSwitch
         )
 

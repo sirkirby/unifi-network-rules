@@ -22,7 +22,7 @@ def _is_debug_enabled() -> bool:
     return LOGGER.isEnabledFor(logging.DEBUG)
 
 def log_websocket(msg: str, *args: Any, **kwargs: Any) -> None:
-    """Log websocket-related debug messages if websocket debugging is enabled."""
+    """DEPRECATED - WebSocket support removed. This function is kept for backward compatibility."""
     # Check if the message contains indication that it's rule-related
     is_rule_related = False
     if "rule event" in msg.lower() or "rule message" in msg.lower() or "rule-related" in msg.lower():

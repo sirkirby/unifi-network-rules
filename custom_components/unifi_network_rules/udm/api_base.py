@@ -1,14 +1,6 @@
 """Base API module for UniFi Dream Machine."""
 
-import asyncio
-import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
-
-from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-import aiohttp
-from http.cookies import SimpleCookie
 
 from ..const import (
     DEFAULT_SITE,
@@ -56,9 +48,6 @@ class UDMAPI:
         self._login_cooldown = 60
         self._config = None  # Store config for delayed controller creation
         self._capabilities = None  # Store capabilities
-        # WebSocket path customization
-        self._websocket_path_prefix = ""
-        self._custom_websocket = None
         self._ws_message_handler = None
         
         # Rate limiting protection

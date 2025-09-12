@@ -1,13 +1,11 @@
 """Module for UniFi traffic routes operations."""
 
-import logging
 from typing import Any, Dict, List, Optional
 
 # Import directly from specific module
 from aiounifi.models.traffic_route import (
     TrafficRouteListRequest,
     TrafficRouteSaveRequest,
-    TrafficRoute as AioUnifiTrafficRoute
 )
 
 from ..const import (
