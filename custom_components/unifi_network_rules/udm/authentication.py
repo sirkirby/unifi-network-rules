@@ -257,7 +257,6 @@ class AuthenticationMixin:
         # Save existing path configuration before refresh
         original_base_path = getattr(self.controller, "_base_path", "")
         original_site_path = getattr(self.controller, "_site_path", "")
-        _has_proxy_prefix = original_base_path and "/proxy/network" in original_base_path  # May be used for future debugging
         
         # Log current path configuration
         LOGGER.debug("Current path config before refresh - base: %s, site: %s", 

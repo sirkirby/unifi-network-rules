@@ -203,7 +203,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 return
                 
             entity_id = event.data.get("entity_id", "")
-            if not entity_id.startswith("switch.") or not DOMAIN in entity_id:
+            if not entity_id.startswith("switch.") or DOMAIN not in entity_id:
                 return
                 
             unique_id = event.data.get("unique_id", "")
