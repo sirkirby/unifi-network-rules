@@ -1,6 +1,5 @@
 """Module for UniFi QoS rule operations."""
 
-import logging
 import json
 from typing import Any, Dict, List, Optional
 

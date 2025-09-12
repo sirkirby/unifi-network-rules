@@ -1,8 +1,7 @@
 """Cleanup services for UniFi Network Rules integration."""
 from __future__ import annotations
 
-import logging
-from typing import Any, Dict, List, Optional
+from typing import Dict
 
 import voluptuous as vol
 

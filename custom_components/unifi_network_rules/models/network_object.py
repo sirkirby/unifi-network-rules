@@ -4,8 +4,7 @@ Represents v2 Objects (addresses, address-groups, ports, etc.).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Literal, Optional, TypedDict
+from typing import Any, Literal, TypedDict
 
 from aiounifi.models.api import ApiItem
 

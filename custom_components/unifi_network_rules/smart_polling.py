@@ -6,7 +6,6 @@ import time
 from typing import Any, Dict, Set, Optional
 from dataclasses import dataclass
 
-from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import LOGGER

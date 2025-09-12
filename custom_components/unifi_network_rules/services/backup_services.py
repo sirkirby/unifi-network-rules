@@ -3,18 +3,15 @@ from __future__ import annotations
 
 import json
 import os
-import logging
-import time
 import aiofiles
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from pathlib import Path
 
 import voluptuous as vol
 
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
-from homeassistant.exceptions import HomeAssistantError
 
 from ..const import DOMAIN, LOGGER, BACKUP_FILE_PREFIX, BACKUP_LOCATION
 from .constants import (
@@ -26,7 +23,6 @@ from .constants import (
     CONF_RULE_TYPES,
 )
 from ..helpers.id_parser import parse_rule_id
-from ..helpers.rule import is_default_network, is_vpn_network
 
 # Import the typed model classes for conversion
 from aiounifi.models.traffic_route import TrafficRoute

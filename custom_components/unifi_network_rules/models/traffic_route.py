@@ -1,14 +1,9 @@
-from typing import TypedDict, Self, Any, NotRequired
+from typing import Self
 from dataclasses import dataclass
 
-from aiounifi.models.api import ApiItem, ApiRequestV2
+from aiounifi.models.api import ApiRequestV2
 from aiounifi.models.traffic_route import (
     TypedTrafficRoute as AioUnifiTypedTrafficRoute,
-    Domain,
-    IPAddress,
-    IPRange,
-    MatchingTarget,
-    TargetDevice,
     TrafficRoute as AioUnifiTrafficRoute,
 )
 

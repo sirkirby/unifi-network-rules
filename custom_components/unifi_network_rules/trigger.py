@@ -1,14 +1,10 @@
 """UniFi Network Rules trigger platform."""
 from __future__ import annotations
 
-import asyncio
-from typing import Any, Callable, Dict, Optional
-
-from homeassistant.const import CONF_TYPE, CONF_PLATFORM
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant
 from homeassistant.helpers.trigger import TriggerActionType, TriggerInfo
 
-from .const import DOMAIN, LOGGER
+from .const import LOGGER
 
 # Import unified trigger system
 from .unified_trigger import (
