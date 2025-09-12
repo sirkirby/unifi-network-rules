@@ -1,8 +1,5 @@
 import pytest
-from unittest.mock import Mock, patch, AsyncMock
 from homeassistant.core import HomeAssistant
-import asyncio
-import warnings
 
 @pytest.fixture
 async def hass(event_loop):
