@@ -704,7 +704,7 @@ def classify_vpn_type(purpose: str, vpn_type: str) -> tuple[bool, bool]:
     
     # Client indicators
     is_client = (
-        purpose in ["vpn-client", "remote-user-vpn"]
+        purpose in ["vpn-client"]  # Removed "remote-user-vpn" - it's a server type
         or vpn_type in ["openvpn-client", "wireguard-client"]
         or (purpose.startswith("vpn") and "client" in purpose)
         or (vpn_type and "client" in vpn_type)
@@ -712,7 +712,7 @@ def classify_vpn_type(purpose: str, vpn_type: str) -> tuple[bool, bool]:
     
     # Server indicators  
     is_server = (
-        purpose == "vpn-server"
+        purpose in ["vpn-server", "remote-user-vpn"]  # Added "remote-user-vpn" - it's a server type
         or vpn_type in ["openvpn-server", "wireguard-server"] 
         or (purpose.startswith("vpn") and "server" in purpose)
         or (vpn_type and "server" in vpn_type)

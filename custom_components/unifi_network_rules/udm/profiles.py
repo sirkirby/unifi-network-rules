@@ -46,7 +46,6 @@ class PortProfilesMixin:
         except Exception as err:
             LOGGER.error("Failed to update port profile: %s", str(err))
             return False
-
     async def remove_port_profile(self, profile_id: str) -> bool:
         try:
             path = API_PATH_PORT_PROFILE_DETAIL.format(profile_id=profile_id)
@@ -240,5 +239,4 @@ class WanSlaProfilesMixin:
         except Exception as err:
             LOGGER.error("Failed to remove WAN SLA profile %s: %s", profile_id, str(err))
             return False
-
 

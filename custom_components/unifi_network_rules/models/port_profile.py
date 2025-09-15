@@ -38,5 +38,3 @@ class PortProfile:
     def to_dict(self) -> Dict[str, Any]:
         """Return a shallow copy of the raw dict suitable for updates."""
         return dict(self.raw)
-
-
