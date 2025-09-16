@@ -25,7 +25,7 @@ class AuthenticationMixin:
         # Call super().__init__ if this mixin isn't the first in MRO
         # Check if super() provides an __init__ method before calling
         if hasattr(super(), '__init__'):
-             super().__init__(*args, **kwargs)
+            super().__init__(*args, **kwargs)
 
     async def async_init(self, hass=None):
         """Initialize the UDM API."""
@@ -204,7 +204,7 @@ class AuthenticationMixin:
                     # Assume other errors are connectivity issues
                     raise CannotConnect(f"Connection failed: {err}")
 
-    async def _check_udm_device(self, authenticated: bool = False) -> bool:
+    async def _check_udm_device(self, _authenticated: bool = False) -> bool:
         """Check if the device is a UDM and set detection properly.
         
         In this integration, we always assume we're connecting to a UniFi OS device.
@@ -267,7 +267,7 @@ class AuthenticationMixin:
             # Instead of relying on is_logged_in attribute which doesn't exist in some versions
             has_session = (
                 hasattr(self.controller, "session") and 
-                self.controller.session is not None and
+                getattr(self.controller, "session", None) is not None and
                 getattr(self.controller, "headers", {}).get("Cookie") is not None
             )
             
@@ -365,8 +365,8 @@ class AuthenticationMixin:
         
         # Ensure we have a valid session
         if not hasattr(self, "_session") or self._session is None:
-            import aiohttp
-            self._session = aiohttp.ClientSession()
+            connector = aiohttp.TCPConnector(verify_ssl=False)
+            self._session = aiohttp.ClientSession(connector=connector)
             LOGGER.debug("Created new aiohttp ClientSession for controller configuration")
             
         return Configuration(

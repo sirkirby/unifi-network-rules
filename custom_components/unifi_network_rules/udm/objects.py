@@ -111,7 +111,6 @@ class ObjectsMixin:
         except Exception as err:
             LOGGER.error("Failed to update firewall group: %s", err)
             return False
-
     async def remove_object(self, object_id: str) -> bool:
         """Delete a network object (v2)."""
         try:
@@ -122,5 +121,4 @@ class ObjectsMixin:
         except Exception as err:
             LOGGER.error("Failed to remove firewall group %s: %s", object_id, err)
             return False
-
 

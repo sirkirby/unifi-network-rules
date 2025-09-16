@@ -28,5 +28,3 @@ class NetworkConf:
         if "enabled" in self.raw:
             return bool(self.raw.get("enabled"))
         return True
-
-

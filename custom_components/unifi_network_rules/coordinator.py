@@ -110,7 +110,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         # By unique ID rather than the objects themselves
         self.known_unique_ids: Set[str] = set()
         self.removed_unique_ids: Set[str] = set()
-        self._entity_creation_queue = []
         
         # Rule collections - these are maintained by the coordinator
         # To be used by services for operations like enable/disable rules
@@ -131,6 +130,10 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         # For dynamic entity creation
         self.async_add_entities_callback: AddEntitiesCallback | None = None
         self.entity_platform = None  # Store the entity platform for later use
+        
+        # Coordination and cleanup
+        self._refresh_semaphore = asyncio.Semaphore(1)  # Limit concurrent refreshes
+        self._cleanup_callbacks = []  # Store cleanup callbacks
 
         # Save platforms to load
         self._platforms = platforms or [Platform.SWITCH]
@@ -599,7 +602,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     # If authentication failures occurred, preserve previous data for key categories
                     for key in ["port_forwards", "firewall_policies", "traffic_rules", "traffic_routes"]:
                         if not rules_data[key] and previous_data and key in previous_data and previous_data[key]:
-                            LOGGER.info(f"Preserving previous {key} data due to authentication issues")
+                            LOGGER.info("Preserving previous %s data due to authentication issues", key)
                             rules_data[key] = previous_data[key]
 
                 # Check any API responses for auth errors
@@ -801,19 +804,19 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         ]
         
         for rule_type in all_rule_sources_types:
-             rules = new_data.get(rule_type, [])
-             if rules:
-                 for rule in rules:
-                     try:
-                         rule_id = get_rule_id(rule)
-                         if rule_id:
-                             all_current_unique_ids.add(rule_id)
-                             # Add kill switch ID if applicable
-                             if rule_type == "traffic_routes" and hasattr(rule, 'raw') and "kill_switch_enabled" in rule.raw:
-                                 kill_switch_id = get_child_unique_id(rule_id, "kill_switch")
-                                 all_current_unique_ids.add(kill_switch_id)
-                     except Exception as e:
-                          LOGGER.warning("Error getting ID during deletion check for %s: %s", rule_type, e)
+            rules = new_data.get(rule_type, [])
+            if rules:
+                for rule in rules:
+                    try:
+                        rule_id = get_rule_id(rule)
+                        if rule_id:
+                            all_current_unique_ids.add(rule_id)
+                            # Add kill switch ID if applicable
+                            if rule_type == "traffic_routes" and hasattr(rule, 'raw') and "kill_switch_enabled" in rule.raw:
+                                kill_switch_id = get_child_unique_id(rule_id, "kill_switch")
+                                all_current_unique_ids.add(kill_switch_id)
+                    except Exception as e:
+                        LOGGER.warning("Error getting ID during deletion check for %s: %s", rule_type, e)
 
         # Special handling for device LED switches in deletion check
         devices = new_data.get("devices", [])
@@ -833,7 +836,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             # Process deletions using the identified IDs and the snapshot count
             self._process_deleted_rules("various_orphaned", deleted_unique_ids, len(self.known_unique_ids))
         else:
-             LOGGER.debug("Deletion check: No discrepancies found between known IDs and current data.")
+            LOGGER.debug("Deletion check: No discrepancies found between known IDs and current data.")
 
     def _process_deleted_rules(self, rule_type: str, deleted_ids: set, total_previous_count: int) -> None:
         """Process detected rule deletions and dispatch removal events.
@@ -1303,11 +1306,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self._entity_removal_callback = callback
         LOGGER.debug("Entity removal callback registered")
 
-    async def _schedule_queue_reprocessing(self) -> None:
-        """Schedule a delayed reprocessing of the entity creation queue."""
-        import asyncio
-        await asyncio.sleep(5)  # Wait 5 seconds before retrying
-        await self._process_entity_queue()
 
     async def process_new_entities(self) -> None:
         """Process and create entities that were discovered."""
@@ -1373,102 +1371,78 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 len(qos_rules_to_add), len(vpn_clients_to_add), len(vpn_servers_to_add)
             )
         
-        # Queue new entities for creation
+        # Track new entities for creation (queue system removed - entities created directly)
         for rule in self.port_forwards:
             rule_id = get_rule_id(rule)
             if rule_id in port_forwards_to_add:
-                LOGGER.debug("Queueing new port forward for creation: %s (class: %s)", 
+                LOGGER.debug("Tracking new port forward for creation: %s (class: %s)", 
                            rule_id, type(rule).__name__)
-                # Ensure rule is valid before queueing
+                # Ensure rule is valid before tracking
                 if hasattr(rule, 'id'):
-                    self._entity_creation_queue.append({
-                        "rule_type": "port_forwards",
-                        "rule": rule
-                    })
                     self.known_unique_ids.add(rule_id)
                 else:
-                    LOGGER.error("Cannot queue port forward rule without id attribute")
+                    LOGGER.error("Cannot track port forward rule without id attribute")
                 
         for rule in self.traffic_routes:
             rule_id = get_rule_id(rule)
             if rule_id in routes_to_add:
-                LOGGER.debug("Queueing new traffic route for creation: %s (class: %s)", 
+                LOGGER.debug("Tracking new traffic route for creation: %s (class: %s)", 
                            rule_id, type(rule).__name__)
-                # Ensure rule is valid before queueing
+                # Ensure rule is valid before tracking
                 if hasattr(rule, 'id'):
-                    self._entity_creation_queue.append({
-                        "rule_type": "traffic_routes",
-                        "rule": rule
-                    })
                     self.known_unique_ids.add(rule_id)
                 else:
-                    LOGGER.error("Cannot queue traffic route rule without id attribute")
+                    LOGGER.error("Cannot track traffic route rule without id attribute")
                 
         for rule in self.firewall_policies:
             rule_id = get_rule_id(rule)
             if rule_id in policies_to_add:
                 LOGGER.debug(
-                    "Queueing new firewall policy for creation: %s (class: %s)",
+                    "Tracking new firewall policy for creation: %s (class: %s)",
                     rule_id, 
                     type(rule).__name__
                 )
-                # Ensure rule is valid before queueing
+                # Ensure rule is valid before tracking
                 if hasattr(rule, 'id'):
-                    self._entity_creation_queue.append({
-                        "rule_type": "firewall_policies",
-                        "rule": rule
-                    })
                     self.known_unique_ids.add(rule_id)
                 else:
-                    LOGGER.error("Cannot queue firewall policy rule without id attribute")
+                    LOGGER.error("Cannot track firewall policy rule without id attribute")
 
         for rule in self.traffic_rules:
             rule_id = get_rule_id(rule)
             if rule_id in traffic_rules_to_add:
-                LOGGER.debug("Queueing new traffic rule for creation: %s (class: %s)", 
+                LOGGER.debug("Tracking new traffic rule for creation: %s (class: %s)", 
                           rule_id, type(rule).__name__)
-                # Ensure rule is valid before queueing
+                # Ensure rule is valid before tracking
                 if hasattr(rule, 'id'):
-                    self._entity_creation_queue.append({
-                        "rule_type": "traffic_rules",
-                        "rule": rule
-                    })
                     self.known_unique_ids.add(rule_id)
                 else:
-                    LOGGER.error("Cannot queue traffic rule without id attribute")
+                    LOGGER.error("Cannot track traffic rule without id attribute")
                 
         for rule in self.legacy_firewall_rules:
             rule_id = get_rule_id(rule)
             if rule_id in firewall_rules_to_add:
-                LOGGER.debug("Queueing new firewall rule for creation: %s (class: %s)", 
+                LOGGER.debug("Tracking new firewall rule for creation: %s (class: %s)", 
                           rule_id, type(rule).__name__)
-                # Ensure rule is valid before queueing
+                # Ensure rule is valid before tracking
                 if hasattr(rule, 'id'):
-                    self._entity_creation_queue.append({
-                        "rule_type": "legacy_firewall_rules",
-                        "rule": rule
-                    })
                     self.known_unique_ids.add(rule_id)
                 else:
-                    LOGGER.error("Cannot queue legacy firewall rule without id attribute")
+                    LOGGER.error("Cannot track legacy firewall rule without id attribute")
                 
         for rule in self.wlans:
             rule_id = get_rule_id(rule)
             if rule_id in wlans_to_add:
                 LOGGER.debug(
-                    "Queueing new WLAN for creation: %s (class: %s)",
+                    "Tracking new WLAN for creation: %s (class: %s)",
                     rule_id, 
                     type(rule).__name__
                 )
-                # Ensure rule is valid before queueing
+                # Ensure rule is valid before tracking
                 if hasattr(rule, 'id'):
-                    self._entity_creation_queue.append({
-                        "rule_type": "wlans",
-                        "rule": rule
-                    })
                     self.known_unique_ids.add(rule_id)
                 else:
-                    LOGGER.error("Cannot queue WLAN rule without id attribute")
+                    LOGGER.error("Cannot track WLAN rule without id attribute")
                     
         # Add section for QoS rules
         for rule in self.qos_rules:
@@ -1479,20 +1453,16 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                        rule_id in qos_rules_to_add)
             if rule_id in qos_rules_to_add:
                 LOGGER.debug(
-                    "Queueing new QoS rule for creation: %s (class: %s)",
+                    "Tracking new QoS rule for creation: %s (class: %s)",
                     rule_id, 
                     type(rule).__name__
                 )
-                # Ensure rule is valid before queueing
+                # Ensure rule is valid before tracking
                 if hasattr(rule, 'id'):
-                    LOGGER.info("Adding QoS rule to entity creation queue: %s", rule_id)
-                    self._entity_creation_queue.append({
-                        "rule_type": "qos_rules",
-                        "rule": rule
-                    })
+                    LOGGER.info("Tracking QoS rule for entity creation: %s", rule_id)
                     self.known_unique_ids.add(rule_id)
                 else:
-                    LOGGER.error("Cannot queue QoS rule without id attribute")
+                    LOGGER.error("Cannot track QoS rule without id attribute")
 
         # Process VPN clients
         for rule in self.vpn_clients:
@@ -1504,14 +1474,10 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     continue
                     
                 if rule_id in vpn_clients_to_add:
-                    LOGGER.debug("Adding new VPN client entity: %s", rule_id)
-                    self._entity_creation_queue.append({
-                        "rule_data": rule,
-                        "rule_type": "vpn_clients",
-                        "entity_class": None,  # Will be determined during creation
-                    })
+                    LOGGER.debug("Tracking new VPN client entity: %s", rule_id)
+                    self.known_unique_ids.add(rule_id)
             except Exception as err:
-                LOGGER.exception("Error processing VPN client for entity creation: %s", err)
+                LOGGER.exception("Error processing VPN client for entity tracking: %s", err)
                 
         # Process VPN servers
         for rule in self.vpn_servers:
@@ -1523,14 +1489,10 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     continue
                     
                 if rule_id in vpn_servers_to_add:
-                    LOGGER.debug("Adding new VPN server entity: %s", rule_id)
-                    self._entity_creation_queue.append({
-                        "rule_data": rule,
-                        "rule_type": "vpn_servers",
-                        "entity_class": None,  # Will be determined during creation
-                    })
+                    LOGGER.debug("Tracking new VPN server entity: %s", rule_id)
+                    self.known_unique_ids.add(rule_id)
             except Exception as err:
-                LOGGER.exception("Error processing VPN server for entity creation: %s", err)
+                LOGGER.exception("Error processing VPN server for entity tracking: %s", err)
 
     async def _discover_and_add_new_entities(self, new_data: Dict[str, List[Any]]) -> None:
         """Discover new rules from fetched data and dynamically add corresponding entities."""
@@ -1639,12 +1601,12 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         # Find IDs that are known but no longer present in the current data (should be handled by deletion logic, but double-check)
         stale_known_ids = self.known_unique_ids - all_current_unique_ids
         if stale_known_ids:
-             LOGGER.debug("Coordinator: Found %d known IDs no longer present in current data.", len(stale_known_ids))
-             # Optionally, force remove them from known_unique_ids here if deletion logic is unreliable?
-             self.known_unique_ids -= stale_known_ids
-             for stale_id in stale_known_ids:
-                 LOGGER.info("Coordinator: Forcibly removing stale ID from tracking: %s", stale_id)
-                 self._remove_entity_async(stale_id)
+            LOGGER.debug("Coordinator: Found %d known IDs no longer present in current data.", len(stale_known_ids))
+            # Optionally, force remove them from known_unique_ids here if deletion logic is unreliable?
+            self.known_unique_ids -= stale_known_ids
+            for stale_id in stale_known_ids:
+                LOGGER.info("Coordinator: Forcibly removing stale ID from tracking: %s", stale_id)
+                self.hass.async_create_task(self._remove_entity_async(stale_id))
 
         # --- Create and Add New Entities ---
         entities_to_add = []
@@ -1659,8 +1621,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         for unique_id, data in potential_entities_data.items():
             # Double check it wasn't added in this run already (e.g. if discovered twice)
             if unique_id in self.known_unique_ids or unique_id in added_ids_this_run:
-                 LOGGER.warning("Coordinator: Skipping entity creation for %s as it's already known or added.", unique_id)
-                 continue
+                LOGGER.warning("Coordinator: Skipping entity creation for %s as it's already known or added.", unique_id)
+                continue
             try:
                 entity_class = data["entity_class"]
                 entity = entity_class(
@@ -1685,60 +1647,69 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
 
         # --- Establish Parent/Child Links for newly created entities ---
         if entity_map:
-             LOGGER.debug("Coordinator: Establishing parent/child links for %d newly created entities...", len(entity_map))
-             for unique_id, entity in entity_map.items():
-                 # If it's a kill switch, find its parent in the map or existing entities
-                 if isinstance(entity, UnifiTrafficRouteKillSwitch) and entity.linked_parent_id:
-                     parent_id = entity.linked_parent_id
-                     parent_entity = entity_map.get(parent_id)
-                     # If parent wasn't created in this run, look it up in hass.data
-                     if not parent_entity:
-                         parent_entity_id_in_hass = None
-                         registry = self.hass.helpers.entity_registry.async_get(self.hass)
-                         if registry:
-                              parent_entity_id_in_hass = registry.async_get_entity_id("switch", DOMAIN, parent_id)
-                         if parent_entity_id_in_hass:
-                              # We could either get entities from DOMAIN data, or use registry to get state to check the object
-                              # Use registry-based state since it's more reliable
-                              parent_entity_state = self.hass.states.get(parent_entity_id_in_hass)
-                              if parent_entity_state:
-                                  # For convenience, store the basic known information we have
-                                  LOGGER.debug("Found parent entity '%s' state for kill switch", parent_entity_id_in_hass)
-                                  entity.parent_entity_id = parent_entity_id_in_hass
-                                  # This is different from the parent_entity check below, which refers to newly created entities
-                                  LOGGER.debug("Coordinator: Linked new child %s to parent state %s", 
-                                             unique_id, parent_entity_id_in_hass)
-                              else:
-                                  LOGGER.warning("Coordinator: Could not find parent entity state %s for new kill switch %s", 
-                                               parent_id, unique_id)
+            LOGGER.debug("Coordinator: Establishing parent/child links for %d newly created entities...", len(entity_map))
+            for unique_id, entity in entity_map.items():
+                # If it's a kill switch, find its parent in the map or existing entities
+                if isinstance(entity, UnifiTrafficRouteKillSwitch) and entity.linked_parent_id:
+                    parent_id = entity.linked_parent_id
+                    parent_entity = entity_map.get(parent_id)
+                    # If parent wasn't created in this run, look it up in hass.data
+                    if not parent_entity:
+                        parent_entity_id_in_hass = None
+                        registry = self.hass.helpers.entity_registry.async_get(self.hass)
+                        if registry:
+                            parent_entity_id_in_hass = registry.async_get_entity_id("switch", DOMAIN, parent_id)
+                        if parent_entity_id_in_hass:
+                            # We could either get entities from DOMAIN data, or use registry to get state to check the object
+                            # Use registry-based state since it's more reliable
+                            parent_entity_state = self.hass.states.get(parent_entity_id_in_hass)
+                            if parent_entity_state:
+                                # For convenience, store the basic known information we have
+                                LOGGER.debug("Found parent entity '%s' state for kill switch", parent_entity_id_in_hass)
+                                entity.parent_entity_id = parent_entity_id_in_hass
+                                # This is different from the parent_entity check below, which refers to newly created entities
+                                LOGGER.debug("Coordinator: Linked new child %s to parent state %s", 
+                                           unique_id, parent_entity_id_in_hass)
+                            else:
+                                LOGGER.warning("Coordinator: Could not find parent entity state %s for new kill switch %s", 
+                                             parent_id, unique_id)
 
-                     if parent_entity and isinstance(parent_entity, UnifiTrafficRouteSwitch):
-                          parent_entity.register_child_entity(unique_id)
-                          entity.register_parent_entity(parent_id)
-                          LOGGER.debug("Coordinator: Linked new child %s to parent %s", unique_id, parent_id)
-                     else:
-                          LOGGER.warning("Coordinator: Could not find parent entity %s for new kill switch %s", parent_id, unique_id)
+                    if parent_entity and isinstance(parent_entity, UnifiTrafficRouteSwitch):
+                        parent_entity.register_child_entity(unique_id)
+                        entity.register_parent_entity(parent_id)
+                        LOGGER.debug("Coordinator: Linked new child %s to parent %s", unique_id, parent_id)
+                    else:
+                        LOGGER.warning("Coordinator: Could not find parent entity %s for new kill switch %s", parent_id, unique_id)
 
         # --- Add Entities to Home Assistant ---
         if entities_to_add:
             LOGGER.info("Coordinator: Dynamically adding %d new entities to Home Assistant.", len(entities_to_add))
             try:
-                self.async_add_entities_callback(entities_to_add)
+                # Check if callback is available and call it
+                if self.async_add_entities_callback:
+                    # At this point we know it's not None, call it with error handling
+                    try:
+                        self.async_add_entities_callback(entities_to_add)  # pylint: disable=not-callable
+                    except TypeError as te:
+                        LOGGER.error("Coordinator: async_add_entities_callback is not callable: %s", te)
+                        return
+                else:
+                    LOGGER.error("Coordinator: async_add_entities_callback is not set, cannot add entities")
                 # Update known IDs *after* successful addition
                 self.known_unique_ids.update(added_ids_this_run)
                 LOGGER.debug("Coordinator: Added %d new IDs to known_unique_ids (Total: %d)",
                              len(added_ids_this_run), len(self.known_unique_ids))
             except Exception as add_err:
-                 LOGGER.error("Coordinator: Failed to dynamically add entities: %s", add_err)
+                LOGGER.error("Coordinator: Failed to dynamically add entities: %s", add_err)
         else:
-             LOGGER.debug("Coordinator: No new entities to add dynamically in this cycle.")
+            LOGGER.debug("Coordinator: No new entities to add dynamically in this cycle.")
 
     async def _async_get_vpn_clients(self) -> List[VPNConfig]:
         """Get VPN clients from the API."""
         try:
             result = await self.api.get_vpn_clients()
             LOGGER.debug("Fetched %d VPN clients", len(result))
-            
+
             # Update the internal list
             self.vpn_clients = result
             return result
@@ -1752,7 +1723,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         try:
             result = await self.api.get_vpn_servers()
             LOGGER.debug("Fetched %d VPN servers", len(result))
-            
+
             # Update the internal list
             self.vpn_servers = result
             return result

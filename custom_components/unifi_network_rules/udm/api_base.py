@@ -126,17 +126,17 @@ class UDMAPI:
         
         try:
             if rule_type == "firewall_policies":
-                return await self.remove_firewall_policy(rule_id)
+                return await self.remove_firewall_policy(rule_id)  # pylint: disable=no-member
             elif rule_type == "traffic_rules":
-                return await self.remove_traffic_rule(rule_id)
+                return await self.remove_traffic_rule(rule_id)  # pylint: disable=no-member
             elif rule_type == "port_forwards":
-                return await self.remove_port_forward(rule_id)
+                return await self.remove_port_forward(rule_id)  # pylint: disable=no-member
             elif rule_type == "traffic_routes":
-                return await self.remove_traffic_route(rule_id)
+                return await self.remove_traffic_route(rule_id)  # pylint: disable=no-member
             elif rule_type == "legacy_firewall_rules":
-                return await self.remove_legacy_firewall_rule(rule_id)
+                return await self.remove_legacy_firewall_rule(rule_id)  # pylint: disable=no-member
             elif rule_type == "qos_rules":
-                return await self.remove_qos_rule(rule_id)
+                return await self.remove_qos_rule(rule_id)  # pylint: disable=no-member
             else:
                 LOGGER.error("Unknown rule type: %s", rule_type)
                 return False

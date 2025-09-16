@@ -56,15 +56,15 @@ class VPNMixin:
                     try:
                         vpn_config = VPNConfig(network)
                         vpn_configs.append(vpn_config)
-                        LOGGER.debug(f"Found VPN config: {vpn_config.display_name} (Type: {vpn_config.vpn_type})")
+                        LOGGER.debug("Found VPN config: %s (Type: %s)", vpn_config.display_name, vpn_config.vpn_type)
                     except Exception as config_err:
-                        LOGGER.error(f"Error creating VPN config from data: {config_err}")
+                        LOGGER.error("Error creating VPN config from data: %s", config_err)
                     
-            LOGGER.debug(f"Found {len(vpn_configs)} VPN configurations")
+            LOGGER.debug("Found %d VPN configurations", len(vpn_configs))
             return vpn_configs
             
         except Exception as err:
-            LOGGER.error(f"Error fetching VPN configurations: {err}")
+            LOGGER.error("Error fetching VPN configurations: %s", err)
             return []
     
     async def get_vpn_clients(self) -> List[VPNConfig]:
@@ -126,15 +126,15 @@ class VPNMixin:
             response = await self.controller.request(request)
             
             if not response or "data" not in response:
-                LOGGER.error(f"Failed to add VPN {config_data['purpose']}")
+                LOGGER.error("Failed to add VPN %s", config_data['purpose'])
                 return None
                 
             # Return the newly created VPN config as a typed object
-            LOGGER.info(f"Successfully added VPN {config_data['purpose']}")
+            LOGGER.info("Successfully added VPN %s", config_data['purpose'])
             return VPNConfig(response["data"])
             
         except Exception as err:
-            LOGGER.error(f"Error adding VPN {config_data.get('purpose', 'configuration')}: {err}")
+            LOGGER.error("Error adding VPN %s: %s", config_data.get('purpose', 'configuration'), err)
             return None
     
     # Convenience wrappers for add_vpn_config
@@ -163,13 +163,13 @@ class VPNMixin:
             LOGGER.error("Cannot update VPN configuration without an ID")
             return False
             
-        LOGGER.debug(f"Updating VPN configuration {config.display_name} ({config.id})")
+        LOGGER.debug("Updating VPN configuration %s (%s)", config.display_name, config.id)
         
         try:
             config_data = config.to_dict()
             
             # Log what we're updating (excluding sensitive data)
-            LOGGER.debug(f"Updating VPN configuration {config.display_name} with enabled={config.enabled}")
+            LOGGER.debug("Updating VPN configuration %s with enabled=%s", config.display_name, config.enabled)
             
             # Create path with the network ID and execute the API request
             path = API_PATH_NETWORK_CONF_DETAIL.format(network_id=config.id)
@@ -177,14 +177,14 @@ class VPNMixin:
             response = await self.controller.request(request)
             
             if not response:
-                LOGGER.error(f"Failed to update VPN configuration {config.display_name}")
+                LOGGER.error("Failed to update VPN configuration %s", config.display_name)
                 return False
                 
-            LOGGER.info(f"Successfully updated VPN configuration {config.display_name}")
+            LOGGER.info("Successfully updated VPN configuration %s", config.display_name)
             return True
             
         except Exception as err:
-            LOGGER.error(f"Error updating VPN configuration {config.display_name}: {err}")
+            LOGGER.error("Error updating VPN configuration %s: %s", config.display_name, err)
             return False
             
     async def toggle_vpn_config(self, config: VPNConfig) -> bool:
@@ -197,7 +197,7 @@ class VPNMixin:
             True if successful, False otherwise
         """
         new_state = not config.enabled
-        LOGGER.debug(f"Toggling VPN configuration {config.display_name} ({config.id}) to {new_state}")
+        LOGGER.debug("Toggling VPN configuration %s (%s) to %s", config.display_name, config.id, new_state)
         
         try:
             # Update the enabled state
@@ -209,14 +209,14 @@ class VPNMixin:
             response = await self.controller.request(request)
             
             if not response:
-                LOGGER.error(f"Failed to toggle VPN configuration {config.display_name}")
+                LOGGER.error("Failed to toggle VPN configuration %s", config.display_name)
                 return False
                 
-            LOGGER.info(f"VPN configuration {config.display_name} toggled to {'enabled' if new_state else 'disabled'}")
+            LOGGER.info("VPN configuration %s toggled to %s", config.display_name, 'enabled' if new_state else 'disabled')
             return True
             
         except Exception as err:
-            LOGGER.error(f"Error toggling VPN configuration {config.display_name}: {err}")
+            LOGGER.error("Error toggling VPN configuration %s: %s", config.display_name, err)
             return False
             
     async def remove_vpn_config(self, config: Union[VPNConfig, str]) -> bool:
@@ -236,7 +236,7 @@ class VPNMixin:
             LOGGER.error("Cannot remove VPN configuration without an ID")
             return False
             
-        LOGGER.debug(f"Removing VPN configuration {display_name} ({config_id})")
+        LOGGER.debug("Removing VPN configuration %s (%s)", display_name, config_id)
         
         try:
             # Create path with the network ID and execute the API request
@@ -245,14 +245,14 @@ class VPNMixin:
             response = await self.controller.request(request)
             
             if not response:
-                LOGGER.error(f"Failed to remove VPN configuration {display_name}")
+                LOGGER.error("Failed to remove VPN configuration %s", display_name)
                 return False
                 
-            LOGGER.info(f"Successfully removed VPN configuration {display_name}")
+            LOGGER.info("Successfully removed VPN configuration %s", display_name)
             return True
             
         except Exception as err:
-            LOGGER.error(f"Error removing VPN configuration {display_name}: {err}")
+            LOGGER.error("Error removing VPN configuration %s: %s", display_name, err)
             return False
     
     # Convenience methods for readability

@@ -136,5 +136,3 @@ def parse_curated_text(content: str) -> Dict[str, Any]:
         "type": group_type,
         "members": members,
     }
-
-

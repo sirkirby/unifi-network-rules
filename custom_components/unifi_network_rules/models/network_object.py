@@ -58,5 +58,3 @@ class NetworkObject(ApiItem):
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self.raw)
-
-

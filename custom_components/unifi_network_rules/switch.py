@@ -56,7 +56,7 @@ _ENTITY_CACHE: Set[str] = set()
 # Global registry to track created entity unique IDs
 _CREATED_UNIQUE_IDS = set()
 
-async def async_setup_platform(hass: HomeAssistant, config, async_add_entities, discovery_info=None):
+async def async_setup_platform(_hass: HomeAssistant, _config, _async_add_entities, _discovery_info=None):
     """Set up the UniFi Network Rules switch platform."""
     LOGGER.debug("Setting up switch platform for UniFi Network Rules")
     # This function will be called when the platform is loaded manually
@@ -161,8 +161,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
                 }
                 LOGGER.info("Gathered potential LED switch: %s for device %s", unique_id, getattr(device, 'name', device.mac))
     else:
-        LOGGER.warning("No LED-capable devices found in coordinator. Coordinator devices:", 
-                      getattr(coordinator, 'devices', 'NOT_SET'))
+        LOGGER.warning("No LED-capable devices found in coordinator. Coordinator devices: %s", getattr(coordinator, 'devices', 'NOT_SET'))
 
         # --- Step 2: Create entity instances for unique IDs ---
     switches_to_add = []
@@ -173,8 +172,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         try:
             # Prevent duplicate processing if somehow gathered twice
             if unique_id in processed_unique_ids:
-                 LOGGER.warning("Skipping already processed unique_id during instance creation: %s", unique_id)
-                 continue
+                LOGGER.warning("Skipping already processed unique_id during instance creation: %s", unique_id)
+                continue
 
             # Create the entity instance
             entity_class = data["entity_class"]
@@ -187,8 +186,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
 
             # Check if the created entity's unique_id matches the key (sanity check)
             if entity.unique_id != unique_id:
-                 LOGGER.error("Mismatch! Expected unique_id %s but created entity has %s. Skipping.", unique_id, entity.unique_id)
-                 continue
+                LOGGER.error("Mismatch! Expected unique_id %s but created entity has %s. Skipping.", unique_id, entity.unique_id)
+                continue
 
             switches_to_add.append(entity)
             processed_unique_ids.add(unique_id)
@@ -205,7 +204,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         # --- Update coordinator's known IDs --- 
         # Let the coordinator update known_unique_ids when dynamically adding
         # This prevents adding IDs during initial setup that might already be known from registry
-        pass 
 
         LOGGER.info("Added %d new UniFi Network Rules switches", len(switches_to_add))
     else:
@@ -234,9 +232,7 @@ async def create_traffic_route_kill_switch(hass, coordinator, rule, config_entry
         return None if return_entity else False
     
     # Import necessary components
-    from homeassistant.helpers.entity_registry import async_get as get_entity_registry
     import copy
-    from .helpers.rule import get_child_unique_id, get_rule_id
 
     try:
         # Get the parent rule ID
@@ -249,7 +245,7 @@ async def create_traffic_route_kill_switch(hass, coordinator, rule, config_entry
         kill_switch_id = get_child_unique_id(parent_rule_id, "kill_switch")
 
         # Check if already exists in registry
-        entity_registry = get_entity_registry(hass)
+        entity_registry = async_get_entity_registry(hass)
         _existing_entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, kill_switch_id)
 
         # Don't create if already created this session
@@ -259,10 +255,10 @@ async def create_traffic_route_kill_switch(hass, coordinator, rule, config_entry
             if return_entity:
                  # Attempt to find the existing entity instance? This is tricky.
                  # For now, returning None prevents duplicate creation attempt by setup_entry.
-                 # Linking logic in setup_entry will handle finding existing entities later.
-                 LOGGER.warning("Kill switch %s already created, returning None for setup_entry", kill_switch_id)
-                 return None
-            return False # Don't proceed if not returning entity
+                # Linking logic in setup_entry will handle finding existing entities later.
+                LOGGER.warning("Kill switch %s already created, returning None for setup_entry", kill_switch_id)
+                return None
+            return False  # Don't proceed if not returning entity
 
         # Create a copy of the rule for the kill switch
         rule_copy = copy.deepcopy(rule)
@@ -284,7 +280,7 @@ async def create_traffic_route_kill_switch(hass, coordinator, rule, config_entry
         platform = None
         # Ensure platform data structure exists before accessing
         if DOMAIN in hass.data and "platforms" in hass.data[DOMAIN] and "switch" in hass.data[DOMAIN]["platforms"]:
-             platform = hass.data[DOMAIN]["platforms"]["switch"]
+            platform = hass.data[DOMAIN]["platforms"]["switch"]
 
         # Add entity if platform is available
         if platform and hasattr(platform, 'async_add_entities'):
@@ -498,9 +494,9 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
 
                     # Clear optimistic state only if actual state matches or is unknown
                     if self._optimistic_state == actual_state or actual_state is None:
-                         LOGGER.debug("%s(%s): Clearing optimistic state (matches actual or actual is None).",
-                                     type(self).__name__, self.entity_id or self.unique_id)
-                         self.clear_optimistic_state(force=True) # Force clear here
+                        LOGGER.debug("%s(%s): Clearing optimistic state (matches actual or actual is None).",
+                                    type(self).__name__, self.entity_id or self.unique_id)
+                        self.clear_optimistic_state(force=True)  # Force clear here
                     else:
                         LOGGER.debug("%s(%s): State mismatch: optimistic=%s, actual=%s. Keeping optimistic state briefly.",
                                   type(self).__name__, self.entity_id or self.unique_id,
@@ -568,19 +564,19 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                         try:
                             # Use a flag to prevent infinite recursion if parent also checks child
                             if getattr(self, '_checking_parent_availability', False):
-                                 parent_is_truly_available = True # Assume true to break loop
+                                parent_is_truly_available = True  # Assume true to break loop
                             else:
-                                 setattr(parent_entity, '_checking_parent_availability', True)
-                                 parent_is_truly_available = parent_entity.available
-                                 delattr(parent_entity, '_checking_parent_availability')
+                                setattr(parent_entity, '_checking_parent_availability', True)
+                                parent_is_truly_available = parent_entity.available
+                                delattr(parent_entity, '_checking_parent_availability')
                             if not parent_is_truly_available:
-                                 return False # If parent object says it's not available, we aren't either
+                                return False  # If parent object says it's not available, we aren't either
                         except Exception as e:
-                             LOGGER.warning("%s(%s): Error checking parent entity availability property: %s", 
-                                           type(self).__name__, self.entity_id, e)
+                            LOGGER.warning("%s(%s): Error checking parent entity availability property: %s", 
+                                          type(self).__name__, self.entity_id, e)
                     return True
                 else:
-                     return False
+                    return False
 
         # Standard availability check (if not a child or parent lookup failed)
         coord_success = self.coordinator.last_update_success
@@ -664,6 +660,16 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off (disable) the rule."""
         await self._async_toggle_rule(False)
+
+    def turn_on(self, **kwargs: Any) -> None:
+        """Turn on (enable) the rule - synchronous wrapper."""
+        if self.hass and self.hass.loop and self.hass.loop.is_running():
+            asyncio.create_task(self.async_turn_on(**kwargs))
+
+    def turn_off(self, **kwargs: Any) -> None:
+        """Turn off (disable) the rule - synchronous wrapper."""
+        if self.hass and self.hass.loop and self.hass.loop.is_running():
+            asyncio.create_task(self.async_turn_off(**kwargs))
 
     async def _async_toggle_rule(self, enable: bool) -> None:
         """Handle toggling the rule state."""
@@ -867,8 +873,8 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                    self.entity_id, self._rule_id)
         # Avoid duplicate removal if already initiated
         if getattr(self, '_removal_initiated', False):
-             LOGGER.debug("Removal already initiated for %s, skipping signal handler.", self.entity_id)
-             return
+            LOGGER.debug("Removal already initiated for %s, skipping signal handler.", self.entity_id)
+            return
 
         # Initiate removal asynchronously in a thread-safe way
         self.hass.loop.call_soon_threadsafe(
@@ -963,13 +969,13 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         # Perform global unique ID tracking here
         if self.unique_id in _CREATED_UNIQUE_IDS:
              # This case should ideally not happen if setup_entry filtering works,
-             # but log if it does.
-             LOGGER.warning("Entity %s added to HASS, but unique_id %s was already tracked.",
-                            self.entity_id, self.unique_id)
+            # but log if it does.
+            LOGGER.warning("Entity %s added to HASS, but unique_id %s was already tracked.",
+                           self.entity_id, self.unique_id)
         else:
-             _CREATED_UNIQUE_IDS.add(self.unique_id)
-             LOGGER.debug("Added unique_id %s to global tracking upon adding entity %s to HASS.",
-                          self.unique_id, self.entity_id)
+            _CREATED_UNIQUE_IDS.add(self.unique_id)
+            LOGGER.debug("Added unique_id %s to global tracking upon adding entity %s to HASS.",
+                         self.unique_id, self.entity_id)
 
         # Add update callbacks
         self.async_on_remove(
@@ -1025,8 +1031,7 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
 
         # Make sure the entity is properly registered in the entity registry
         try:
-            from homeassistant.helpers.entity_registry import async_get as get_entity_registry
-            registry = get_entity_registry(self.hass)
+            registry = async_get_entity_registry(self.hass)
 
             # Log the entity registry state
             LOGGER.debug("Entity registry check - unique_id: %s, entity_id: %s",
@@ -1230,7 +1235,7 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
         # 2. Determine Parent and Kill Switch IDs
         original_rule_id = get_rule_id(rule_data) # Parent unique ID (e.g., unr_route_xyz)
         if not original_rule_id:
-             raise ValueError("KillSwitch init: Cannot determine original rule ID from rule data")
+            raise ValueError("KillSwitch init: Cannot determine original rule ID from rule data")
         kill_switch_id = get_child_unique_id(original_rule_id, "kill_switch")
 
         # 3. Override attributes for the Kill Switch
@@ -1240,11 +1245,11 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
         # Override name based on the name generated by super()
         # Ensure super() set a name before modifying
         if self._attr_name:
-             self._attr_name = get_child_entity_name(self._attr_name, "kill_switch") # OVERRIDE
+            self._attr_name = get_child_entity_name(self._attr_name, "kill_switch")  # OVERRIDE
         else:
-             # Fallback name if super init failed to set one
-             fallback_parent_name = extract_descriptive_name(rule_data, coordinator) or original_rule_id
-             self._attr_name = get_child_entity_name(fallback_parent_name, "kill_switch")
+            # Fallback name if super init failed to set one
+            fallback_parent_name = extract_descriptive_name(rule_data, coordinator) or original_rule_id
+            self._attr_name = get_child_entity_name(fallback_parent_name, "kill_switch")
 
         # Override entity_id based on the object_id generated by super()
         # Note: get_object_id uses rule_data (parent), which is correct base
@@ -1265,7 +1270,7 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
             LOGGER.debug("KillSwitch %s: Initialized specific state to %s from parent rule data",
                          self.unique_id, actual_state)
         else:
-             LOGGER.warning("KillSwitch %s: Initialized without specific state from rule data.", self.unique_id)
+            LOGGER.warning("KillSwitch %s: Initialized without specific state from rule data.", self.unique_id)
 
         # 5. Linking Information (Parent ID needed for lookups)
         self._linked_parent_id = original_rule_id # Store parent's unique_id
@@ -1404,10 +1409,10 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
 
         # Log the availability status, especially if it's False
         if not is_available:
-             LOGGER.debug("KillSwitch(%s): Determined unavailable because parent rule lookup failed.", self.entity_id or self.unique_id)
+            LOGGER.debug("KillSwitch(%s): Determined unavailable because parent rule lookup failed.", self.entity_id or self.unique_id)
         else:
-             # Optionally log when available too, but can be noisy
-             LOGGER.debug("KillSwitch(%s): Determined available (parent rule found).", self.entity_id or self.unique_id)
+            # Optionally log when available too, but can be noisy
+            LOGGER.debug("KillSwitch(%s): Determined available (parent rule found).", self.entity_id or self.unique_id)
 
         return is_available
 
@@ -1603,8 +1608,7 @@ class UnifiLedToggleSwitch(UnifiRuleSwitch):
                 new_device_data = current_device.raw.copy()
                 new_device_data['led_override'] = "default" if enable else "off"  # Optimistic new state
                 
-                # Import Device class and create optimistic new device object
-                from aiounifi.models.device import Device
+                # Create optimistic new device object using globally imported Device class
                 new_state_device = Device(new_device_data)
                 
                 if LOG_TRIGGERS:
