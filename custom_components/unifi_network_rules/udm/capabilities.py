@@ -1,8 +1,4 @@
 """Module for UniFi capabilities detection."""
-
-import logging
-from typing import Optional
-
 from ..const import LOGGER
 
 class _Capabilities:

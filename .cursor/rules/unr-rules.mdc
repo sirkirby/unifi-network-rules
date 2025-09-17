@@ -4,7 +4,7 @@ globs: custom_components/**/*.py
 alwaysApply: true
 ---
 
-## Rules
+# Rules
 
 - Always keep the code DRY for testability and separation of concerns
 - Prefer modern idiomatic Python 3.13 and open source conventions, Leverage type hints, use CONST over hard coded strings
@@ -15,6 +15,7 @@ alwaysApply: true
 - When fixing a problem or bug, avoid treating the symptom, look for the root cause.
 - Details matter, ensure to always preserve existing functionality unless otherwise instructed.
 - KISS
+- Maintain consistent code hygiene by addressing code and markdown linting errors and warnings.
 
 ## Notes
 

@@ -1,14 +1,6 @@
 """Base API module for UniFi Dream Machine."""
 
-import asyncio
-import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
-
-from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-import aiohttp
-from http.cookies import SimpleCookie
 
 from ..const import (
     DEFAULT_SITE,
@@ -56,9 +48,6 @@ class UDMAPI:
         self._login_cooldown = 60
         self._config = None  # Store config for delayed controller creation
         self._capabilities = None  # Store capabilities
-        # WebSocket path customization
-        self._websocket_path_prefix = ""
-        self._custom_websocket = None
         self._ws_message_handler = None
         
         # Rate limiting protection
@@ -137,17 +126,17 @@ class UDMAPI:
         
         try:
             if rule_type == "firewall_policies":
-                return await self.remove_firewall_policy(rule_id)
+                return await self.remove_firewall_policy(rule_id)  # pylint: disable=no-member
             elif rule_type == "traffic_rules":
-                return await self.remove_traffic_rule(rule_id)
+                return await self.remove_traffic_rule(rule_id)  # pylint: disable=no-member
             elif rule_type == "port_forwards":
-                return await self.remove_port_forward(rule_id)
+                return await self.remove_port_forward(rule_id)  # pylint: disable=no-member
             elif rule_type == "traffic_routes":
-                return await self.remove_traffic_route(rule_id)
+                return await self.remove_traffic_route(rule_id)  # pylint: disable=no-member
             elif rule_type == "legacy_firewall_rules":
-                return await self.remove_legacy_firewall_rule(rule_id)
+                return await self.remove_legacy_firewall_rule(rule_id)  # pylint: disable=no-member
             elif rule_type == "qos_rules":
-                return await self.remove_qos_rule(rule_id)
+                return await self.remove_qos_rule(rule_id)  # pylint: disable=no-member
             else:
                 LOGGER.error("Unknown rule type: %s", rule_type)
                 return False

@@ -26,10 +26,7 @@
   },
   "device_automation": {
     "trigger_type": {
-      "rule_enabled": "Regra ativada",
-      "rule_disabled": "Regra desativada",
-      "rule_changed": "Regra modificada",
-      "rule_deleted": "Regra excluída"
+      "unr_changed": "Configuração UniFi alterada"
     },
     "trigger_subtype": {
       "firewall_policies": "Política de Firewall",
@@ -40,29 +37,17 @@
       "vpn_servers": "Servidor VPN",
       "legacy_firewall_rules": "Regra de Firewall Legada",
       "traffic_rules": "Regra de Tráfego",
-      "wlans": "WLAN"
+      "wlans": "WLAN",
+      "port_profiles": "Perfil de Porta",
+      "networks": "Rede",
+      "devices": "Dispositivo"
     }
   },
   "triggers": {
-    "rule_enabled": {
-      "name": "Regra UniFi ativada",
-      "description": "Disparado quando uma regra da Rede UniFi é ativada",
-      "description_configured": "Regra UniFi ativada"
-    },
-    "rule_disabled": {
-      "name": "Regra UniFi desativada",
-      "description": "Disparado quando uma regra da Rede UniFi é desativada",
-      "description_configured": "Regra UniFi desativada"
-    },
-    "rule_changed": {
-      "name": "Regra UniFi modificada",
-      "description": "Disparado quando uma configuração de regra da Rede UniFi é alterada",
-      "description_configured": "Regra UniFi modificada"
-    },
-    "rule_deleted": {
-      "name": "Regra UniFi excluída",
-      "description": "Disparado quando uma regra da Rede UniFi é excluída",
-      "description_configured": "Regra UniFi excluída"
+    "unr_changed": {
+      "name": "Configuração UniFi alterada",
+      "description": "Disparado quando qualquer configuração da Rede UniFi é alterada (regras, perfis, redes, dispositivos)",
+      "description_configured": "Configuração UniFi alterada"
     }
   },
   "services": {
@@ -98,7 +83,7 @@
         },
         "rule_types": {
           "name": "Tipos de Regras",
-          "description": "Lista opcional de tipos de regras para restaurar (policy, route, firewall, traffic, port_forward)"
+          "description": "Lista opcional de tipos de regras para restaurar (policy, route, port_forward, qos_rule, vpn_client, port_profile, network)"
         }
       }
     },
@@ -126,7 +111,7 @@
         },
         "rule_type": {
           "name": "Tipo de Regra",
-          "description": "Tipo de regra a ser excluída. No momento, apenas 'policy' (políticas de firewall) é suportado"
+          "description": "Tipo de regra a ser excluída. Suporta políticas de firewall, regras de tráfego, redirecionamentos de porta, rotas de tráfego, regras de QoS, configurações VPN e perfis de porta"
         }
       }
     }

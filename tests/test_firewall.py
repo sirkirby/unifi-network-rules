@@ -1,7 +1,7 @@
 """Tests for the UniFi Network Rules Firewall API functionality."""
 import asyncio
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
+from unittest.mock import Mock, AsyncMock
 
 from custom_components.unifi_network_rules.udm.api import UDMAPI
 from custom_components.unifi_network_rules.models.firewall_rule import FirewallRule

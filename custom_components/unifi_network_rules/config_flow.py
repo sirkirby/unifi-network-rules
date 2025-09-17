@@ -9,8 +9,7 @@ import asyncio
 from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.data_entry_flow import FlowResult
-from homeassistant.exceptions import HomeAssistantError
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 
 from .const import (
     DOMAIN,
@@ -18,12 +17,17 @@ from .const import (
     DEFAULT_UPDATE_INTERVAL,
     CONF_SITE,
     DEFAULT_SITE,
-    LOGGER
+    LOGGER,
+    CONF_SMART_POLLING_BASE_INTERVAL,
+    CONF_SMART_POLLING_ACTIVE_INTERVAL,
+    CONF_SMART_POLLING_REALTIME_INTERVAL,
+    CONF_SMART_POLLING_ACTIVITY_TIMEOUT,
+    CONF_SMART_POLLING_DEBOUNCE_SECONDS,
+    CONF_SMART_POLLING_OPTIMISTIC_TIMEOUT,
 )
 from .udm import CannotConnect, InvalidAuth, UDMAPI
 
 from aiounifi.errors import (
-    AiounifiException,
     LoginRequired,
     RequestError,
     ResponseError,
@@ -113,4 +117,73 @@ class UnifiNetworkRulesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        """Get the options flow."""
+        return UnifiNetworkRulesOptionsFlowHandler(config_entry)
+
+
+class UnifiNetworkRulesOptionsFlowHandler(config_entries.OptionsFlow):
+    """Handle options flow for UniFi Network Rules."""
+
+    def __init__(self, config_entry):
+        """Initialize options flow."""
+        self.config_entry = config_entry
+
+    async def async_step_init(self, user_input=None):
+        """Handle options flow."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        # Get current options with defaults
+        options = self.config_entry.options
+        
+        # Smart polling configuration schema
+        options_schema = vol.Schema({
+            vol.Optional(
+                CONF_SMART_POLLING_BASE_INTERVAL,
+                default=options.get(CONF_SMART_POLLING_BASE_INTERVAL, 300),
+                description="Base polling interval when idle (seconds)"
+            ): vol.All(int, vol.Range(min=30, max=3600)),
+            
+            vol.Optional(
+                CONF_SMART_POLLING_ACTIVE_INTERVAL,
+                default=options.get(CONF_SMART_POLLING_ACTIVE_INTERVAL, 30),
+                description="Active polling interval during user activity (seconds)"
+            ): vol.All(int, vol.Range(min=10, max=300)),
+            
+            vol.Optional(
+                CONF_SMART_POLLING_REALTIME_INTERVAL,
+                default=options.get(CONF_SMART_POLLING_REALTIME_INTERVAL, 10),
+                description="Real-time polling interval during changes (seconds)"
+            ): vol.All(int, vol.Range(min=5, max=60)),
+            
+            vol.Optional(
+                CONF_SMART_POLLING_ACTIVITY_TIMEOUT,
+                default=options.get(CONF_SMART_POLLING_ACTIVITY_TIMEOUT, 120),
+                description="Time to return to base interval after activity (seconds)"
+            ): vol.All(int, vol.Range(min=60, max=600)),
+            
+            vol.Optional(
+                CONF_SMART_POLLING_DEBOUNCE_SECONDS,
+                default=options.get(CONF_SMART_POLLING_DEBOUNCE_SECONDS, 10),
+                description="Debounce window for rapid changes (seconds)"
+            ): vol.All(int, vol.Range(min=5, max=60)),
+            
+            vol.Optional(
+                CONF_SMART_POLLING_OPTIMISTIC_TIMEOUT,
+                default=options.get(CONF_SMART_POLLING_OPTIMISTIC_TIMEOUT, 15),
+                description="Maximum optimistic state duration (seconds)"
+            ): vol.All(int, vol.Range(min=10, max=60)),
+        })
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=options_schema,
+            description_placeholders={
+                "name": self.config_entry.title
+            }
         )

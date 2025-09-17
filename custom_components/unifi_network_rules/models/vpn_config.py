@@ -1,8 +1,7 @@
 """VPN configuration model for UniFi Network Rules integration."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union, Literal
-from dataclasses import dataclass
+from typing import Any, Dict
 
 class VPNConfig:
     """Representation of a VPN configuration (client or server)."""
@@ -81,12 +80,16 @@ class VPNConfig:
     @property
     def is_client(self) -> bool:
         """Check if this is a client configuration."""
-        return self.vpn_type in ["openvpn-client", "wireguard-client"] or self.purpose == "vpn-client"
+        from ..helpers.rule import classify_vpn_type
+        is_client, _ = classify_vpn_type(self.purpose, self.vpn_type)
+        return is_client
     
     @property
     def is_server(self) -> bool:
         """Check if this is a server configuration."""
-        return self.vpn_type in ["openvpn-server", "wireguard-server"] or self.purpose == "vpn-server"
+        from ..helpers.rule import classify_vpn_type
+        _, is_server = classify_vpn_type(self.purpose, self.vpn_type)
+        return is_server
     
     @property
     def is_connected(self) -> bool:

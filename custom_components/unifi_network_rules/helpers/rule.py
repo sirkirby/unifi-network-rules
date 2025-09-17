@@ -16,6 +16,8 @@ from aiounifi.models.device import Device
 from ..models.firewall_rule import FirewallRule
 from ..models.qos_rule import QoSRule
 from ..models.vpn_config import VPNConfig
+from ..models.network import NetworkConf
+from ..models.port_profile import PortProfile
 from ..const import DOMAIN
 
 LOGGER = logging.getLogger(__name__)
@@ -45,6 +47,14 @@ def get_rule_enabled(rule: Any) -> bool:
             led_state = rule.raw.get('led_override')
             return led_state != 'off'  # True if not explicitly turned off
         return True  # Default to enabled if no override info
+    
+    # Networks enabled (corporate LAN typically has 'enabled')
+    if isinstance(rule, NetworkConf):
+        return rule.enabled
+    
+    # Port profile enabled state
+    if isinstance(rule, PortProfile):
+        return rule.enabled
     
     # For dictionaries, try common enabled attributes
     if isinstance(rule, dict):
@@ -141,7 +151,9 @@ def get_rule_id(rule: Any) -> str | None:
             elif rule.is_server:
                 return f"unr_vpn_server_{rule.id}"
             else:
-                return f"unr_vpn_{rule.id}"
+                # Default to client when type is unclear (most VPN configs are clients)
+                LOGGER.debug("VPN config %s has unclear client/server type, defaulting to client", rule.id)
+                return f"unr_vpn_client_{rule.id}"
         else:
             LOGGER.warning("VPNConfig without id: %s", rule)
             return None
@@ -152,6 +164,22 @@ def get_rule_id(rule: Any) -> str | None:
             return f"unr_device_{rule.mac}_led"
         else:
             LOGGER.warning("Device without mac attribute: %s", rule)
+            return None
+    
+    # Handle NetworkConf
+    if isinstance(rule, NetworkConf):
+        if rule.id:
+            return f"unr_network_{rule.id}"
+        else:
+            LOGGER.warning("NetworkConf without id attribute: %s", rule)
+            return None
+    
+    # Handle PortProfile
+    if isinstance(rule, PortProfile):
+        if rule.id:
+            return f"unr_port_profile_{rule.id}"
+        else:
+            LOGGER.warning("PortProfile without id attribute: %s", rule)
             return None
     
     # Dictionary fallback - this should not happen with properly typed data
@@ -186,7 +214,11 @@ def get_rule_prefix(rule_type: str) -> str:
         "legacy_firewall_rules": "Legacy Rule",
         "qos_rules": "QoS",
         "wlans": "WLAN",
-        "devices": "Device"
+        "devices": "Device",
+        "port_profiles": "Port Profile",
+        # For networks we return an empty prefix because the descriptive
+        # name will already include the desired label (e.g., WAN1, VLAN 1).
+        "networks": ""
     }
     
     return rule_types.get(rule_type, "Rule")
@@ -346,6 +378,41 @@ def extract_descriptive_name(rule: Any, coordinator=None) -> str | None:
     elif isinstance(rule, dict):
         # For dictionaries, try common name attributes
         return rule.get("name") or rule.get("description")
+    
+    elif isinstance(rule, NetworkConf):
+        # Build specialized names for networks:
+        # - WAN: "WAN<idx> <name>" when attr_hidden_id starts with WAN or purpose==wan
+        # - LAN/Corporate: "VLAN <vlan_id> <name>" when vlan_enabled and vlan id available
+        # - Special case: name exactly "WAN Magic" becomes "UniFi WAN Magic"
+        raw = getattr(rule, "raw", {}) if hasattr(rule, "raw") else {}
+        name = raw.get("name") or rule.name
+        hidden_id = raw.get("attr_hidden_id", "") or ""
+        purpose = raw.get("purpose", "") or ""
+
+        # Special case first
+        if name == "WAN Magic":
+            return "UniFi WAN Magic"
+
+        # WAN naming
+        if purpose == "wan" or (isinstance(hidden_id, str) and hidden_id.upper().startswith("WAN")):
+            # Extract index from WAN/WAN2/WAN3 ... when present
+            suffix = ""
+            if isinstance(hidden_id, str) and len(hidden_id) > 3 and hidden_id.upper().startswith("WAN"):
+                suffix = hidden_id[3:]  # characters after WAN
+            wan_label = f"WAN{suffix}" if suffix else "WAN"
+            return f"{wan_label} {name}".strip()
+
+        # LAN/VLAN naming
+        vlan_id = raw.get("vlan") or raw.get("vlan_id")
+        if raw.get("vlan_enabled") and vlan_id is not None:
+            return f"VLAN {vlan_id} {name}".strip()
+
+        # Default LAN (no VLAN) naming
+        if (purpose == "corporate" or (isinstance(hidden_id, str) and hidden_id.upper() == "LAN")) and not raw.get("vlan_enabled"):
+            return f"LAN {name}".strip()
+
+        # Default: return name as-is
+        return name
         
     # For other types, try common attributes
     if hasattr(rule, "name"):
@@ -374,6 +441,25 @@ def get_rule_name(rule: Any, coordinator=None) -> str | None:
         rule_type = "qos_rules"
     elif isinstance(rule, Device):
         rule_type = "devices"
+    elif isinstance(rule, NetworkConf):
+        # Decide if this network should be exposed as a switch entity.
+        # Omit VPN networks since we already have VPN switches.
+        raw = getattr(rule, "raw", {}) if hasattr(rule, "raw") else {}
+        purpose = str(raw.get("purpose", "")).lower()
+        vpn_type = str(raw.get("vpn_type", "")).lower()
+        is_vpn = (
+            purpose.startswith("vpn")
+            or purpose in {"remote-user-vpn", "vpn-client", "vpn-server"}
+            or "vpn" in vpn_type
+            or "wireguard" in vpn_type
+            or "openvpn" in vpn_type
+        )
+        if is_vpn:
+            rule_type = None  # signal to caller there is no switch type
+        else:
+            rule_type = "networks"
+    elif isinstance(rule, PortProfile):
+        rule_type = "port_profiles"
     elif isinstance(rule, dict) and "type" in rule:
         rule_type = rule.get("type")
     
@@ -583,3 +669,92 @@ def is_our_entity(entity_entry, domain=DOMAIN) -> bool:
     # Check if entity's platform matches our domain
     # This property cannot be changed by users
     return entity_entry.platform == domain
+
+
+# --- Network helpers ---
+def is_vpn_network(network: Any) -> bool:
+    """Return True if a network (dict or NetworkConf) represents a VPN entity.
+
+    Detects both purpose values and vpn_type variants (OpenVPN/WireGuard).
+    """
+    raw = getattr(network, "raw", {}) if hasattr(network, "raw") else (network if isinstance(network, dict) else {})
+    purpose = str(raw.get("purpose", "")).lower()
+    vpn_type = str(raw.get("vpn_type", "")).lower()
+    return (
+        purpose.startswith("vpn")
+        or purpose in {"remote-user-vpn", "vpn-client", "vpn-server"}
+        or "vpn" in vpn_type
+        or "wireguard" in vpn_type
+        or "openvpn" in vpn_type
+    )
+
+
+def classify_vpn_type(purpose: str, vpn_type: str) -> tuple[bool, bool]:
+    """Classify VPN configuration as client or server based on purpose and vpn_type.
+    
+    Args:
+        purpose: The purpose field from VPN config
+        vpn_type: The vpn_type field from VPN config
+        
+    Returns:
+        Tuple of (is_client, is_server)
+    """
+    purpose = str(purpose).lower() if purpose else ""
+    vpn_type = str(vpn_type).lower() if vpn_type else ""
+    
+    # Client indicators
+    is_client = (
+        purpose in ["vpn-client"]  # Removed "remote-user-vpn" - it's a server type
+        or vpn_type in ["openvpn-client", "wireguard-client"]
+        or (purpose.startswith("vpn") and "client" in purpose)
+        or (vpn_type and "client" in vpn_type)
+    )
+    
+    # Server indicators  
+    is_server = (
+        purpose in ["vpn-server", "remote-user-vpn"]  # Added "remote-user-vpn" - it's a server type
+        or vpn_type in ["openvpn-server", "wireguard-server"] 
+        or (purpose.startswith("vpn") and "server" in purpose)
+        or (vpn_type and "server" in vpn_type)
+    )
+    
+    return is_client, is_server
+
+
+def is_default_network(network: Any) -> bool:
+    """Return True if a network represents the default LAN network.
+    
+    The default network cannot be disabled, deleted, or modified in UniFi,
+    so it should not be exposed as a switch entity. It's identified by:
+    - attr_hidden_id being exactly "LAN"
+    - attr_no_delete being true (additional confirmation)
+    - vlan_enabled being false (no VLAN means default)
+    """
+    raw = getattr(network, "raw", {}) if hasattr(network, "raw") else (network if isinstance(network, dict) else {})
+    
+    # Primary identifier: attr_hidden_id is exactly "LAN"
+    hidden_id = raw.get("attr_hidden_id", "")
+    if hidden_id == "LAN":
+        return True
+    
+    # Secondary check: attr_no_delete + vlan_enabled false + corporate purpose
+    # This provides additional safety in case attr_hidden_id is missing
+    attr_no_delete = raw.get("attr_no_delete", False)
+    vlan_enabled = raw.get("vlan_enabled", False)
+    purpose = str(raw.get("purpose", "")).lower()
+    
+    if attr_no_delete and not vlan_enabled and purpose == "corporate":
+        # Log this case as it might indicate the default network without hidden_id
+        LOGGER.debug("Potential default network detected without hidden_id: %s", raw.get("name", "unknown"))
+        return True
+    
+    return False
+
+
+def filter_switchable_networks(networks: list[Any]) -> list[Any]:
+    """Filter out VPN networks and default network; keep networks suitable for switch entities."""
+    try:
+        return [n for n in networks if not is_vpn_network(n) and not is_default_network(n)]
+    except Exception:
+        # Fail-safe: if anything goes wrong, return original list
+        return networks

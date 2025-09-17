@@ -1,7 +1,6 @@
 """Module for UniFi firewall operations."""
 
-import logging
-from typing import Any, Dict, List, Optional, Tuple, Set
+from typing import Any, Dict, List, Optional
 
 # Import directly from specific module rather than models package
 from aiounifi.models.firewall_policy import (
@@ -19,7 +18,7 @@ from ..const import (
 )
 
 # Import our custom FirewallRule model for legacy firewall rules
-from ..models.firewall_rule import FirewallRule, TypedFirewallRule
+from ..models.firewall_rule import FirewallRule
 
 class FirewallMixin:
     """Mixin class for firewall operations."""

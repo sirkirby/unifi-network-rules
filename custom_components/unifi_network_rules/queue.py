@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Callable, Any, Awaitable, Dict, Tuple, Optional, List
+from typing import Callable, Any, Dict, Optional, List
 import time
 import weakref
 

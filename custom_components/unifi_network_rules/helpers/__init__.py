@@ -15,4 +15,6 @@ from .rule import (  # noqa
     get_child_entity_name,
     get_child_entity_id,
     get_child_unique_id,
+    is_vpn_network,
+    is_default_network,
 ) 

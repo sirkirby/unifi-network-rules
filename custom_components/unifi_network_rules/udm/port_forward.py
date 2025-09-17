@@ -1,7 +1,6 @@
 """Module for UniFi port forwarding operations."""
 
-import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 # Import directly from specific module
 from aiounifi.models.port_forward import (

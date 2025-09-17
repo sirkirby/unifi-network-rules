@@ -1,9 +1,7 @@
 """API request handling for UniFi API."""
 
 import asyncio
-import logging
-import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, Coroutine
+from typing import Any, Callable, Optional, Tuple, Coroutine
 
 from ..const import LOGGER
 

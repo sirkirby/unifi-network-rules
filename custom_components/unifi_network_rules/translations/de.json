@@ -1,0 +1,120 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "UniFi-Netzwerkregeln",
+        "description": "Richten Sie UniFi-Netzwerkregeln ein, um Ihre UniFi Dream Machine zu verwalten.",
+        "data": {
+          "host": "Host",
+          "username": "Benutzername",
+          "password": "Passwort",
+          "site": "Site-Name (Standard ist 'default')",
+          "update_interval": "Aktualisierungsintervall (Minuten)",
+          "verify_ssl": "SSL-Zertifikat überprüfen (für selbstsignierte Zertifikate deaktivieren)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung fehlgeschlagen",
+      "invalid_auth": "Ungültige Authentifizierung",
+      "no_capabilities": "Keine unterstützten Firewall-Funktionen auf diesem Gerät erkannt.",
+      "unknown": "Unerwarteter Fehler"
+    },
+    "abort": {
+      "already_configured": "Gerät ist bereits konfiguriert"
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "unr_changed": "UniFi-Konfiguration geändert"
+    },
+    "trigger_subtype": {
+      "firewall_policies": "Firewall-Richtlinie",
+      "traffic_routes": "Verkehrsroute",
+      "port_forwards": "Port-Weiterleitung",
+      "qos_rules": "QoS-Regel",
+      "vpn_clients": "VPN-Client",
+      "vpn_servers": "VPN-Server",
+      "legacy_firewall_rules": "Legacy-Firewall-Regel",
+      "traffic_rules": "Verkehrsregel",
+      "wlans": "WLAN",
+      "port_profiles": "Port-Profil",
+      "networks": "Netzwerk",
+      "devices": "Gerät"
+    }
+  },
+  "triggers": {
+    "unr_changed": {
+      "name": "UniFi-Konfiguration geändert",
+      "description": "Wird ausgelöst, wenn sich eine UniFi-Netzwerkkonfiguration ändert (Regeln, Profile, Netzwerke, Geräte)",
+      "description_configured": "UniFi-Konfiguration geändert"
+    }
+  },
+  "services": {
+    "refresh": {
+      "name": "Aktualisieren",
+      "description": "UniFi-Netzwerkregeln-Daten aktualisieren"
+    },
+    "backup_rules": {
+      "name": "Regeln sichern",
+      "description": "Firewall- und Verkehrsregeln in eine Datei sichern",
+      "fields": {
+        "filename": {
+          "name": "Dateiname",
+          "description": "Name der Sicherungsdatei (wird im Konfigurationsverzeichnis von Home Assistant gespeichert)"
+        }
+      }
+    },
+    "restore_rules": {
+      "name": "Regeln wiederherstellen",
+      "description": "Firewall- und Verkehrsregeln aus einer Sicherungsdatei wiederherstellen",
+      "fields": {
+        "filename": {
+          "name": "Dateiname",
+          "description": "Name der Sicherungsdatei zum Wiederherstellen (muss im Konfigurationsverzeichnis von Home Assistant vorhanden sein)"
+        },
+        "rule_ids": {
+          "name": "Regel-IDs",
+          "description": "Optionale Liste spezifischer Regel-IDs zum Wiederherstellen"
+        },
+        "name_filter": {
+          "name": "Namensfilter",
+          "description": "Optionaler Filter - nur Regeln wiederherstellen, die diesen Text in ihrem Namen enthalten"
+        },
+        "rule_types": {
+          "name": "Regeltypen",
+          "description": "Optionale Liste von Regeltypen zum Wiederherstellen (policy, route, port_forward, qos_rule, vpn_client, port_profile, network)"
+        }
+      }
+    },
+    "bulk_update_rules": {
+      "name": "Massen-Update von Regeln",
+      "description": "Mehrere Regeln basierend auf Namensübereinstimmung aktivieren oder deaktivieren",
+      "fields": {
+        "name_filter": {
+          "name": "Namensfilter",
+          "description": "Text zum Abgleich mit Regelnamen"
+        },
+        "state": {
+          "name": "Zustand",
+          "description": "Wahr um übereinstimmende Regeln zu aktivieren, Falsch um sie zu deaktivieren"
+        }
+      }
+    },
+    "delete_rule": {
+      "name": "Regel löschen",
+      "description": "Eine Regel löschen",
+      "fields": {
+        "rule_id": {
+          "name": "Regel-ID",
+          "description": "Die ID der zu löschenden Regel"
+        },
+        "rule_type": {
+          "name": "Regeltyp",
+          "description": "Der Typ der zu löschenden Regel. Unterstützt Firewall-Richtlinien, Verkehrsregeln, Port-Weiterleitungen, Verkehrsrouten, QoS-Regeln, VPN-Konfigurationen und Port-Profile"
+        }
+      }
+    }
+  },
+  "title": "UniFi-Netzwerkregeln"
+}

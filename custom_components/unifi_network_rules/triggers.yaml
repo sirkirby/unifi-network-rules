@@ -1,5 +1,35 @@
-rule_enabled: {}
-rule_disabled: {}
-rule_changed: {}
-rule_deleted: {} 
-device_changed: {}
+# Unified trigger system
+unr_changed:
+  fields:
+    entity_id:
+      example: "switch.unr_firewall_policy_abc123"
+    change_type:
+      example: "firewall_policy"
+      selector:
+        select:
+          options:
+            - firewall_policy
+            - traffic_rule
+            - traffic_route
+            - port_forward
+            - firewall_zone
+            - wlan
+            - qos_rule
+            - vpn_client
+            - vpn_server
+            - device
+            - port_profile
+            - network
+    change_action:
+      example: "enabled"
+      selector:
+        select:
+          multiple: true
+          options:
+            - created
+            - deleted
+            - enabled
+            - disabled
+            - modified
+    name_filter:
+      example: "Guest Network"

@@ -26,10 +26,7 @@
   },
   "device_automation": {
     "trigger_type": {
-      "rule_enabled": "Rule enabled",
-      "rule_disabled": "Rule disabled",
-      "rule_changed": "Rule changed",
-      "rule_deleted": "Rule deleted"
+      "unr_changed": "UniFi configuration changed"
     },
     "trigger_subtype": {
       "firewall_policies": "Firewall Policy",
@@ -40,29 +37,17 @@
       "vpn_servers": "VPN Server",
       "legacy_firewall_rules": "Legacy Firewall Rule",
       "traffic_rules": "Traffic Rule",
-      "wlans": "WLAN"
+      "wlans": "WLAN",
+      "port_profiles": "Port Profile",
+      "networks": "Network",
+      "devices": "Device"
     }
   },
   "triggers": {
-    "rule_enabled": {
-      "name": "UniFi rule enabled",
-      "description": "Triggered when a UniFi Network rule is enabled",
-      "description_configured": "UniFi rule enabled"
-    },
-    "rule_disabled": {
-      "name": "UniFi rule disabled",
-      "description": "Triggered when a UniFi Network rule is disabled",
-      "description_configured": "UniFi rule disabled"
-    },
-    "rule_changed": {
-      "name": "UniFi rule changed",
-      "description": "Triggered when a UniFi Network rule configuration is modified",
-      "description_configured": "UniFi rule changed"
-    },
-    "rule_deleted": {
-      "name": "UniFi rule deleted",
-      "description": "Triggered when a UniFi Network rule is deleted",
-      "description_configured": "UniFi rule deleted"
+    "unr_changed": {
+      "name": "UniFi configuration changed",
+      "description": "Triggered when any UniFi Network configuration changes (rules, profiles, networks, devices)",
+      "description_configured": "UniFi configuration changed"
     }
   },
   "services": {
@@ -98,7 +83,7 @@
         },
         "rule_types": {
           "name": "Rule Types",
-          "description": "Optional list of rule types to restore (policy, route, firewall, traffic, port_forward)"
+          "description": "Optional list of rule types to restore (policy, route, port_forward, qos_rule, vpn_client, port_profile, network)"
         }
       }
     },
@@ -126,7 +111,7 @@
         },
         "rule_type": {
           "name": "Rule Type",
-          "description": "The type of rule to delete. Currently only supports 'policy' for firewall policies"
+          "description": "The type of rule to delete. Supports firewall policies, traffic rules, port forwards, traffic routes, QoS rules, VPN configurations, and port profiles"
         }
       }
     }

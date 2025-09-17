@@ -5,33 +5,22 @@ import logging
 from typing import Any, Final, Optional, Set, Dict
 import time  # Add this import
 import asyncio
-import contextlib
-import re
-import copy
 
-from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription, SwitchDeviceClass, PLATFORM_SCHEMA
+from homeassistant.components.switch import SwitchEntity, SwitchDeviceClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.entity import DeviceInfo, EntityCategory
+from homeassistant.helpers.entity import DeviceInfo, EntityCategory, generate_entity_id
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
-from homeassistant.helpers.device_registry import async_get as async_get_entity_registry
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
-import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers.entity import generate_entity_id
 from homeassistant.exceptions import HomeAssistantError
+from .services.constants import SIGNAL_ENTITIES_CLEANUP
 
-from aiounifi.models.traffic_route import TrafficRoute
-from aiounifi.models.firewall_policy import FirewallPolicy
-from aiounifi.models.traffic_rule import TrafficRule
-from aiounifi.models.port_forward import PortForward
-from aiounifi.models.firewall_zone import FirewallZone
-from aiounifi.models.wlan import Wlan
+# from aiounifi.models.wlan import Wlan  # Imported elsewhere when needed
 from aiounifi.models.device import Device  # For LED toggle
 
 from .const import DOMAIN, MANUFACTURER, SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS, LOG_TRIGGERS
-from .helpers.rule import sanitize_entity_id
 from .coordinator import UnifiRuleUpdateCoordinator
 from .helpers.rule import (
     get_rule_id, 
@@ -41,13 +30,11 @@ from .helpers.rule import (
     get_child_entity_name, 
     get_child_unique_id, 
     get_child_entity_id,
-    extract_descriptive_name
+    extract_descriptive_name,
 )
-from .models.firewall_rule import FirewallRule  # Import FirewallRule
-from .models.traffic_route import TrafficRoute  # Import TrafficRoute
-from .models.qos_rule import QoSRule
 from .models.vpn_config import VPNConfig
-from .services.constants import SIGNAL_ENTITIES_CLEANUP
+from .models.port_profile import PortProfile
+from .models.network import NetworkConf
 
 LOGGER = logging.getLogger(__name__)
 
@@ -69,7 +56,7 @@ _ENTITY_CACHE: Set[str] = set()
 # Global registry to track created entity unique IDs
 _CREATED_UNIQUE_IDS = set()
 
-async def async_setup_platform(hass: HomeAssistant, config, async_add_entities, discovery_info=None):
+async def async_setup_platform(_hass: HomeAssistant, _config, _async_add_entities, _discovery_info=None):
     """Set up the UniFi Network Rules switch platform."""
     LOGGER.debug("Setting up switch platform for UniFi Network Rules")
     # This function will be called when the platform is loaded manually
@@ -92,7 +79,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         and entry.platform == DOMAIN 
         and entry.unique_id
     }
-    # LOGGER.debug("Initialized known_unique_ids from registry (count: %d): %s", len(coordinator.known_unique_ids), sorted(list(coordinator.known_unique_ids))) # ADDED detailed log
     LOGGER.debug("Initialized known_unique_ids from registry: %d entries", len(coordinator.known_unique_ids))
     
     # --- Trigger an immediate refresh after initial known_ids population ---
@@ -102,8 +88,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     LOGGER.debug("Initial coordinator refresh completed")
 
     # Initialize as empty, coordinator will manage it
-    # if not hasattr(coordinator, 'known_unique_ids'): # Initialize only if it doesn't exist (e.g. first load)
-    #     coordinator.known_unique_ids = set()
     # Do NOT clear on reload, let coordinator handle sync
 
     # --- Store add_entities callback --- 
@@ -123,6 +107,9 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         ("wlans", coordinator.wlans, UnifiWlanSwitch),
         ("vpn_clients", coordinator.vpn_clients, UnifiVPNClientSwitch),
         ("vpn_servers", coordinator.vpn_servers, UnifiVPNServerSwitch),
+        ("port_profiles", coordinator.port_profiles, UnifiPortProfileSwitch),
+        # Networks are now pre-filtered in coordinator (no VPN, no default)
+        ("networks", coordinator.networks or [], UnifiNetworkSwitch),
     ]
 
     for rule_type, rules, entity_class in all_rule_sources:
@@ -174,8 +161,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
                 }
                 LOGGER.info("Gathered potential LED switch: %s for device %s", unique_id, getattr(device, 'name', device.mac))
     else:
-        LOGGER.warning("No LED-capable devices found in coordinator. Coordinator devices: %s", 
-                      getattr(coordinator, 'devices', 'NOT_SET'))
+        LOGGER.warning("No LED-capable devices found in coordinator. Coordinator devices: %s", getattr(coordinator, 'devices', 'NOT_SET'))
 
         # --- Step 2: Create entity instances for unique IDs ---
     switches_to_add = []
@@ -186,8 +172,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         try:
             # Prevent duplicate processing if somehow gathered twice
             if unique_id in processed_unique_ids:
-                 LOGGER.warning("Skipping already processed unique_id during instance creation: %s", unique_id)
-                 continue
+                LOGGER.warning("Skipping already processed unique_id during instance creation: %s", unique_id)
+                continue
 
             # Create the entity instance
             entity_class = data["entity_class"]
@@ -200,8 +186,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
 
             # Check if the created entity's unique_id matches the key (sanity check)
             if entity.unique_id != unique_id:
-                 LOGGER.error("Mismatch! Expected unique_id %s but created entity has %s. Skipping.", unique_id, entity.unique_id)
-                 continue
+                LOGGER.error("Mismatch! Expected unique_id %s but created entity has %s. Skipping.", unique_id, entity.unique_id)
+                continue
 
             switches_to_add.append(entity)
             processed_unique_ids.add(unique_id)
@@ -218,7 +204,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         # --- Update coordinator's known IDs --- 
         # Let the coordinator update known_unique_ids when dynamically adding
         # This prevents adding IDs during initial setup that might already be known from registry
-        pass 
 
         LOGGER.info("Added %d new UniFi Network Rules switches", len(switches_to_add))
     else:
@@ -245,12 +230,10 @@ async def create_traffic_route_kill_switch(hass, coordinator, rule, config_entry
     # Check if this rule has kill switch support
     if not hasattr(rule, 'raw') or "kill_switch_enabled" not in rule.raw:
         return None if return_entity else False
-        
-    # Import necessary components
-    from homeassistant.helpers.entity_registry import async_get as get_entity_registry
-    import copy
-    from .helpers.rule import get_child_unique_id, get_rule_id
     
+    # Import necessary components
+    import copy
+
     try:
         # Get the parent rule ID
         parent_rule_id = get_rule_id(rule)
@@ -260,11 +243,11 @@ async def create_traffic_route_kill_switch(hass, coordinator, rule, config_entry
             
         # Generate kill switch ID
         kill_switch_id = get_child_unique_id(parent_rule_id, "kill_switch")
-        
+
         # Check if already exists in registry
-        entity_registry = get_entity_registry(hass)
-        existing_entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, kill_switch_id)
-        
+        entity_registry = async_get_entity_registry(hass)
+        _existing_entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, kill_switch_id)
+
         # Don't create if already created this session
         if kill_switch_id in _CREATED_UNIQUE_IDS:
             LOGGER.debug("Kill switch already created in this session: %s", kill_switch_id)
@@ -272,10 +255,10 @@ async def create_traffic_route_kill_switch(hass, coordinator, rule, config_entry
             if return_entity:
                  # Attempt to find the existing entity instance? This is tricky.
                  # For now, returning None prevents duplicate creation attempt by setup_entry.
-                 # Linking logic in setup_entry will handle finding existing entities later.
-                 LOGGER.warning("Kill switch %s already created, returning None for setup_entry", kill_switch_id)
-                 return None
-            return False # Don't proceed if not returning entity
+                # Linking logic in setup_entry will handle finding existing entities later.
+                LOGGER.warning("Kill switch %s already created, returning None for setup_entry", kill_switch_id)
+                return None
+            return False  # Don't proceed if not returning entity
 
         # Create a copy of the rule for the kill switch
         rule_copy = copy.deepcopy(rule)
@@ -297,7 +280,7 @@ async def create_traffic_route_kill_switch(hass, coordinator, rule, config_entry
         platform = None
         # Ensure platform data structure exists before accessing
         if DOMAIN in hass.data and "platforms" in hass.data[DOMAIN] and "switch" in hass.data[DOMAIN]["platforms"]:
-             platform = hass.data[DOMAIN]["platforms"]["switch"]
+            platform = hass.data[DOMAIN]["platforms"]["switch"]
 
         # Add entity if platform is available
         if platform and hasattr(platform, 'async_add_entities'):
@@ -341,7 +324,7 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         self._rule_id = get_rule_id(rule_data)
         if not self._rule_id:
             raise ValueError("Rule must have an ID")
-            
+        
         # Get rule name using helper function - rely entirely on rule.py for naming
         # Pass coordinator to get_rule_name to enable zone name lookups for FirewallPolicy objects
         self._attr_name = get_rule_name(rule_data, coordinator) or f"Rule {self._rule_id}"
@@ -511,9 +494,9 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
 
                     # Clear optimistic state only if actual state matches or is unknown
                     if self._optimistic_state == actual_state or actual_state is None:
-                         LOGGER.debug("%s(%s): Clearing optimistic state (matches actual or actual is None).",
-                                     type(self).__name__, self.entity_id or self.unique_id)
-                         self.clear_optimistic_state(force=True) # Force clear here
+                        LOGGER.debug("%s(%s): Clearing optimistic state (matches actual or actual is None).",
+                                    type(self).__name__, self.entity_id or self.unique_id)
+                        self.clear_optimistic_state(force=True)  # Force clear here
                     else:
                         LOGGER.debug("%s(%s): State mismatch: optimistic=%s, actual=%s. Keeping optimistic state briefly.",
                                   type(self).__name__, self.entity_id or self.unique_id,
@@ -581,19 +564,19 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                         try:
                             # Use a flag to prevent infinite recursion if parent also checks child
                             if getattr(self, '_checking_parent_availability', False):
-                                 parent_is_truly_available = True # Assume true to break loop
+                                parent_is_truly_available = True  # Assume true to break loop
                             else:
-                                 setattr(parent_entity, '_checking_parent_availability', True)
-                                 parent_is_truly_available = parent_entity.available
-                                 delattr(parent_entity, '_checking_parent_availability')
+                                setattr(parent_entity, '_checking_parent_availability', True)
+                                parent_is_truly_available = parent_entity.available
+                                delattr(parent_entity, '_checking_parent_availability')
                             if not parent_is_truly_available:
-                                 return False # If parent object says it's not available, we aren't either
+                                return False  # If parent object says it's not available, we aren't either
                         except Exception as e:
-                             LOGGER.warning("%s(%s): Error checking parent entity availability property: %s", 
-                                           type(self).__name__, self.entity_id, e)
+                            LOGGER.warning("%s(%s): Error checking parent entity availability property: %s", 
+                                          type(self).__name__, self.entity_id, e)
                     return True
                 else:
-                     return False
+                    return False
 
         # Standard availability check (if not a child or parent lookup failed)
         coord_success = self.coordinator.last_update_success
@@ -678,6 +661,16 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         """Turn off (disable) the rule."""
         await self._async_toggle_rule(False)
 
+    def turn_on(self, **kwargs: Any) -> None:
+        """Turn on (enable) the rule - synchronous wrapper."""
+        if self.hass and self.hass.loop and self.hass.loop.is_running():
+            asyncio.create_task(self.async_turn_on(**kwargs))
+
+    def turn_off(self, **kwargs: Any) -> None:
+        """Turn off (disable) the rule - synchronous wrapper."""
+        if self.hass and self.hass.loop and self.hass.loop.is_running():
+            asyncio.create_task(self.async_turn_off(**kwargs))
+
     async def _async_toggle_rule(self, enable: bool) -> None:
         """Handle toggling the rule state."""
         action_type = "Turning on" if enable else "Turning off"
@@ -709,7 +702,9 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                    self._rule_id, enable)
         
         # Register the operation with the coordinator to prevent redundant refreshes.
-        self.coordinator.register_ha_initiated_operation(self._rule_id)
+        change_type = "enabled" if enable else "disabled"
+        entity_id = self.entity_id or f"switch.{self._rule_id}"
+        self.coordinator.register_ha_initiated_operation(self._rule_id, entity_id, change_type)
         
         # Define callback to handle operation completion
         async def handle_operation_complete(future):
@@ -733,11 +728,11 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                     # if the change was confirmed by the trigger system (which consumes the
                     # HA-initiated operation flag). If not, it forces a refresh.
                     async def delayed_verification():
-                        await asyncio.sleep(SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS) # Wait 7 seconds for websocket event
+                        await asyncio.sleep(SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS) # Wait 7 seconds for smart polling update
                         if self.coordinator.check_and_consume_ha_initiated_operation(self._rule_id):
                             # If the flag was still present, it means the trigger system
-                            # did NOT get a websocket event. We must refresh.
-                            LOGGER.warning("Delayed verification: Trigger did not receive websocket event for %s. Forcing refresh.", self._rule_id)
+                            # did NOT get a change event. We must refresh.
+                            LOGGER.warning("Delayed verification: Trigger did not receive change event for %s. Forcing refresh.", self._rule_id)
                             await self.coordinator.async_request_refresh()
                         else:
                             # The flag was already consumed, so the trigger worked correctly.
@@ -791,6 +786,28 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                 toggle_func = self.coordinator.api.toggle_vpn_client
             elif self._rule_type == "vpn_servers":
                 toggle_func = self.coordinator.api.toggle_vpn_server
+            elif self._rule_type == "port_profiles":
+                async def port_profile_toggle_wrapper(profile_obj):
+                    # When enabling, provide a native_networkconf_id if missing by
+                    # using coordinator.networks preference. The API function itself
+                    # will also try to discover a default if needed, but we prefer
+                    # to choose deterministically here.
+                    native_id = None
+                    try:
+                        # If current state is disabled, supply target native id
+                        current = self._get_current_rule()
+                        is_currently_on = bool(current and getattr(current, 'enabled', False))
+                        if not is_currently_on and hasattr(self.coordinator, 'networks'):
+                            networks = self.coordinator.networks or []
+                            # Prefer corporate/LAN
+                            preferred = next((n for n in networks if getattr(n, 'purpose', '') == 'corporate'), None)
+                            if not preferred and networks:
+                                preferred = networks[0]
+                            native_id = preferred.id if preferred else None
+                    except Exception:
+                        native_id = None
+                    return await self.coordinator.api.toggle_port_profile(profile_obj, native_id)
+                toggle_func = port_profile_toggle_wrapper
             elif self._rule_type == "devices":
                 # For device LED toggles, use a special wrapper function
                 async def led_toggle_wrapper(device, state):
@@ -850,15 +867,14 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         # This function is primarily for reacting to EXTERNAL removal signals.
         # Proactive removal initiated by _handle_coordinator_update uses async_initiate_self_removal.
         if removed_entity_id != self._rule_id:
-            # LOGGER.debug("Ignoring removal signal for %s (not matching %s)", removed_entity_id, self._rule_id)
             return
 
         LOGGER.info("Received external removal signal for entity %s (%s). Initiating cleanup.",
                    self.entity_id, self._rule_id)
         # Avoid duplicate removal if already initiated
         if getattr(self, '_removal_initiated', False):
-             LOGGER.debug("Removal already initiated for %s, skipping signal handler.", self.entity_id)
-             return
+            LOGGER.debug("Removal already initiated for %s, skipping signal handler.", self.entity_id)
+            return
 
         # Initiate removal asynchronously in a thread-safe way
         self.hass.loop.call_soon_threadsafe(
@@ -950,16 +966,16 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         self.hass.data[DOMAIN]['entities'][self.entity_id] = self
         LOGGER.debug("Stored entity %s in hass.data[%s]['entities']", self.entity_id, DOMAIN)
 
-        # ADDED: Perform global unique ID tracking here
+        # Perform global unique ID tracking here
         if self.unique_id in _CREATED_UNIQUE_IDS:
              # This case should ideally not happen if setup_entry filtering works,
-             # but log if it does.
-             LOGGER.warning("Entity %s added to HASS, but unique_id %s was already tracked.",
-                            self.entity_id, self.unique_id)
+            # but log if it does.
+            LOGGER.warning("Entity %s added to HASS, but unique_id %s was already tracked.",
+                           self.entity_id, self.unique_id)
         else:
-             _CREATED_UNIQUE_IDS.add(self.unique_id)
-             LOGGER.debug("Added unique_id %s to global tracking upon adding entity %s to HASS.",
-                          self.unique_id, self.entity_id)
+            _CREATED_UNIQUE_IDS.add(self.unique_id)
+            LOGGER.debug("Added unique_id %s to global tracking upon adding entity %s to HASS.",
+                         self.unique_id, self.entity_id)
 
         # Add update callbacks
         self.async_on_remove(
@@ -1012,14 +1028,10 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         )
 
         # --- Ensure initial state is based on current coordinator data --- 
-        # LOGGER.debug("%s(%s): Explicitly calling _handle_coordinator_update in async_added_to_hass.",
-        #              type(self).__name__, self.entity_id or self.unique_id)
-        # self._handle_coordinator_update() # REMOVED - Process current data before first write
 
         # Make sure the entity is properly registered in the entity registry
         try:
-            from homeassistant.helpers.entity_registry import async_get as get_entity_registry
-            registry = get_entity_registry(self.hass)
+            registry = async_get_entity_registry(self.hass)
 
             # Log the entity registry state
             LOGGER.debug("Entity registry check - unique_id: %s, entity_id: %s",
@@ -1032,7 +1044,6 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                 LOGGER.debug("Entity already exists in registry: %s", existing_entity)
                 # Don't try to update the entity_id - this has been causing problems
                 # Just force a state update to ensure it's current
-                # self.async_write_ha_state() # Moved lower
             else:
                 # Register the entity with our consistent ID format
                 try:
@@ -1224,7 +1235,7 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
         # 2. Determine Parent and Kill Switch IDs
         original_rule_id = get_rule_id(rule_data) # Parent unique ID (e.g., unr_route_xyz)
         if not original_rule_id:
-             raise ValueError("KillSwitch init: Cannot determine original rule ID from rule data")
+            raise ValueError("KillSwitch init: Cannot determine original rule ID from rule data")
         kill_switch_id = get_child_unique_id(original_rule_id, "kill_switch")
 
         # 3. Override attributes for the Kill Switch
@@ -1234,11 +1245,11 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
         # Override name based on the name generated by super()
         # Ensure super() set a name before modifying
         if self._attr_name:
-             self._attr_name = get_child_entity_name(self._attr_name, "kill_switch") # OVERRIDE
+            self._attr_name = get_child_entity_name(self._attr_name, "kill_switch")  # OVERRIDE
         else:
-             # Fallback name if super init failed to set one
-             fallback_parent_name = extract_descriptive_name(rule_data, coordinator) or original_rule_id
-             self._attr_name = get_child_entity_name(fallback_parent_name, "kill_switch")
+            # Fallback name if super init failed to set one
+            fallback_parent_name = extract_descriptive_name(rule_data, coordinator) or original_rule_id
+            self._attr_name = get_child_entity_name(fallback_parent_name, "kill_switch")
 
         # Override entity_id based on the object_id generated by super()
         # Note: get_object_id uses rule_data (parent), which is correct base
@@ -1259,7 +1270,7 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
             LOGGER.debug("KillSwitch %s: Initialized specific state to %s from parent rule data",
                          self.unique_id, actual_state)
         else:
-             LOGGER.warning("KillSwitch %s: Initialized without specific state from rule data.", self.unique_id)
+            LOGGER.warning("KillSwitch %s: Initialized without specific state from rule data.", self.unique_id)
 
         # 5. Linking Information (Parent ID needed for lookups)
         self._linked_parent_id = original_rule_id # Store parent's unique_id
@@ -1398,10 +1409,10 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
 
         # Log the availability status, especially if it's False
         if not is_available:
-             LOGGER.debug("KillSwitch(%s): Determined unavailable because parent rule lookup failed.", self.entity_id or self.unique_id)
+            LOGGER.debug("KillSwitch(%s): Determined unavailable because parent rule lookup failed.", self.entity_id or self.unique_id)
         else:
-             # Optionally log when available too, but can be noisy
-             LOGGER.debug("KillSwitch(%s): Determined available (parent rule found).", self.entity_id or self.unique_id)
+            # Optionally log when available too, but can be noisy
+            LOGGER.debug("KillSwitch(%s): Determined available (parent rule found).", self.entity_id or self.unique_id)
 
         return is_available
 
@@ -1425,7 +1436,9 @@ class UnifiTrafficRouteKillSwitch(UnifiRuleSwitch):
             self.coordinator._pending_operations[kill_switch_operation_id] = enable
         
         # Register the operation with the coordinator to prevent redundant refreshes.
-        self.coordinator.register_ha_initiated_operation(self._rule_id)
+        change_type = "enabled" if enable else "disabled"
+        entity_id = self.entity_id or f"switch.{self._rule_id}_kill_switch"
+        self.coordinator.register_ha_initiated_operation(self._rule_id, entity_id, change_type)
         
         # Queue the toggle operation
         try:
@@ -1575,7 +1588,9 @@ class UnifiLedToggleSwitch(UnifiRuleSwitch):
             device_id = getattr(self._device, 'mac', self._rule_id)
             
             # Use existing CQRS pattern to track this HA-initiated operation
-            self.coordinator.register_ha_initiated_operation(device_id)
+            change_type = "enabled" if enable else "disabled"
+            entity_id = self.entity_id or f"switch.{self._rule_id}_led"
+            self.coordinator.register_ha_initiated_operation(device_id, entity_id, change_type)
             
             if LOG_TRIGGERS:
                 LOGGER.info("🔥 LED IMMEDIATE TRIGGER: Firing device trigger for %s (%s): LED %s → %s", 
@@ -1593,8 +1608,7 @@ class UnifiLedToggleSwitch(UnifiRuleSwitch):
                 new_device_data = current_device.raw.copy()
                 new_device_data['led_override'] = "default" if enable else "off"  # Optimistic new state
                 
-                # Import Device class and create optimistic new device object
-                from aiounifi.models.device import Device
+                # Create optimistic new device object using globally imported Device class
                 new_state_device = Device(new_device_data)
                 
                 if LOG_TRIGGERS:
@@ -1786,3 +1800,85 @@ class UnifiVPNServerSwitch(UnifiRuleSwitch):
             attributes["subnet"] = current_server.server.get("subnet")
         
         return attributes
+
+class UnifiPortProfileSwitch(UnifiRuleSwitch):
+    """Switch to enable/disable a UniFi Port Profile.
+
+    Treats a profile as enabled when it has a native network configured and
+    management VLAN tagging is not blocking, per PortProfile.enabled.
+    """
+
+    def __init__(
+        self,
+        coordinator: UnifiRuleUpdateCoordinator,
+        rule_data: PortProfile,
+        rule_type: str = "port_profiles",
+        entry_id: str | None = None,
+    ) -> None:
+        super().__init__(coordinator, rule_data, rule_type, entry_id)
+        self._attr_icon = "mdi:ethernet"
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        attrs: Dict[str, Any] = {}
+        profile = self._get_current_rule()
+        if profile and hasattr(profile, "raw"):
+            raw = profile.raw
+            attrs["native_networkconf_id"] = raw.get("native_networkconf_id")
+            attrs["tagged_vlan_mgmt"] = raw.get("tagged_vlan_mgmt")
+            attrs["op_mode"] = raw.get("op_mode")
+            attrs["poe_mode"] = raw.get("poe_mode")
+        return attrs
+
+class UnifiNetworkSwitch(UnifiRuleSwitch):
+    """Switch to enable/disable a UniFi Network (LAN)."""
+
+    def __init__(
+        self,
+        coordinator: UnifiRuleUpdateCoordinator,
+        rule_data: NetworkConf,
+        rule_type: str = "networks",
+        entry_id: str | None = None,
+    ) -> None:
+        super().__init__(coordinator, rule_data, rule_type, entry_id)
+        self._attr_icon = "mdi:lan"
+
+    async def _async_toggle_rule(self, enable: bool) -> None:
+        network = self._get_current_rule()
+        if network is None:
+            raise HomeAssistantError(f"Cannot find network with ID: {self._rule_id}")
+
+        # Optimistic
+        self.mark_pending_operation(enable)
+        self.async_write_ha_state()
+
+        async def handle_operation_complete(f):
+            try:
+                ok = f.result()
+                if not ok:
+                    self.mark_pending_operation(not enable)
+                self.async_write_ha_state()
+            except Exception:
+                self.mark_pending_operation(not enable)
+                self.async_write_ha_state()
+
+        # Queue via API
+        async def toggle_wrapper(n: NetworkConf):
+            # Force desired enabled in payload
+            n.raw["enabled"] = enable
+            return await self.coordinator.api.update_network(n)
+
+        future = await self.coordinator.api.queue_api_operation(toggle_wrapper, network)
+        future.add_done_callback(lambda f: self.hass.async_create_task(handle_operation_complete(f)))
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        attrs: Dict[str, Any] = {}
+        net = self._get_current_rule()
+        if net and hasattr(net, "raw"):
+            raw = net.raw
+            attrs["purpose"] = raw.get("purpose")
+            attrs["ip_subnet"] = raw.get("ip_subnet")
+            attrs["vlan_enabled"] = raw.get("vlan_enabled")
+            attrs["networkgroup"] = raw.get("networkgroup")
+        return attrs
