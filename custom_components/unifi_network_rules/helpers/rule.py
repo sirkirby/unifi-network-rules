@@ -442,22 +442,10 @@ def get_rule_name(rule: Any, coordinator=None) -> str | None:
     elif isinstance(rule, Device):
         rule_type = "devices"
     elif isinstance(rule, NetworkConf):
-        # Decide if this network should be exposed as a switch entity.
-        # Omit VPN networks since we already have VPN switches.
-        raw = getattr(rule, "raw", {}) if hasattr(rule, "raw") else {}
-        purpose = str(raw.get("purpose", "")).lower()
-        vpn_type = str(raw.get("vpn_type", "")).lower()
-        is_vpn = (
-            purpose.startswith("vpn")
-            or purpose in {"remote-user-vpn", "vpn-client", "vpn-server"}
-            or "vpn" in vpn_type
-            or "wireguard" in vpn_type
-            or "openvpn" in vpn_type
-        )
-        if is_vpn:
-            rule_type = None  # signal to caller there is no switch type
-        else:
-            rule_type = "networks"
+        # NetworkConf objects passed here are already filtered by the coordinator
+        # VPN networks are separated into vpn_clients/vpn_servers collections
+        # So all NetworkConf objects should be treated as network switches
+        rule_type = "networks"
     elif isinstance(rule, PortProfile):
         rule_type = "port_profiles"
     elif isinstance(rule, dict) and "type" in rule:
