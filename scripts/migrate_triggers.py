@@ -96,7 +96,7 @@ def save_yaml_file(file_path: str, data: Any) -> bool:
     """Save YAML file safely."""
     try:
         with open(file_path, 'w', encoding='utf-8') as f:
-            yaml.dump(data, f, default_flow_style=False, sort_keys=False, indent=2)
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False, indent=2, allow_unicode=True, width=1000)
         return True
     except Exception as e:
         print(f"Error saving YAML file {file_path}: {e}")
@@ -148,10 +148,17 @@ def create_migrated_copy(source_path: str, target_dir: str = None) -> tuple[str,
 
 def is_legacy_unifi_trigger(trigger: Dict[str, Any]) -> bool:
     """Check if trigger is a legacy UniFi Network Rules trigger."""
-    return (
-        trigger.get("platform") == "unifi_network_rules" and
-        trigger.get("type") in TRIGGER_MIGRATION_MAP
-    )
+    # YAML format: platform: unifi_network_rules, type: rule_enabled
+    if (trigger.get("platform") == "unifi_network_rules" and
+        trigger.get("type") in TRIGGER_MIGRATION_MAP):
+        return True
+    
+    # UI format: trigger: unifi_network_rules, type: rule_enabled
+    if (trigger.get("trigger") == "unifi_network_rules" and
+        trigger.get("type") in TRIGGER_MIGRATION_MAP):
+        return True
+    
+    return False
 
 
 def migrate_trigger(trigger: Dict[str, Any]) -> Dict[str, Any]:
@@ -162,11 +169,20 @@ def migrate_trigger(trigger: Dict[str, Any]) -> Dict[str, Any]:
     legacy_type = trigger["type"]
     migration_config = TRIGGER_MIGRATION_MAP[legacy_type]
     
-    # Start with the base migration
-    new_trigger = {
-        "platform": "unifi_network_rules",
-        "type": migration_config["type"]
-    }
+    # Start with the base migration - always output the standard format
+    # Check if this was a UI format trigger and convert accordingly
+    if trigger.get("trigger") == "unifi_network_rules":
+        # UI format: convert to unified trigger format
+        new_trigger = {
+            "trigger": "unifi_network_rules",
+            "type": migration_config["type"]
+        }
+    else:
+        # YAML format: convert to platform format
+        new_trigger = {
+            "platform": "unifi_network_rules", 
+            "type": migration_config["type"]
+        }
     
     # Add change_action if specified
     if "change_action" in migration_config:
@@ -199,6 +215,55 @@ def migrate_trigger(trigger: Dict[str, Any]) -> Dict[str, Any]:
             new_trigger["change_action"] = ["enabled", "disabled"]
     
     return new_trigger
+
+
+def update_trigger_templates(automation: Dict[str, Any]) -> Dict[str, Any]:
+    """Update template references in automation actions and conditions to use new trigger variables."""
+    import re
+    
+    def replace_trigger_vars(text: str) -> str:
+        """Replace old trigger variable references with new ones."""
+        if not isinstance(text, str):
+            return text
+            
+        # Replace trigger variable references (order matters - more specific first)
+        replacements = [
+            # Handle specific complex logic first (before basic replacements)
+            (r"'connected' if trigger\.event\.trigger_type\s*==\s*'rule_enabled' else 'disconnected'", 
+             "'connected' if trigger.change_action == 'enabled' else 'disconnected'"),
+            (r"trigger\.event\.trigger_type\s*==\s*'rule_enabled'", 
+             "trigger.change_action == 'enabled'"),
+            (r"trigger\.event\.trigger_type\s*==\s*'rule_disabled'", 
+             "trigger.change_action == 'disabled'"),
+            (r"trigger\.event\.trigger_type\.replace\('rule_', ''\)", 
+             "trigger.change_action"),
+            # Handle basic variable replacements
+            (r'trigger\.event\.rule_name', 'trigger.entity_name'),
+            (r'trigger\.event\.trigger_type', 'trigger.change_action'),
+            (r'trigger\.event\.rule_id', 'trigger.rule_id'),
+            (r'trigger\.event\.rule_type', 'trigger.change_type'),
+            # Handle any remaining rule_enabled/rule_disabled values
+            (r"'rule_enabled'", "'enabled'"),
+            (r"'rule_disabled'", "'disabled'"),
+        ]
+        
+        for old_pattern, new_value in replacements:
+            text = re.sub(old_pattern, new_value, text)
+        
+        return text
+    
+    def recursive_template_update(obj):
+        """Recursively update template strings in nested dictionaries and lists."""
+        if isinstance(obj, dict):
+            return {key: recursive_template_update(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [recursive_template_update(item) for item in obj]
+        elif isinstance(obj, str):
+            return replace_trigger_vars(obj)
+        else:
+            return obj
+    
+    return recursive_template_update(automation)
 
 
 def scan_automations(data: Any, stats: TriggerMigrationStats) -> None:
@@ -279,6 +344,8 @@ def migrate_automations(data: Any, stats: TriggerMigrationStats) -> Any:
         
         if automation_changed:
             stats.automations_with_legacy_triggers += 1
+            # Update template references in the automation if triggers were migrated
+            migrated_automation = update_trigger_templates(migrated_automation)
         
         migrated_data.append(migrated_automation)
     
