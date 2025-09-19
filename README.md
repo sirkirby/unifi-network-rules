@@ -342,21 +342,7 @@ This workflow is perfect if you need to download your automations file from Home
 
 5. **Restart Home Assistant**
 
-**Alternative command-line approach:**
-
-```bash
-# 1. Download your automations.yaml from Home Assistant to your computer
-# 2. Run the copy-migrate command (creates backup and migrated copies)
-python migrate_triggers.py --copy-migrate automations.yaml
-
-# 3. Review the migrated file
-# 4. Upload the migrated file to replace your automations.yaml in Home Assistant
-# 5. Restart Home Assistant
-```
-
-##### Traditional Workflow (For Direct File Access)
-
-If you have direct access to your Home Assistant files:
+##### Additional Commands
 
 ```bash
 # 1. Scan for legacy triggers
@@ -386,28 +372,16 @@ Since the migration utility is not included in the integration itself (it's only
    python scripts/migrate_triggers.py --help
    ```
 
-##### Downloading Your Automations File from Home Assistant
+##### Alternative ways to download your Automations File from Home Assistant
 
 If you don't have direct access to your Home Assistant files, you can download them through the web interface:
 
-1. **Using Visual Studio Code Add-on** (Recommended):
-   - Install the ["Visual Studio Code" add-on](https://community.home-assistant.io/t/home-assistant-community-add-on-visual-studio-code/107863) from the Home Assistant Community Add-ons
-   - Start the add-on and click "OPEN WEB UI"
-   - Navigate to `/config/automations.yaml` in the file explorer
-   - Right-click the file and select "Download" to save it to your computer
-   - After migration, simply drag the migrated file back into the `/config/` folder in VS Code
-
-2. **Using File Editor Add-on**:
+1. **Using File Editor Add-on**:
    - Install the "File Editor" add-on from the Add-on Store
    - Navigate to `/config/automations.yaml`
    - Copy the content and save it to a local file
 
-3. **Using Studio Code Server Add-on**:
-   - Install the "Studio Code Server" add-on
-   - Open the file browser and navigate to `/config/automations.yaml`
-   - Download the file to your computer
-
-4. **Using SSH/SCP** (Advanced):
+2. **Using SSH/SCP** (Advanced):
 
    ```bash
    scp homeassistant@your-ha-ip:/config/automations.yaml ./automations.yaml
