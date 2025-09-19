@@ -1,23 +1,34 @@
 #!/usr/bin/env python3
 """
-UniFi Network Rules Trigger Migration Utility
+UniFi Network Rules Trigger Migration Utility (v4.0.0)
 
 This script helps migrate Home Assistant automations from legacy triggers
 to the new unified 'unr_changed' trigger system.
 
-Usage:
-    python scripts/migrate_triggers.py --scan /config/automations.yaml
-    python scripts/migrate_triggers.py --migrate /config/automations.yaml --dry-run
-    python scripts/migrate_triggers.py --migrate /config/automations.yaml --apply
+For users upgrading from v3.x to v4.0.0, this utility provides several workflows:
+
+1. Direct migration (if you have file access):
+   python migrate_triggers.py --scan automations.yaml
+   python migrate_triggers.py --migrate automations.yaml --apply
+
+2. Copy workflow (for easier user experience):
+   python migrate_triggers.py --copy-migrate automations_download.yaml
+   # This creates both backup and migrated versions
+
+3. Individual operations:
+   python migrate_triggers.py --scan automations.yaml
+   python migrate_triggers.py --migrate automations.yaml --dry-run
+   python migrate_triggers.py --migrate automations.yaml --apply
 """
 
 import argparse
 import yaml
 import sys
 import os
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any
 from datetime import datetime
 import shutil
+from pathlib import Path
 
 
 # Legacy to unified trigger mapping
@@ -102,6 +113,37 @@ def create_backup(file_path: str) -> str:
     except Exception as e:
         print(f"Error creating backup: {e}")
         return None
+
+
+def create_migrated_copy(source_path: str, target_dir: str = None) -> tuple[str, str]:
+    """Create both backup and migrated copies of the file.
+    
+    Returns:
+        tuple: (backup_path, migrated_path)
+    """
+    source_file = Path(source_path)
+    if target_dir is None:
+        target_dir = source_file.parent
+    else:
+        target_dir = Path(target_dir)
+        target_dir.mkdir(exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name = source_file.stem
+    extension = source_file.suffix
+    
+    backup_path = target_dir / f"{base_name}_original_{timestamp}{extension}"
+    migrated_path = target_dir / f"{base_name}_migrated_{timestamp}{extension}"
+    
+    try:
+        # Create backup copy
+        shutil.copy2(source_path, backup_path)
+        # Create working copy for migration
+        shutil.copy2(source_path, migrated_path)
+        return str(backup_path), str(migrated_path)
+    except Exception as e:
+        print(f"Error creating copies: {e}")
+        return None, None
 
 
 def is_legacy_unifi_trigger(trigger: Dict[str, Any]) -> bool:
@@ -243,11 +285,13 @@ def migrate_automations(data: Any, stats: TriggerMigrationStats) -> Any:
     return migrated_data
 
 
-def print_scan_results(stats: TriggerMigrationStats) -> None:
+def print_scan_results(stats: TriggerMigrationStats, file_path: str = None) -> None:
     """Print scan results."""
-    print("\n" + "="*60)
-    print("UniFi Network Rules Trigger Migration Scan Results")
-    print("="*60)
+    print("\n" + "="*70)
+    print("UniFi Network Rules v4.0.0 Trigger Migration Scan Results")
+    print("="*70)
+    if file_path:
+        print(f"Scanned file: {file_path}")
     print(f"Total automations: {stats.total_automations}")
     print(f"Automations with legacy triggers: {stats.automations_with_legacy_triggers}")
     print(f"Total legacy triggers found: {stats.legacy_triggers_found}")
@@ -255,75 +299,190 @@ def print_scan_results(stats: TriggerMigrationStats) -> None:
     if stats.legacy_trigger_types:
         print("\nLegacy trigger types found:")
         for trigger_type, count in stats.legacy_trigger_types.items():
-            print(f"  {trigger_type}: {count}")
+            print(f"  • {trigger_type}: {count}")
     
     if stats.legacy_triggers_found > 0:
         print(f"\n⚠️  Found {stats.legacy_triggers_found} legacy triggers that need migration!")
-        print("Run with --migrate to migrate them to the new unified format.")
+        print("\n📋 Next steps:")
+        print("   1. Run with --migrate --dry-run to preview changes")
+        print("   2. Run with --migrate --apply to apply migration")
+        print("   3. Or use --copy-migrate for a safer workflow")
     else:
         print("\n✅ No legacy triggers found. Your automations are already up to date!")
+        print("\n🎉 You can safely upgrade to UniFi Network Rules v4.0.0!")
 
 
-def print_migration_results(stats: TriggerMigrationStats, dry_run: bool = False) -> None:
+def print_migration_results(stats: TriggerMigrationStats, dry_run: bool = False, backup_path: str = None, migrated_path: str = None) -> None:
     """Print migration results."""
     action = "Would migrate" if dry_run else "Migrated"
     
-    print("\n" + "="*60)
-    print(f"UniFi Network Rules Trigger Migration Results {'(DRY RUN)' if dry_run else ''}")
-    print("="*60)
+    print("\n" + "="*70)
+    print(f"UniFi Network Rules v4.0.0 Migration Results {'(DRY RUN)' if dry_run else ''}")
+    print("="*70)
     print(f"Total automations: {stats.total_automations}")
     print(f"Automations modified: {stats.automations_with_legacy_triggers}")
     print(f"{action} legacy triggers: {stats.legacy_triggers_migrated}")
     
+    if backup_path:
+        print(f"\n📁 Backup created: {backup_path}")
+    if migrated_path:
+        print(f"📁 Migrated file: {migrated_path}")
+    
     if stats.migration_errors:
         print(f"\n❌ Errors during migration: {len(stats.migration_errors)}")
         for error in stats.migration_errors:
-            print(f"  {error}")
+            print(f"  • {error}")
     
     if not dry_run and stats.legacy_triggers_migrated > 0:
         print(f"\n✅ Successfully migrated {stats.legacy_triggers_migrated} triggers!")
-        print("Please review your automations and test them before restarting Home Assistant.")
+        print("\n📋 Next steps:")
+        print("   1. Review the migrated automations file")
+        print("   2. Test the automations in a development environment if possible")
+        print("   3. Upload the migrated file to replace your automations.yaml")
+        print("   4. Restart Home Assistant")
+        print("   5. Verify your automations are working correctly")
+    elif dry_run and stats.legacy_triggers_migrated > 0:
+        print(f"\n🔍 Preview completed. {stats.legacy_triggers_migrated} triggers would be migrated.")
+        print("\n📋 To apply the migration:")
+        print("   • Add --apply flag to apply changes")
+        print("   • Or use --copy-migrate for a safer workflow")
+
+
+def copy_and_migrate_workflow(source_path: str, output_dir: str = None) -> bool:
+    """Perform copy-and-migrate workflow for user convenience.
+    
+    This creates backup and migrated copies of the file without modifying the original.
+    """
+    print(f"\n🔄 Starting copy-and-migrate workflow for: {source_path}")
+    
+    if not os.path.exists(source_path):
+        print(f"❌ Error: Source file {source_path} does not exist")
+        return False
+    
+    # Create copies
+    if output_dir is None:
+        output_dir = os.path.dirname(source_path) or "."
+    
+    backup_path, migrated_path = create_migrated_copy(source_path, output_dir)
+    if not backup_path or not migrated_path:
+        print("❌ Failed to create file copies")
+        return False
+    
+    print(f"📁 Created backup: {backup_path}")
+    print(f"📁 Created working copy: {migrated_path}")
+    
+    # Load and scan the data
+    data = load_yaml_file(migrated_path)
+    if data is None:
+        print("❌ Failed to load automation data")
+        return False
+    
+    # Scan first
+    stats = TriggerMigrationStats()
+    scan_automations(data, stats)
+    
+    if stats.legacy_triggers_found == 0:
+        print("\n✅ No legacy triggers found in the file!")
+        print("🎉 Your automations are already compatible with v4.0.0")
+        # Clean up unnecessary files
+        try:
+            os.remove(backup_path)
+            os.remove(migrated_path)
+            print("🧹 Cleaned up temporary files")
+        except OSError:
+            pass
+        return True
+    
+    print(f"\n📊 Found {stats.legacy_triggers_found} legacy triggers to migrate")
+    
+    # Perform migration
+    migration_stats = TriggerMigrationStats()
+    migrated_data = migrate_automations(data, migration_stats)
+    
+    # Save the migrated data
+    if save_yaml_file(migrated_path, migrated_data):
+        print_migration_results(migration_stats, dry_run=False, backup_path=backup_path, migrated_path=migrated_path)
+        
+        print("\n" + "="*70)
+        print("📁 COPY-MIGRATE WORKFLOW COMPLETED")
+        print("="*70)
+        print(f"✅ Original file (unchanged): {source_path}")
+        print(f"📋 Backup copy: {backup_path}")
+        print(f"🔄 Migrated copy: {migrated_path}")
+        print("\n📋 To complete the migration:")
+        print("   1. Review the migrated file to ensure it looks correct")
+        print("   2. Replace your Home Assistant automations.yaml with the migrated version")
+        print("   3. Restart Home Assistant")
+        return True
+    else:
+        print("❌ Failed to save migrated file")
+        return False
 
 
 def main():
     """Main function."""
     parser = argparse.ArgumentParser(
-        description="Migrate UniFi Network Rules legacy triggers to unified format",
+        description="Migrate UniFi Network Rules legacy triggers to unified format (v4.0.0)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  # Scan for legacy triggers
-  python scripts/migrate_triggers.py --scan /config/automations.yaml
+Workflow Examples:
+  # Copy-and-migrate workflow (recommended for most users)
+  python migrate_triggers.py --copy-migrate automations.yaml
   
-  # Preview migration (dry run)
-  python scripts/migrate_triggers.py --migrate /config/automations.yaml --dry-run
+  # Traditional workflow
+  python migrate_triggers.py --scan automations.yaml
+  python migrate_triggers.py --migrate automations.yaml --dry-run
+  python migrate_triggers.py --migrate automations.yaml --apply
   
-  # Apply migration (creates backup automatically)
-  python scripts/migrate_triggers.py --migrate /config/automations.yaml --apply
+  # Direct file migration (use with caution)
+  python migrate_triggers.py --migrate /config/automations.yaml --apply
+
+Upgrade Instructions:
+  1. Download your automations.yaml from Home Assistant
+  2. Run: python migrate_triggers.py --copy-migrate automations.yaml
+  3. Review the migrated file
+  4. Upload the migrated file to replace your automations.yaml
+  5. Restart Home Assistant
         """
     )
     
-    parser.add_argument("file", help="Path to Home Assistant automations.yaml file")
+    parser.add_argument("file", nargs="?", help="Path to Home Assistant automations.yaml file")
     
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--scan", action="store_true", help="Scan for legacy triggers without migrating")
     group.add_argument("--migrate", action="store_true", help="Migrate legacy triggers to unified format")
+    group.add_argument("--copy-migrate", metavar="FILE", help="Copy-and-migrate workflow: creates backup and migrated copies")
     
     parser.add_argument("--dry-run", action="store_true", help="Preview migration without applying changes")
     parser.add_argument("--apply", action="store_true", help="Apply migration changes (requires --migrate)")
+    parser.add_argument("--output-dir", help="Output directory for copy-migrate workflow (default: same as source)")
     
     args = parser.parse_args()
     
-    # Validate arguments
+    # Handle copy-migrate workflow
+    if args.copy_migrate:
+        if args.dry_run or args.apply:
+            parser.error("--copy-migrate cannot be used with --dry-run or --apply")
+        success = copy_and_migrate_workflow(args.copy_migrate, args.output_dir)
+        sys.exit(0 if success else 1)
+    
+    # Validate arguments for traditional workflow
+    if not args.file:
+        parser.error("file argument is required for --scan and --migrate")
+    
     if args.apply and not args.migrate:
         parser.error("--apply requires --migrate")
     
     if args.migrate and not (args.dry_run or args.apply):
         parser.error("--migrate requires either --dry-run or --apply")
     
+    if args.output_dir and not args.copy_migrate:
+        parser.error("--output-dir can only be used with --copy-migrate")
+    
     # Check if file exists
     if not os.path.exists(args.file):
-        print(f"Error: File {args.file} does not exist")
+        print(f"❌ Error: File {args.file} does not exist")
+        print("\n💡 Tip: Download your automations.yaml from Home Assistant and use --copy-migrate")
         sys.exit(1)
     
     # Load YAML data
@@ -337,17 +496,18 @@ Examples:
     if args.scan:
         # Scan mode
         scan_automations(data, stats)
-        print_scan_results(stats)
+        print_scan_results(stats, args.file)
     
     elif args.migrate:
         # Migration mode
+        backup_path = None
         if args.apply:
             # Create backup before applying changes
             backup_path = create_backup(args.file)
             if backup_path:
-                print(f"Created backup: {backup_path}")
+                print(f"📁 Created backup: {backup_path}")
             else:
-                print("Failed to create backup. Aborting migration.")
+                print("❌ Failed to create backup. Aborting migration.")
                 sys.exit(1)
         
         # Perform migration
@@ -356,15 +516,15 @@ Examples:
         if args.apply:
             # Save migrated data
             if save_yaml_file(args.file, migrated_data):
-                print(f"Saved migrated automations to {args.file}")
+                print(f"💾 Saved migrated automations to {args.file}")
             else:
-                print("Failed to save migrated file")
+                print("❌ Failed to save migrated file")
                 sys.exit(1)
         else:
             # Dry run - show what would be migrated
-            print("DRY RUN - No changes were made to the file")
+            print("\n🔍 DRY RUN - No changes were made to the file")
         
-        print_migration_results(stats, dry_run=args.dry_run)
+        print_migration_results(stats, dry_run=args.dry_run, backup_path=backup_path)
 
 
 if __name__ == "__main__":
