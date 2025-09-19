@@ -314,18 +314,138 @@ data:
 
 #### Option 1: Automated Migration (Recommended)
 
-Use the migration utility script to automatically convert your automations:
+Use the migration utility script to automatically convert your automations. The utility offers multiple workflows depending on your comfort level:
+
+##### Copy-and-Migrate Workflow (Safest - Recommended for Most Users)
+
+This workflow is perfect if you need to download your automations file from Home Assistant. The easiest method is using the Visual Studio Code add-on:
+
+**Step-by-step using VS Code Add-on:**
+
+1. **Download your automations.yaml**:
+   - Install the [Visual Studio Code add-on](https://community.home-assistant.io/t/home-assistant-community-add-on-visual-studio-code/107863) from Home Assistant Community Add-ons
+   - Open VS Code in your browser and navigate to `/config/automations.yaml`
+   - Right-click the file and select "Download"
+
+2. **Run the migration**:
+
+   ```bash
+   python migrate_triggers.py --copy-migrate automations.yaml
+   ```
+
+3. **Review the migrated file** to ensure it looks correct
+
+4. **Upload the migrated file**:
+   - In VS Code, navigate to the `/config/` folder
+   - Drag and drop the migrated file to replace your existing `automations.yaml`
+   - Or right-click in the folder and select "Upload Files"
+
+5. **Restart Home Assistant**
+
+**Alternative command-line approach:**
+
+```bash
+# 1. Download your automations.yaml from Home Assistant to your computer
+# 2. Run the copy-migrate command (creates backup and migrated copies)
+python migrate_triggers.py --copy-migrate automations.yaml
+
+# 3. Review the migrated file
+# 4. Upload the migrated file to replace your automations.yaml in Home Assistant
+# 5. Restart Home Assistant
+```
+
+##### Traditional Workflow (For Direct File Access)
+
+If you have direct access to your Home Assistant files:
 
 ```bash
 # 1. Scan for legacy triggers
-python scripts/migrate_triggers.py --scan /config/automations.yaml
+python migrate_triggers.py --scan /config/automations.yaml
 
 # 2. Preview migration (dry-run)
-python scripts/migrate_triggers.py --migrate /config/automations.yaml --dry-run
+python migrate_triggers.py --migrate /config/automations.yaml --dry-run
 
 # 3. Apply migration (creates backup automatically)
-python scripts/migrate_triggers.py --migrate /config/automations.yaml --apply
+python migrate_triggers.py --migrate /config/automations.yaml --apply
 ```
+
+##### Getting the Migration Utility
+
+Since the migration utility is not included in the integration itself (it's only needed once), you have a few options:
+
+1. **Download from GitHub** (Recommended):
+   - Go to the [UniFi Network Rules repository](https://github.com/sirkirby/unifi-network-rules)
+   - Download `scripts/migrate_triggers.py` to your computer
+   - Ensure you have Python 3 and PyYAML installed (`pip install pyyaml`)
+
+2. **Clone the repository**:
+
+   ```bash
+   git clone https://github.com/sirkirby/unifi-network-rules.git
+   cd unifi-network-rules
+   python scripts/migrate_triggers.py --help
+   ```
+
+##### Downloading Your Automations File from Home Assistant
+
+If you don't have direct access to your Home Assistant files, you can download them through the web interface:
+
+1. **Using Visual Studio Code Add-on** (Recommended):
+   - Install the ["Visual Studio Code" add-on](https://community.home-assistant.io/t/home-assistant-community-add-on-visual-studio-code/107863) from the Home Assistant Community Add-ons
+   - Start the add-on and click "OPEN WEB UI"
+   - Navigate to `/config/automations.yaml` in the file explorer
+   - Right-click the file and select "Download" to save it to your computer
+   - After migration, simply drag the migrated file back into the `/config/` folder in VS Code
+
+2. **Using File Editor Add-on**:
+   - Install the "File Editor" add-on from the Add-on Store
+   - Navigate to `/config/automations.yaml`
+   - Copy the content and save it to a local file
+
+3. **Using Studio Code Server Add-on**:
+   - Install the "Studio Code Server" add-on
+   - Open the file browser and navigate to `/config/automations.yaml`
+   - Download the file to your computer
+
+4. **Using SSH/SCP** (Advanced):
+
+   ```bash
+   scp homeassistant@your-ha-ip:/config/automations.yaml ./automations.yaml
+   ```
+
+**After migration, upload the migrated file back:**
+
+- **VS Code Add-on**: Drag and drop the migrated file into the `/config/` folder, or right-click and select "Upload Files"
+- **File Editor Add-on**: Copy and paste the migrated content into the editor
+- **SSH/SCP**: Use `scp` to upload the migrated file back to your Home Assistant system
+
+##### Migration Utility Troubleshooting
+
+**Python/PyYAML not installed:**
+
+```bash
+# Install Python 3 (if needed)
+# On Windows: Download from python.org
+# On macOS: brew install python
+# On Linux: apt-get install python3 python3-pip
+
+# Install PyYAML
+pip install pyyaml
+# or
+pip3 install pyyaml
+```
+
+**"No legacy triggers found" but you have v3.x automations:**
+
+- Ensure you're running the utility on the correct automations.yaml file
+- Check that your automations use `platform: unifi_network_rules` (not just any triggers)
+- Verify your automations use legacy trigger types: `rule_enabled`, `rule_disabled`, `rule_changed`, `rule_deleted`, or `device_changed`
+
+**Need help?**
+
+- Use `python migrate_triggers.py --help` for command line options
+- Use `python migrate_triggers.py --scan your_file.yaml` to see what would be migrated
+- [Open a discussion](https://github.com/sirkirby/unifi-network-rules/discussions) if you need assistance
 
 #### Option 2: Manual Migration
 
