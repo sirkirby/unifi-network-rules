@@ -55,7 +55,8 @@ class UnifiedChangeDetector:
             "vpn_servers": "vpn_server",
             "devices": "device",
             "port_profiles": "port_profile",
-            "networks": "network"
+            "networks": "network",
+            "static_routes": "route"
         }
 
     async def detect_and_fire_changes(self, current_data: Dict[str, List[Any]]) -> List[ChangeEvent]:

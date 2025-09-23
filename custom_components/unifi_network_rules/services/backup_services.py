@@ -303,6 +303,7 @@ async def async_restore_rules_service(hass: HomeAssistant, coordinators: Dict, c
                 "firewall_policy": "policy",   # Newer version of rules
                 "port_forward": "port_forward",
                 "traffic_route": "route",
+                "static_route": "route",       # Static routes
                 
                 # Legacy types - older controllers will have these instead of firewall_policy
                 "legacy_firewall": "policy",   # Maps to policy as it's the older version
