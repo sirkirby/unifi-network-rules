@@ -45,11 +45,15 @@ class VPNMixin:
             # Filter the network configurations to get requested VPN configs
             vpn_configs = []
             for network in network_data:
+                # First check if this is a VPN network using the established helper
+                from ..helpers.rule import is_vpn_network, classify_vpn_type
+                if not is_vpn_network(network):
+                    continue
+                
                 purpose = network.get("purpose", "")
                 vpn_type = network.get("vpn_type", "")
                 
-                # Check for both purpose and vpn_type to catch all VPN configs
-                from ..helpers.rule import classify_vpn_type
+                # Then classify what type of VPN it is
                 is_client, is_server = classify_vpn_type(purpose, vpn_type)
                 
                 if (include_clients and is_client) or (include_servers and is_server):

@@ -18,6 +18,7 @@ from ..models.qos_rule import QoSRule
 from ..models.vpn_config import VPNConfig
 from ..models.network import NetworkConf
 from ..models.port_profile import PortProfile
+from ..models.static_route import StaticRoute
 from ..const import DOMAIN
 
 LOGGER = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ def get_rule_enabled(rule: Any) -> bool:
         True if the rule is enabled, False otherwise
     """
     # Check different rule types and return appropriate enabled status
-    if isinstance(rule, (PortForward, TrafficRoute, FirewallPolicy, TrafficRule, Wlan, QoSRule, VPNConfig)):
+    if isinstance(rule, (PortForward, TrafficRoute, FirewallPolicy, TrafficRule, Wlan, QoSRule, VPNConfig, StaticRoute)):
         return getattr(rule, "enabled", False)
     
     # Special handling for Device LED state
@@ -182,6 +183,14 @@ def get_rule_id(rule: Any) -> str | None:
             LOGGER.warning("PortProfile without id attribute: %s", rule)
             return None
     
+    # Handle StaticRoute
+    if isinstance(rule, StaticRoute):
+        if rule.id:
+            return f"unr_static_route_{rule.id}"
+        else:
+            LOGGER.warning("StaticRoute without id attribute: %s", rule)
+            return None
+    
     # Dictionary fallback - this should not happen with properly typed data
     if isinstance(rule, dict):
         _id = rule.get("_id") or rule.get("id")
@@ -209,6 +218,7 @@ def get_rule_prefix(rule_type: str) -> str:
     rule_types = {
         "port_forwards": "Port Forward",
         "traffic_routes": "Traffic Route",
+        "static_routes": "Static Route",
         "firewall_policies": "Policy",
         "traffic_rules": "Traffic Rule",
         "legacy_firewall_rules": "Legacy Rule",
@@ -413,7 +423,7 @@ def extract_descriptive_name(rule: Any, coordinator=None) -> str | None:
 
         # Default: return name as-is
         return name
-        
+
     # For other types, try common attributes
     if hasattr(rule, "name"):
         return rule.name
@@ -448,6 +458,8 @@ def get_rule_name(rule: Any, coordinator=None) -> str | None:
         rule_type = "networks"
     elif isinstance(rule, PortProfile):
         rule_type = "port_profiles"
+    elif isinstance(rule, StaticRoute):
+        rule_type = "static_routes"
     elif isinstance(rule, dict) and "type" in rule:
         rule_type = rule.get("type")
     

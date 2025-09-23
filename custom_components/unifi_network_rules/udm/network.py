@@ -244,15 +244,25 @@ class NetworkMixin:
             return []
 
     async def get_networks(self) -> List[NetworkConf]:
-        """Get all network configurations (networkconf)."""
+        """Get manageable network configurations (excludes VPNs and default network).
+        
+        Returns only LAN/WAN networks that can be managed as switch entities.
+        VPN configurations are handled separately via get_vpn_clients() and get_vpn_servers().
+        """
         try:
+            from ..helpers.rule import filter_switchable_networks
+            
             request = self.create_api_request("GET", API_PATH_NETWORK_CONF)
             data = await self.controller.request(request)
-            items: List[NetworkConf] = []
+            all_networks: List[NetworkConf] = []
             if data and isinstance(data, dict) and "data" in data:
                 for n in data["data"]:
-                    items.append(NetworkConf(n))
-            return items
+                    all_networks.append(NetworkConf(n))
+            
+            # Use the established helper to filter out VPNs and defaults
+            filtered_networks = filter_switchable_networks(all_networks)
+            LOGGER.debug("Filtered to %d manageable networks (excluded VPNs and defaults)", len(filtered_networks))
+            return filtered_networks
         except Exception as err:
             LOGGER.error("Failed to get networks: %s", str(err))
             return []

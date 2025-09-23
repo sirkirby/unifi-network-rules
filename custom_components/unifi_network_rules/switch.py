@@ -47,7 +47,8 @@ RULE_TYPES: Final = {
     "legacy_firewall_rules": "Legacy Firewall Rule",
     "qos_rules": "QoS Rule",
     "vpn_clients": "VPN Client",
-    "vpn_servers": "VPN Server"
+    "vpn_servers": "VPN Server",
+    "static_routes": "Static Route"
 }
 
 # Track entities across the platform
@@ -100,6 +101,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     all_rule_sources = [
         ("port_forwards", coordinator.port_forwards, UnifiPortForwardSwitch),
         ("traffic_routes", coordinator.traffic_routes, UnifiTrafficRouteSwitch),
+        ("static_routes", coordinator.static_routes or [], UnifiStaticRouteSwitch),
         ("firewall_policies", coordinator.firewall_policies, UnifiFirewallPolicySwitch),
         ("traffic_rules", coordinator.traffic_rules, UnifiTrafficRuleSwitch),
         ("legacy_firewall_rules", coordinator.legacy_firewall_rules, UnifiLegacyFirewallRuleSwitch),
@@ -776,6 +778,8 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                 toggle_func = self.coordinator.api.toggle_port_forward
             elif self._rule_type == "traffic_routes":
                 toggle_func = self.coordinator.api.toggle_traffic_route
+            elif self._rule_type == "static_routes":
+                toggle_func = self.coordinator.api.toggle_static_route
             elif self._rule_type == "legacy_firewall_rules":
                 toggle_func = self.coordinator.api.toggle_legacy_firewall_rule
             elif self._rule_type == "wlans":
@@ -1156,6 +1160,21 @@ class UnifiTrafficRouteSwitch(UnifiRuleSwitch):
         super().__init__(coordinator, rule_data, rule_type, entry_id)
         # Set icon for traffic route rules
         self._attr_icon = "mdi:directions-fork"
+
+class UnifiStaticRouteSwitch(UnifiRuleSwitch):
+    """Switch to enable/disable a UniFi static route."""
+    
+    def __init__(
+        self,
+        coordinator: UnifiRuleUpdateCoordinator,
+        rule_data: Any,
+        rule_type: str,
+        entry_id: str = None,
+    ) -> None:
+        """Initialize static route switch."""
+        super().__init__(coordinator, rule_data, rule_type, entry_id)
+        # Set icon for static route rules
+        self._attr_icon = "mdi:map-marker-path"
 
 class UnifiFirewallPolicySwitch(UnifiRuleSwitch):
     """Switch to enable/disable a UniFi firewall policy."""

@@ -30,7 +30,8 @@ VALID_CHANGE_TYPES = [
     "vpn_server",
     "device",
     "port_profile",
-    "network"
+    "network",
+    "route"
 ]
 
 # Valid change actions

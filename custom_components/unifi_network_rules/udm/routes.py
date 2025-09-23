@@ -16,6 +16,7 @@ from ..const import (
 
 # Import our custom extended models
 from ..models.traffic_route import TrafficRoute, TrafficRouteKillSwitchRequest
+from ..models.static_route import StaticRoute, StaticRouteRequest
 
 class RoutesMixin:
     """Mixin class for traffic routes operations."""
@@ -157,3 +158,72 @@ class RoutesMixin:
         except Exception as err:
             LOGGER.error("Failed to toggle traffic route kill switch: %s", str(err))
             return False 
+
+    # Static Routes Methods
+
+    async def get_static_routes(self) -> List[StaticRoute]:
+        """Get all static routes."""
+        try:
+            # Use V1 API for static routes
+            request = StaticRouteRequest.create_get_request()
+            data = await self.controller.request(request)
+            
+            if data and "data" in data:
+                # Return typed StaticRoute objects
+                result = []
+                for route_data in data["data"]:
+                    route = StaticRoute(route_data)
+                    result.append(route)
+                LOGGER.debug("Converted %d static routes to typed objects", len(result))
+                return result
+            return []
+        except Exception as err:
+            LOGGER.error("Failed to get static routes: %s", str(err))
+            return []
+
+    async def update_static_route(self, route: StaticRoute) -> bool:
+        """Update a static route.
+        
+        Args:
+            route: The StaticRoute object to update
+            
+        Returns:
+            bool: True if the update was successful, False otherwise
+        """
+        route_id = route.id
+        LOGGER.debug("Updating static route %s", route_id)
+        try:
+            # Use StaticRouteRequest for proper API call
+            request = StaticRouteRequest.create_update_request(route)
+            
+            # Execute the API call
+            await self.controller.request(request)
+            LOGGER.debug("Static route %s updated successfully", route_id)
+            return True
+        except Exception as err:
+            LOGGER.error("Failed to update static route: %s", str(err))
+            return False
+
+    async def toggle_static_route(self, route: StaticRoute) -> bool:
+        """Toggle a static route on/off."""
+        LOGGER.debug("Toggling static route state")
+        try:
+            # Toggle the current state
+            new_state = not route.enabled
+            LOGGER.debug("Toggling static route %s to %s", route.id, new_state)
+            
+            # Create updated route with new state
+            updated_route = StaticRoute(route.raw.copy())
+            updated_route.raw["enabled"] = new_state
+            
+            # Use the update method to apply the change
+            success = await self.update_static_route(updated_route)
+            
+            if success:
+                LOGGER.debug("Static route %s toggled successfully to %s", route.id, new_state)
+            else:
+                LOGGER.error("Failed to toggle static route %s", route.id)
+            return success
+        except Exception as err:
+            LOGGER.error("Failed to toggle static route: %s", str(err))
+            return False

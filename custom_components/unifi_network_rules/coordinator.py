@@ -23,13 +23,14 @@ from aiounifi.models.device import Device
 
 from .const import DOMAIN, LOGGER, DEFAULT_UPDATE_INTERVAL, LOG_TRIGGERS
 from .udm import UDMAPI
-from .helpers.rule import get_rule_id, get_child_unique_id, is_vpn_network, is_default_network
+from .helpers.rule import get_rule_id, get_child_unique_id
 from .utils.logger import log_data
 from .models.firewall_rule import FirewallRule
 from .models.qos_rule import QoSRule
 from .models.vpn_config import VPNConfig
 from .models.port_profile import PortProfile
 from .models.network import NetworkConf
+from .models.static_route import StaticRoute
 from .smart_polling import SmartPollingManager, SmartPollingConfig
 from .unified_change_detector import UnifiedChangeDetector
 
@@ -117,6 +118,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self.traffic_routes: List[TrafficRoute] = []
         self.firewall_policies: List[FirewallPolicy] = []
         self.traffic_rules: List[TrafficRule] = []
+        self.static_routes: List[StaticRoute] = []
         self.legacy_firewall_rules: List[FirewallRule] = []
         self.firewall_zones: List[FirewallZone] = []
         self.wlans: List[Wlan] = []
@@ -277,7 +279,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             return False
             
         # Quick check: compare collection sizes first
-        for rule_type in ["port_forwards", "traffic_routes", "firewall_policies", 
+        for rule_type in ["port_forwards", "traffic_routes", "static_routes", "firewall_policies", 
                          "traffic_rules", "legacy_firewall_rules", "wlans", 
                          "firewall_zones", "qos_rules", "vpn_clients", "vpn_servers", 
                          "devices", "port_profiles", "networks"]:
@@ -289,7 +291,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         
         # If counts are the same, do a deeper check on enabled states and key attributes
         # This is a lightweight check focused on the most common changes
-        for rule_type in ["port_forwards", "traffic_routes", "firewall_policies", 
+        for rule_type in ["port_forwards", "traffic_routes", "static_routes", "firewall_policies", 
                          "traffic_rules", "legacy_firewall_rules", "wlans", "qos_rules"]:
             prev_rules = previous_data.get(rule_type, [])
             new_rules = new_data.get(rule_type, [])
@@ -482,6 +484,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     "devices": [],
                     "port_profiles": [],
                     "networks": [],
+                    "static_routes": [],
                 }
 
                 # Store the previous data to detect deletions and protect against API failures
@@ -561,8 +564,20 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 await self._update_traffic_rules_in_dict(rules_data)
                 await asyncio.sleep(api_call_delay)
 
-                # Then networks (source of truth for VPN derivation)
+                # Then networks (manageable LAN/WAN networks only)
                 await self._update_networks_in_dict(rules_data)
+                await asyncio.sleep(api_call_delay)
+
+                # Then VPN clients (extracted from network configs)
+                await self._update_vpn_clients_in_dict(rules_data)
+                await asyncio.sleep(api_call_delay)
+
+                # Then VPN servers (extracted from network configs)
+                await self._update_vpn_servers_in_dict(rules_data)
+                await asyncio.sleep(api_call_delay)
+
+                # Then static routes
+                await self._update_static_routes_in_dict(rules_data)
                 await asyncio.sleep(api_call_delay)
 
                 # Then legacy firewall rules
@@ -590,6 +605,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     len(rules_data["port_forwards"]) > 0 or
                     len(rules_data["qos_rules"]) > 0 or
                     len(rules_data["traffic_routes"]) > 0 or
+                    len(rules_data["static_routes"]) > 0 or
                     len(rules_data["legacy_firewall_rules"]) > 0 or
                     len(rules_data["port_profiles"]) > 0 or
                     len(rules_data["networks"]) > 0 or
@@ -600,7 +616,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 if auth_failure_during_update:
                     LOGGER.warning("Authentication issues detected during update - preserving existing data")
                     # If authentication failures occurred, preserve previous data for key categories
-                    for key in ["port_forwards", "firewall_policies", "traffic_rules", "traffic_routes"]:
+                    for key in ["port_forwards", "firewall_policies", "traffic_rules", "traffic_routes", "static_routes"]:
                         if not rules_data[key] and previous_data and key in previous_data and previous_data[key]:
                             LOGGER.info("Preserving previous %s data due to authentication issues", key)
                             rules_data[key] = previous_data[key]
@@ -617,7 +633,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 # If we get no data but had data before, likely a temporary API issue
                 if not data_valid and previous_data and any(
                     len(previous_data.get(key, [])) > 0 
-                    for key in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes"]
+                    for key in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "static_routes"]
                 ):
                     # We're in a potential error state
                     self._consecutive_errors += 1
@@ -690,6 +706,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     # --- Update Internal Collections --- 
                     self.port_forwards = rules_data.get("port_forwards", [])
                     self.traffic_routes = rules_data.get("traffic_routes", [])
+                    self.static_routes = rules_data.get("static_routes", [])
                     self.firewall_policies = rules_data.get("firewall_policies", [])
                     self.traffic_rules = rules_data.get("traffic_rules", [])
                     self.legacy_firewall_rules = rules_data.get("legacy_firewall_rules", [])
@@ -702,9 +719,10 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     self.port_profiles = rules_data.get("port_profiles", [])
                     self.networks = rules_data.get("networks", [])
 
-                    LOGGER.info("Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d, QoS Rules=%d, VPN Clients=%d, VPN Servers=%d, Devices=%d", 
+                    LOGGER.info("Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Static Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d, QoS Rules=%d, VPN Clients=%d, VPN Servers=%d, Networks=%d, Devices=%d", 
                                len(self.port_forwards),
                                len(self.traffic_routes),
+                               len(self.static_routes),
                                len(self.firewall_policies),
                                len(self.traffic_rules),
                                len(self.legacy_firewall_rules),
@@ -712,6 +730,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                                len(self.qos_rules),
                                len(self.vpn_clients),
                                len(self.vpn_servers),
+                               len(self.networks),
                                len(self.devices))
 
                     # Check if external changes were detected during baseline polling cycle
@@ -792,6 +811,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         all_rule_sources_types = [
             "port_forwards",
             "traffic_routes",
+            "static_routes",
             "firewall_policies",
             "traffic_rules",
             "legacy_firewall_rules",
@@ -831,6 +851,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         deleted_unique_ids = current_known_ids - all_current_unique_ids
         LOGGER.debug("Deletion Check Final: Known IDs (Snapshot): %d, Current IDs (Calculated): %d, To Delete: %d",
                      len(current_known_ids), len(all_current_unique_ids), len(deleted_unique_ids))
+        
 
         if deleted_unique_ids:
             # Process deletions using the identified IDs and the snapshot count
@@ -946,7 +967,31 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         """Update QoS rules in the given data dictionary."""
         await self._update_rule_type_in_dict(data, "qos_rules", self.api.get_qos_rules)
 
+    async def _update_static_routes_in_dict(self, data: Dict[str, List[Any]]) -> None:
+        """Update static routes in the given data dictionary."""
+        await self._update_rule_type_in_dict(data, "static_routes", self.api.get_static_routes)
+
+    async def _update_rule_type_in_dict(self, data: Dict[str, List[Any]], rule_type: str, api_method) -> None:
+        """Generic method to update rule types in the data dictionary.
         
+        Args:
+            data: The data dictionary to update
+            rule_type: The type of rule (e.g., "firewall_policies", "traffic_routes")
+            api_method: The API method to call to fetch the rules
+        """
+        try:
+            LOGGER.info("Fetching %s...", rule_type)
+            future = await self.api.queue_api_operation(api_method)
+            rules = await future if hasattr(future, "__await__") else future
+            data[rule_type] = rules or []
+            setattr(self, rule_type, data[rule_type])
+            LOGGER.info("Updated %d %s", len(data[rule_type]), rule_type)
+        except Exception as err:
+            LOGGER.error("Failed to update %s: %s", rule_type, err)
+            data[rule_type] = []
+            if not hasattr(self, rule_type):
+                setattr(self, rule_type, [])
+
     async def _update_devices_in_dict(self, data: Dict[str, List[Any]]) -> None:
         """Update devices in the data dictionary."""
         try:
@@ -1000,93 +1045,16 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 self.port_profiles = []
 
     async def _update_networks_in_dict(self, data: Dict[str, List[Any]]) -> None:
-        """Update networks and extract VPNs in a single pass.
-        
-        Fetches all network configs once, then splits them into clean collections:
-        - networks: Only manageable LAN networks (no VPN, no default)
-        - vpn_clients: VPN client configs (extracted during processing)  
-        - vpn_servers: VPN server configs (extracted during processing)
-        
-        This prevents duplication and double-matching in triggers while maintaining
-        single API call efficiency.
-        """
-        try:
-            LOGGER.info("Fetching all network configurations...")
-            future = await self.api.queue_api_operation(self.api.get_networks)
-            all_networks = await future if hasattr(future, "__await__") else future
-            
-            # Prepare collections
-            networks: List[NetworkConf] = []
-            vpn_clients = []
-            vpn_servers = []
-            
-            skipped_vpn = 0
-            skipped_default = 0
-            
-            for item in all_networks or []:
-                try:
-                    # Filter out default network (non-modifiable)
-                    if is_default_network(item):
-                        skipped_default += 1
-                        continue
-                    
-                    # Extract VPN configs into separate collections
-                    if is_vpn_network(item):
-                        skipped_vpn += 1
-                        from .models.vpn_config import VPNConfig
-                        try:
-                            raw = getattr(item, 'raw', {}) if hasattr(item, 'raw') else {}
-                            purpose = raw.get("purpose", "")
-                            vpn_type = raw.get("vpn_type", "")
-                            
-                            # Determine if client or server using helper function
-                            from .helpers.rule import classify_vpn_type
-                            is_client, is_server = classify_vpn_type(purpose, vpn_type)
-                            
-                            # If still unclear, default to client (most VPNs are client connections)
-                            if not is_client and not is_server:
-                                LOGGER.debug("VPN config %s has unclear type (purpose=%s, vpn_type=%s), defaulting to client", 
-                                           raw.get("_id", "unknown"), purpose, vpn_type)
-                                is_client = True
-                            
-                            if is_client:
-                                vpn_clients.append(VPNConfig(raw))
-                            elif is_server:
-                                vpn_servers.append(VPNConfig(raw))
-                        except Exception as vpn_err:
-                            LOGGER.debug("Skipping VPN conversion error: %s", vpn_err)
-                        continue
-                    
-                    # Keep as regular network (manageable LAN networks only)
-                    networks.append(item)
-                    
-                except Exception as err:
-                    LOGGER.warning("Error processing network: %s", err)
-            
-            # Store in data collections
-            data["networks"] = networks
-            data["vpn_clients"] = vpn_clients
-            data["vpn_servers"] = vpn_servers
-            
-            # Store in coordinator attributes
-            self.networks = networks
-            self.vpn_clients = vpn_clients
-            self.vpn_servers = vpn_servers
-            
-            LOGGER.info("Processed network configs: %d networks, %d VPN clients, %d VPN servers (skipped %d VPN, %d default)", 
-                       len(networks), len(vpn_clients), len(vpn_servers), skipped_vpn, skipped_default)
-                       
-        except Exception as err:
-            LOGGER.error("Failed to update networks: %s", err)
-            data["networks"] = []
-            data["vpn_clients"] = []
-            data["vpn_servers"] = []
-            if not hasattr(self, 'networks'):
-                self.networks = []
-            if not hasattr(self, 'vpn_clients'):
-                self.vpn_clients = []
-            if not hasattr(self, 'vpn_servers'):
-                self.vpn_servers = []
+        """Update manageable network configurations in the given data dictionary."""
+        await self._update_rule_type_in_dict(data, "networks", self.api.get_networks)
+
+    async def _update_vpn_clients_in_dict(self, data: Dict[str, List[Any]]) -> None:
+        """Update VPN client configurations in the given data dictionary."""
+        await self._update_rule_type_in_dict(data, "vpn_clients", self.api.get_vpn_clients)
+
+    async def _update_vpn_servers_in_dict(self, data: Dict[str, List[Any]]) -> None:
+        """Update VPN server configurations in the given data dictionary."""
+        await self._update_rule_type_in_dict(data, "vpn_servers", self.api.get_vpn_servers)
 
     async def _update_rule_type(self, rule_type: str, fetch_method: Callable) -> None:
         """Update a specific rule type in self.data.
@@ -1322,6 +1290,11 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             if get_rule_id(rule) not in self.known_unique_ids and get_rule_id(rule) is not None
         }
         
+        static_routes_to_add = {
+            get_rule_id(rule) for rule in self.static_routes 
+            if get_rule_id(rule) not in self.known_unique_ids and get_rule_id(rule) is not None
+        }
+        
         policies_to_add = {
             get_rule_id(rule) for rule in self.firewall_policies 
             if get_rule_id(rule) not in self.known_unique_ids and get_rule_id(rule) is not None
@@ -1393,6 +1366,17 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     self.known_unique_ids.add(rule_id)
                 else:
                     LOGGER.error("Cannot track traffic route rule without id attribute")
+                
+        for rule in self.static_routes:
+            rule_id = get_rule_id(rule)
+            if rule_id in static_routes_to_add:
+                LOGGER.debug("Tracking new static route for creation: %s (class: %s)", 
+                           rule_id, type(rule).__name__)
+                # Ensure rule is valid before tracking
+                if hasattr(rule, 'id'):
+                    self.known_unique_ids.add(rule_id)
+                else:
+                    LOGGER.error("Cannot track static route rule without id attribute")
                 
         for rule in self.firewall_policies:
             rule_id = get_rule_id(rule)
@@ -1513,20 +1497,28 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             UnifiQoSRuleSwitch,
             UnifiWlanSwitch,
             UnifiTrafficRouteKillSwitch,
-            UnifiLedToggleSwitch
+            UnifiLedToggleSwitch,
+            UnifiStaticRouteSwitch,
+            UnifiPortProfileSwitch,
+            UnifiNetworkSwitch,
+            UnifiVPNClientSwitch,
+            UnifiVPNServerSwitch
         )
 
         # Define mappings from rule types to entities
-        # Note: VPN entities are created during initial setup, not dynamically discovered
         rule_type_entity_map = [
             ("port_forwards", UnifiPortForwardSwitch),
             ("traffic_rules", UnifiTrafficRuleSwitch),
             ("firewall_policies", UnifiFirewallPolicySwitch),
             ("traffic_routes", UnifiTrafficRouteSwitch),
+            ("static_routes", UnifiStaticRouteSwitch),
             ("legacy_firewall_rules", UnifiLegacyFirewallRuleSwitch), 
             ("qos_rules", UnifiQoSRuleSwitch),
             ("wlans", UnifiWlanSwitch),
-            # VPN clients/servers excluded - handled during initial setup
+            ("port_profiles", UnifiPortProfileSwitch),
+            ("networks", UnifiNetworkSwitch),
+            ("vpn_clients", UnifiVPNClientSwitch),
+            ("vpn_servers", UnifiVPNServerSwitch),
         ]
 
         # Gather potential entities from the NEW data
@@ -1544,41 +1536,49 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                         continue # Skip rules without ID
 
                     all_current_unique_ids.add(rule_id)
-                    # Only consider if not already known
+                    # Only consider if not already known and not already in Home Assistant registry
                     if rule_id not in self.known_unique_ids:
-                        potential_entities_data[rule_id] = {
-                            "rule_data": rule,
-                            "rule_type": rule_type_key, # Use the key
-                            "entity_class": entity_class,
-                        }
-                        LOGGER.debug("Coordinator: Discovered potential new entity: %s (%s)", rule_id, rule_type_key)
+                        # Check if entity already exists in Home Assistant registry
+                        from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
+                        entity_registry = async_get_entity_registry(self.hass)
+                        existing_entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, rule_id)
+                        
+                        if existing_entity_id:
+                            # Entity exists in registry but not in our tracking - add to known_unique_ids
+                            LOGGER.debug("Coordinator: Found existing entity in registry: %s, adding to tracking", rule_id)
+                            self.known_unique_ids.add(rule_id)
+                        else:
+                            # Truly new entity - add to potential creation list
+                            potential_entities_data[rule_id] = {
+                                "rule_data": rule,
+                                "rule_type": rule_type_key, # Use the key
+                                "entity_class": entity_class,
+                            }
+                            LOGGER.debug("Coordinator: Discovered potential new entity: %s (%s)", rule_id, rule_type_key)
 
                     # Special handling for Traffic Routes Kill Switch
                     if rule_type_key == "traffic_routes" and hasattr(rule, 'raw') and "kill_switch_enabled" in rule.raw:
                         kill_switch_id = get_child_unique_id(rule_id, "kill_switch")
                         all_current_unique_ids.add(kill_switch_id)
                         if kill_switch_id not in self.known_unique_ids:
-                            # Use PARENT rule data for the kill switch
-                            potential_entities_data[kill_switch_id] = {
-                                "rule_data": rule, # Parent data
-                                "rule_type": rule_type_key, # Use the key
-                                "entity_class": UnifiTrafficRouteKillSwitch,
-                            }
-                            LOGGER.debug("Coordinator: Discovered potential new kill switch: %s (for parent %s)", kill_switch_id, rule_id)
+                            # Check if kill switch entity already exists in Home Assistant registry
+                            existing_kill_switch = entity_registry.async_get_entity_id("switch", DOMAIN, kill_switch_id)
+                            
+                            if existing_kill_switch:
+                                # Kill switch exists in registry but not in our tracking - add to known_unique_ids
+                                LOGGER.debug("Coordinator: Found existing kill switch in registry: %s, adding to tracking", kill_switch_id)
+                                self.known_unique_ids.add(kill_switch_id)
+                            else:
+                                # Use PARENT rule data for the kill switch
+                                potential_entities_data[kill_switch_id] = {
+                                    "rule_data": rule, # Parent data
+                                    "rule_type": rule_type_key, # Use the key
+                                    "entity_class": UnifiTrafficRouteKillSwitch,
+                                }
+                                LOGGER.debug("Coordinator: Discovered potential new kill switch: %s (for parent %s)", kill_switch_id, rule_id)
                 except Exception as err:
                     LOGGER.warning("Coordinator: Error processing rule during dynamic discovery: %s", err)
 
-        # Track VPN entity IDs for cleanup purposes (without creating them dynamically)
-        for vpn_rule_type in ["vpn_clients", "vpn_servers"]:
-            vpn_rules = new_data.get(vpn_rule_type, [])
-            for vpn_rule in vpn_rules:
-                try:
-                    vpn_rule_id = get_rule_id(vpn_rule)
-                    if vpn_rule_id:
-                        all_current_unique_ids.add(vpn_rule_id)
-                        LOGGER.debug("Coordinator: Tracking VPN entity ID for cleanup: %s", vpn_rule_id)
-                except Exception as err:
-                    LOGGER.warning("Coordinator: Error tracking VPN rule ID: %s", err)
 
         # Special handling for LED-capable devices
         devices = new_data.get("devices", [])
@@ -1589,12 +1589,20 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     all_current_unique_ids.add(device_unique_id)
                     
                     if device_unique_id not in self.known_unique_ids:
-                        potential_entities_data[device_unique_id] = {
-                            "rule_data": device,
-                            "rule_type": "devices",
-                            "entity_class": UnifiLedToggleSwitch,
-                        }
-                        LOGGER.debug("Coordinator: Discovered potential new LED switch: %s", device_unique_id)
+                        # Check if LED switch entity already exists in Home Assistant registry  
+                        existing_led_switch = entity_registry.async_get_entity_id("switch", DOMAIN, device_unique_id)
+                        
+                        if existing_led_switch:
+                            # LED switch exists in registry but not in our tracking - add to known_unique_ids
+                            LOGGER.debug("Coordinator: Found existing LED switch in registry: %s, adding to tracking", device_unique_id)
+                            self.known_unique_ids.add(device_unique_id)
+                        else:
+                            potential_entities_data[device_unique_id] = {
+                                "rule_data": device,
+                                "rule_type": "devices",
+                                "entity_class": UnifiLedToggleSwitch,
+                            }
+                            LOGGER.debug("Coordinator: Discovered potential new LED switch: %s", device_unique_id)
                 except Exception as err:
                     LOGGER.warning("Coordinator: Error processing device during dynamic discovery: %s", err)
 

@@ -20,6 +20,7 @@ UniFi Network Rules is a custom integration for Home Assistant that integrates w
 - Traffic/firewall rules (non-zone-based firewall)
 - Port Forwarding rules
 - Traffic Routes & Traffic Route Kill Switch
+- Static Routes (network routing configurations)
 - QoS rules
 - OpenVPN Client and Server configurations
 - WireGuard Client and Server configurations
@@ -208,6 +209,7 @@ UniFi Network Rules provides a **unified trigger system** powered by intelligent
 - **Firewall Policies** (`firewall_policy`): Zone-based firewall rules
 - **Port Forwards** (`port_forward`): Port forwarding rules  
 - **Traffic Routes** (`traffic_route`): Network routing rules
+- **Static Routes** (`route`): Static network routing configurations
 - **Traffic Rules** (`traffic_rule`): Legacy firewall rules
 - **QoS Rules** (`qos_rule`): Quality of Service rules
 - **VPN Clients** (`vpn_client`): VPN client configurations
@@ -764,6 +766,39 @@ actions:
 mode: parallel
 ```
 
+### 7. Static Route Management - Network Connectivity Monitoring
+
+Monitor static route changes and ensure critical network paths remain active:
+
+```yaml
+alias: Critical Route Monitor
+description: Alert when critical static routes are disabled
+triggers:
+  - trigger: unifi_network_rules
+    type: unr_changed
+    change_type: route
+    change_action: disabled
+    name_filter: "Critical"
+conditions: []
+actions:
+  - action: notify.admin_team
+    data:
+      title: "⚠️ Critical Network Route Disabled"
+      message: >
+        ALERT: Critical network route "{{ trigger.entity_name }}" was disabled.
+        Destination: {{ trigger.old_state.destination if trigger.old_state else "Unknown" }}
+        This may affect network connectivity to critical services.
+      data:
+        priority: high
+        category: network
+  - action: persistent_notification.create
+    data:
+      title: "Network Route Alert"
+      message: >
+        Critical route {{ trigger.entity_name }} was disabled at {{ trigger.timestamp }}
+mode: single
+```
+
 ### Advanced Filtering Examples
 
 #### Filter by Multiple Rule Types
@@ -777,6 +812,10 @@ triggers:
   - trigger: unifi_network_rules
     type: unr_changed
     change_type: vpn_client
+    change_action: [enabled, disabled, modified]
+  - trigger: unifi_network_rules
+    type: unr_changed
+    change_type: route
     change_action: [enabled, disabled, modified]
 ```
 
@@ -975,13 +1014,15 @@ The UniFi Network Rules integration supports several types of rules:
    - The main switch that enables/disables the route
    - A child "kill switch" that blocks all traffic if the route is down (prevents data leakage if your VPN disconnects)
 
-4. **QoS Rules (qos_rule)**: Quality of Service rules that prioritize certain types of traffic on your network. These rules can ensure critical applications (like video conferencing) get bandwidth priority over less time-sensitive applications.
+4. **Static Routes (route)**: Configure static network routes that define how traffic is routed between different network segments. These are fundamental routing table entries that determine network paths and can be enabled/disabled for network management and troubleshooting.
 
-5. **Port Profiles (port_profile)**: Switch port configurations that define how network ports are configured, including VLAN assignments, PoE settings, and operational modes. These control the behavior of individual switch ports.
+5. **QoS Rules (qos_rule)**: Quality of Service rules that prioritize certain types of traffic on your network. These rules can ensure critical applications (like video conferencing) get bandwidth priority over less time-sensitive applications.
 
-6. **Networks (network)**: Network configurations that define VLANs and network segments in your UniFi environment. These control the fundamental network infrastructure and IP addressing schemes.
+6. **Port Profiles (port_profile)**: Switch port configurations that define how network ports are configured, including VLAN assignments, PoE settings, and operational modes. These control the behavior of individual switch ports.
 
-7. **Legacy Rules**: For older UniFi OS versions, there are also legacy_firewall and legacy_traffic rule types, which are mapped to "policy" when using the service.
+7. **Networks (network)**: Network configurations that define VLANs and network segments in your UniFi environment. These control the fundamental network infrastructure and IP addressing schemes.
+
+8. **Legacy Rules**: For older UniFi OS versions, there are also legacy_firewall and legacy_traffic rule types, which are mapped to "policy" when using the service.
 
 ## Local Development
 
