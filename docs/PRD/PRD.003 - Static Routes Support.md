@@ -1,7 +1,7 @@
 # PRD.003 - Static Routes Support
 
 **Author:** @sirkirby  
-**Status:** Draft  
+**Status:** Proposed  
 
 ## Executive Summary
 
@@ -81,8 +81,6 @@ UniFi Network exposes static routes through a V1 REST API at `/proxy/network/api
   - **Resource Usage**: Minimal memory footprint using typed models and efficient data structures
   - **Reliability**: Route operations must not disrupt existing firewall/traffic rule functionality
   - **Security**: All API interactions use existing authentication mechanisms with proper error handling
-  - **Compatibility**: Support UniFi Network Controller versions 7.0+ with V1 routing API availability
-  - **Scalability**: Handle up to 50 static routes per site without performance degradation
 
 ## Design Overview
 
@@ -91,6 +89,7 @@ The static routes feature extends the existing UniFi Network Rules architecture 
 - **Components**:
   - **StaticRouteMixin** (`udm/routes.py`): Extends existing RoutesMixin with static route API operations  
   - **StaticRoute** (`models/static_route.py`): Typed data model for static route configurations
+  - **Helpers** (`helpers/rule.py`): Modify helper functions for static route operations
   - **StaticRouteSwitch** (`switch.py`): Home Assistant switch entity for route enable/disable
   - **Unified Trigger Integration**: Extends existing `unr_changed` trigger with `change_type: "route"`
   
@@ -220,9 +219,6 @@ Integration leverages existing `aiounifi` models where available and extends wit
 **Diagnostic Data:**
 
 - Route count and status distribution
-- API response times and error rates  
-- Entity state synchronization metrics
-- Trigger fire frequency and filtering effectiveness
 
 Diagnostics will be targeted and resource-conscious, following existing integration patterns for optional detailed logging.
 
@@ -236,9 +232,7 @@ Diagnostics will be targeted and resource-conscious, following existing integrat
 
 **Resource Targets:**
 
-- **Memory**: <1MB additional for 50 static routes with full metadata
 - **API Calls**: Integrated with existing polling - no separate requests  
-- **Processing**: <50ms for route data processing per polling cycle
 - **Entity Count**: 1 switch entity per configured static route
 
 **Caching Strategy:**
@@ -254,7 +248,6 @@ Diagnostics will be targeted and resource-conscious, following existing integrat
 - **Authentication Failures**: Use existing integration auth retry mechanisms
 - **Network Timeouts**: Graceful degradation with existing timeout handling
 - **Invalid Route States**: Log warnings and maintain last known good state
-- **API Version Changes**: Detect V1 routing API availability during startup
 
 **Error Recovery:**
 
@@ -292,11 +285,6 @@ Diagnostics will be targeted and resource-conscious, following existing integrat
 
 ## Risks & Mitigations
 
-**API Compatibility Risk**: UniFi V1 routing API may change without notice
-
-- *Mitigation*: Implement API version detection and graceful degradation
-- *Monitoring*: Log API response formats for early change detection
-
 **Performance Impact**: Additional API calls may affect system performance  
 
 - *Mitigation*: Integrate with existing smart polling system, no separate API requests
@@ -304,13 +292,8 @@ Diagnostics will be targeted and resource-conscious, following existing integrat
 
 **Route Conflict Risk**: Simultaneous route modifications from UniFi UI and Home Assistant
 
-- *Mitigation*: UniFi Network remains authoritative source, Home Assistant reconciles to it
+- *Mitigation*: UniFi Network remains authoritative source, Home Assistant reconciles to it. All API requests will utilize the existing custom queue system.
 - *Monitoring*: Log state synchronization discrepancies
-
-**Scale Risk**: Large numbers of routes may impact entity management performance
-
-- *Mitigation*: Implement entity limits and performance monitoring  
-- *Monitoring*: Track entity creation/update times and memory usage
 
 ## Dependencies & Constraints
 
@@ -318,7 +301,7 @@ Diagnostics will be targeted and resource-conscious, following existing integrat
 
 - Home Assistant Core 2024.1+ (for latest switch platform features)
 - `aiounifi` library with routing API support
-- Python 3.11+ (following integration standards)
+- Python 3.13+ (following integration standards)
 - UniFi Network Controller 9.0+ with V1 routing API
 
 **External Dependencies**:  
@@ -374,6 +357,7 @@ Diagnostics will be targeted and resource-conscious, following existing integrat
 - **Backup Strategy**: Static routes must be fully integrated with existing backup/restore services and rule management services
 
 **Remaining:**
+
 - None - all technical questions have been resolved
 
 ## Appendix (Optional)
@@ -387,7 +371,6 @@ Diagnostics will be targeted and resource-conscious, following existing integrat
 **Related PRDs:**
 
 - [PRD.001](./PRD.001%20-%20Smart%20Polling%20and%20Unified%20Triggers.md): Smart Polling Architecture and Unified Trigger System
-- [PRD.002](./PRD.002%20-%20Code%20Organization%20and%20Architecture%20Refactoring.md): Code Organization and Architecture Refactoring
 
 **API Reference:**
 

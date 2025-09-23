@@ -26,6 +26,10 @@ API_ENDPOINT_QOS_RULES_BATCH: Final = "/proxy/network/v2/api/site/{site}/qos-rul
 API_ENDPOINT_NETWORK_CONF: Final = "/proxy/network/api/s/{site}/rest/networkconf"
 API_ENDPOINT_NETWORK_CONF_DETAIL: Final = "/proxy/network/api/s/{site}/rest/networkconf/{network_id}"
 
+# Static Routes (V1 API)
+API_ENDPOINT_STATIC_ROUTES: Final = "/proxy/network/api/s/{site}/rest/routing"
+API_ENDPOINT_STATIC_ROUTE_DETAIL: Final = "/proxy/network/api/s/{site}/rest/routing/{route_id}"
+
 # Objects and Profiles
 API_ENDPOINT_OBJECTS: Final = "/proxy/network/v2/api/site/{site}/objects"
 API_ENDPOINT_OBJECT_DETAIL: Final = "/proxy/network/v2/api/site/{site}/objects/{object_id}"
@@ -61,6 +65,10 @@ API_PATH_QOS_RULES_BATCH: Final = "/qos-rules/batch"
 API_PATH_QOS_RULES_BATCH_DELETE: Final = "/qos-rules/batch-delete"
 API_PATH_NETWORK_CONF: Final = "/rest/networkconf"
 API_PATH_NETWORK_CONF_DETAIL: Final = "/rest/networkconf/{network_id}"
+
+# Static Routes (aiounifi path fragments - V1 API)
+API_PATH_STATIC_ROUTES: Final = "/rest/routing"
+API_PATH_STATIC_ROUTE_DETAIL: Final = "/rest/routing/{route_id}"
 
 # Objects and Profiles (aiounifi path fragments)
 API_PATH_PORT_PROFILES: Final = "/rest/portconf"
