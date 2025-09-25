@@ -11,9 +11,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory, generate_entity_id
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
-from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 from homeassistant.exceptions import HomeAssistantError
 from .services.constants import SIGNAL_ENTITIES_CLEANUP
 
@@ -48,7 +48,8 @@ RULE_TYPES: Final = {
     "qos_rules": "QoS Rule",
     "vpn_clients": "VPN Client",
     "vpn_servers": "VPN Server",
-    "static_routes": "Static Route"
+    "static_routes": "Static Route",
+    "nat_rules": "NAT Rule"
 }
 
 # Track entities across the platform
@@ -69,24 +70,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     LOGGER.debug("Setting up UniFi Network Rules switches")
 
     coordinator: UnifiRuleUpdateCoordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
-    entity_registry = async_get_entity_registry(hass)
 
-    # --- Initialize known_unique_ids from registry --- 
-    coordinator.known_unique_ids = { 
-        entry.unique_id 
-        for entry in entity_registry.entities.values() # Iterate through values 
-        if entry.config_entry_id == config_entry.entry_id # Filter by config entry ID
-        and entry.domain == "switch" 
-        and entry.platform == DOMAIN 
-        and entry.unique_id
-    }
-    LOGGER.debug("Initialized known_unique_ids from registry: %d entries", len(coordinator.known_unique_ids))
-    
-    # --- Trigger an immediate refresh after initial known_ids population ---
-    # This ensures the first deletion check runs with IDs from the registry
-    LOGGER.debug("Requesting coordinator refresh to populate initial data...")
-    await coordinator.async_request_refresh()
-    LOGGER.debug("Initial coordinator refresh completed")
+    # known_unique_ids are now populated during __init__.py before first refresh
+    # No need to repopulate or trigger additional refresh here
+    LOGGER.debug("Using known_unique_ids populated during initialization: %d entries", 
+                len(coordinator.known_unique_ids))
 
     # Initialize as empty, coordinator will manage it
     # Do NOT clear on reload, let coordinator handle sync
@@ -112,6 +100,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         ("port_profiles", coordinator.port_profiles, UnifiPortProfileSwitch),
         # Networks are now pre-filtered in coordinator (no VPN, no default)
         ("networks", coordinator.networks or [], UnifiNetworkSwitch),
+        ("nat_rules", coordinator.nat_rules or [], UnifiNATRuleSwitch),
     ]
 
     for rule_type, rules, entity_class in all_rule_sources:
@@ -207,9 +196,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         # Let the coordinator update known_unique_ids when dynamically adding
         # This prevents adding IDs during initial setup that might already be known from registry
 
-        LOGGER.info("Added %d new UniFi Network Rules switches", len(switches_to_add))
+        # Switch platform setup only runs during initial integration startup
+        LOGGER.info("Initialized %d UniFi Network Rules switches", len(switches_to_add))
     else:
-        LOGGER.info("No new UniFi Network Rules switches to add in this run.")
+        # Switch platform setup only runs during initial integration startup  
+        LOGGER.debug("No UniFi Network Rules switches to initialize in this run.")
 
 # Helper function to create kill switch entities
 async def create_traffic_route_kill_switch(hass, coordinator, rule, config_entry_id=None, return_entity=False):
@@ -790,6 +781,8 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                 toggle_func = self.coordinator.api.toggle_vpn_client
             elif self._rule_type == "vpn_servers":
                 toggle_func = self.coordinator.api.toggle_vpn_server
+            elif self._rule_type == "nat_rules":
+                toggle_func = self.coordinator.api.toggle_nat_rule
             elif self._rule_type == "port_profiles":
                 async def port_profile_toggle_wrapper(profile_obj):
                     # When enabling, provide a native_networkconf_id if missing by
@@ -1175,6 +1168,36 @@ class UnifiStaticRouteSwitch(UnifiRuleSwitch):
         super().__init__(coordinator, rule_data, rule_type, entry_id)
         # Set icon for static route rules
         self._attr_icon = "mdi:map-marker-path"
+
+class UnifiNATRuleSwitch(UnifiRuleSwitch):
+    """Switch to enable/disable a UniFi NAT rule."""
+
+    def __init__(
+        self,
+        coordinator: UnifiRuleUpdateCoordinator,
+        rule_data: Any,
+        rule_type: str,
+        entry_id: str = None,
+    ) -> None:
+        """Initialize NAT rule switch."""
+        super().__init__(coordinator, rule_data, rule_type, entry_id)
+        # Icon differs by type (SNAT vs DNAT) if available in raw
+        nat_type = None
+        try:
+            if hasattr(rule_data, "raw"):
+                nat_type = rule_data.raw.get("type")
+            elif isinstance(rule_data, dict):
+                nat_type = rule_data.get("type")
+        except Exception:
+            nat_type = None
+
+        if nat_type == "SNAT":
+            self._attr_icon = "mdi:swap-horizontal"
+        elif nat_type == "DNAT":
+            self._attr_icon = "mdi:swap-vertical"
+        else:
+            # Default neutral NAT icon if type missing/unknown
+            self._attr_icon = "mdi:swap-horizontal"
 
 class UnifiFirewallPolicySwitch(UnifiRuleSwitch):
     """Switch to enable/disable a UniFi firewall policy."""

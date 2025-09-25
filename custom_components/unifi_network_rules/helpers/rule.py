@@ -19,6 +19,7 @@ from ..models.vpn_config import VPNConfig
 from ..models.network import NetworkConf
 from ..models.port_profile import PortProfile
 from ..models.static_route import StaticRoute
+from ..models.nat_rule import NATRule
 from ..const import DOMAIN
 
 LOGGER = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ def get_rule_enabled(rule: Any) -> bool:
         True if the rule is enabled, False otherwise
     """
     # Check different rule types and return appropriate enabled status
-    if isinstance(rule, (PortForward, TrafficRoute, FirewallPolicy, TrafficRule, Wlan, QoSRule, VPNConfig, StaticRoute)):
+    if isinstance(rule, (PortForward, TrafficRoute, FirewallPolicy, TrafficRule, Wlan, QoSRule, VPNConfig, StaticRoute, NATRule)):
         return getattr(rule, "enabled", False)
     
     # Special handling for Device LED state
@@ -191,6 +192,14 @@ def get_rule_id(rule: Any) -> str | None:
             LOGGER.warning("StaticRoute without id attribute: %s", rule)
             return None
     
+    # Handle NATRule
+    if isinstance(rule, NATRule):
+        if rule.id:
+            return f"unr_nat_{rule.id}"
+        else:
+            LOGGER.warning("NATRule without id attribute: %s", rule)
+            return None
+    
     # Dictionary fallback - this should not happen with properly typed data
     if isinstance(rule, dict):
         _id = rule.get("_id") or rule.get("id")
@@ -221,6 +230,7 @@ def get_rule_prefix(rule_type: str) -> str:
         "static_routes": "Static Route",
         "firewall_policies": "Policy",
         "traffic_rules": "Traffic Rule",
+        "nat_rules": "NAT Rule",
         "legacy_firewall_rules": "Legacy Rule",
         "qos_rules": "QoS",
         "wlans": "WLAN",
@@ -460,6 +470,8 @@ def get_rule_name(rule: Any, coordinator=None) -> str | None:
         rule_type = "port_profiles"
     elif isinstance(rule, StaticRoute):
         rule_type = "static_routes"
+    elif isinstance(rule, NATRule):
+        rule_type = "nat_rules"
     elif isinstance(rule, dict) and "type" in rule:
         rule_type = rule.get("type")
     

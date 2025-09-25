@@ -24,7 +24,6 @@ from aiounifi.models.device import Device
 from .const import DOMAIN, LOGGER, DEFAULT_UPDATE_INTERVAL, LOG_TRIGGERS
 from .udm import UDMAPI
 from .helpers.rule import get_rule_id, get_child_unique_id
-from .utils.logger import log_data
 from .models.firewall_rule import FirewallRule
 from .models.qos_rule import QoSRule
 from .models.vpn_config import VPNConfig
@@ -32,6 +31,7 @@ from .models.port_profile import PortProfile
 from .models.network import NetworkConf
 from .models.static_route import StaticRoute
 from .smart_polling import SmartPollingManager, SmartPollingConfig
+from .models.nat_rule import NATRule
 from .unified_change_detector import UnifiedChangeDetector
 
 # This is a fallback if no update_interval is specified
@@ -96,9 +96,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         # Track initial update
         self._initial_update_done = False
 
-        # Flag to track update in progress
-        self._update_in_progress = False
-        self._has_data = False
         
         # --- CQRS-style Operation Tracking ---
         # This tracks rule_ids for operations initiated within Home Assistant
@@ -110,7 +107,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         # Track entities we added or removed
         # By unique ID rather than the objects themselves
         self.known_unique_ids: Set[str] = set()
-        self.removed_unique_ids: Set[str] = set()
         
         # Rule collections - these are maintained by the coordinator
         # To be used by services for operations like enable/disable rules
@@ -128,14 +124,11 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self.devices: List[Device] = []  # For LED toggle switches
         self.port_profiles: List[PortProfile] = []
         self.networks: List[NetworkConf] = []
+        self.nat_rules: List[NATRule] = []
 
         # For dynamic entity creation
         self.async_add_entities_callback: AddEntitiesCallback | None = None
-        self.entity_platform = None  # Store the entity platform for later use
         
-        # Coordination and cleanup
-        self._refresh_semaphore = asyncio.Semaphore(1)  # Limit concurrent refreshes
-        self._cleanup_callbacks = []  # Store cleanup callbacks
 
         # Save platforms to load
         self._platforms = platforms or [Platform.SWITCH]
@@ -485,6 +478,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     "port_profiles": [],
                     "networks": [],
                     "static_routes": [],
+                    "nat_rules": [],
                 }
 
                 # Store the previous data to detect deletions and protect against API failures
@@ -519,73 +513,54 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 # Add delay between API calls to avoid rate limiting
                 api_call_delay = 1.0  # seconds
 
-                # Track authentication failures during the update
-                auth_failure_during_update = False
-
-                # Try a core API call first to detect auth issues early
-                try:
-                    # First get port forwards - CRITICAL to check auth early but also preserve during auth failures
-                    port_forwards_success = await self._update_port_forwards_in_dict(rules_data)
-                    if not port_forwards_success:
-                        error_msg = getattr(self.api, "_last_error_message", "")
-                        if error_msg and ("401 Unauthorized" in error_msg or "403 Forbidden" in error_msg):
-                            auth_failure_during_update = True
-                            LOGGER.warning("Authentication failure detected during initial fetch: %s", error_msg)
-                            # Trigger auth recovery but continue trying other endpoints
-                            if hasattr(self.api, "handle_auth_failure"):
-                                self.hass.async_create_task(self.api.handle_auth_failure(error_msg))
-
-                            # Preserve previous port forwards data if available
-                            if previous_data and "port_forwards" in previous_data and previous_data["port_forwards"]:
-                                LOGGER.info("Preserving previous port forwards data during authentication failure")
-                                rules_data["port_forwards"] = previous_data["port_forwards"]
-                except Exception as err:
-                    LOGGER.error("Error in initial API call: %s", str(err))
-
                 await asyncio.sleep(api_call_delay)
 
                 # Then firewall policies
-                await self._update_firewall_policies_in_dict(rules_data)
+                await self._update_rule_type_in_dict(rules_data, "firewall_policies", self.api.get_firewall_policies)
                 await asyncio.sleep(api_call_delay)
 
                 # Then traffic routes
-                await self._update_traffic_routes_in_dict(rules_data)
+                await self._update_rule_type_in_dict(rules_data, "traffic_routes", self.api.get_traffic_routes)
                 await asyncio.sleep(api_call_delay)
 
                 # Then firewall zones
-                await self._update_firewall_zones_in_dict(rules_data)
+                await self._update_rule_type_in_dict(rules_data, "firewall_zones", self.api.get_firewall_zones)
                 await asyncio.sleep(api_call_delay)
 
                 # Then WLANs
-                await self._update_wlans_in_dict(rules_data)
+                await self._update_rule_type_in_dict(rules_data, "wlans", self.api.get_wlans)
                 await asyncio.sleep(api_call_delay)
 
                 # Then traffic rules
-                await self._update_traffic_rules_in_dict(rules_data)
+                await self._update_rule_type_in_dict(rules_data, "traffic_rules", self.api.get_traffic_rules)
                 await asyncio.sleep(api_call_delay)
 
                 # Then networks (manageable LAN/WAN networks only)
-                await self._update_networks_in_dict(rules_data)
+                await self._update_rule_type_in_dict(rules_data, "networks", self.api.get_networks)
                 await asyncio.sleep(api_call_delay)
 
                 # Then VPN clients (extracted from network configs)
-                await self._update_vpn_clients_in_dict(rules_data)
+                await self._update_rule_type_in_dict(rules_data, "vpn_clients", self.api.get_vpn_clients)
                 await asyncio.sleep(api_call_delay)
 
                 # Then VPN servers (extracted from network configs)
-                await self._update_vpn_servers_in_dict(rules_data)
+                await self._update_rule_type_in_dict(rules_data, "vpn_servers", self.api.get_vpn_servers)
                 await asyncio.sleep(api_call_delay)
 
                 # Then static routes
-                await self._update_static_routes_in_dict(rules_data)
+                await self._update_rule_type_in_dict(rules_data, "static_routes", self.api.get_static_routes)
+                await asyncio.sleep(api_call_delay)
+
+                # Then NAT rules (V2)
+                await self._update_rule_type_in_dict(rules_data, "nat_rules", self.api.get_nat_rules)
                 await asyncio.sleep(api_call_delay)
 
                 # Then legacy firewall rules
-                await self._update_legacy_firewall_rules_in_dict(rules_data)
+                await self._update_rule_type_in_dict(rules_data, "legacy_firewall_rules", self.api.get_legacy_firewall_rules)
                 await asyncio.sleep(api_call_delay)
 
                 # Then QoS rules
-                await self._update_qos_rules_in_dict(rules_data)
+                await self._update_rule_type_in_dict(rules_data, "qos_rules", self.api.get_qos_rules)
                 await asyncio.sleep(api_call_delay)
                 
                 # VPN clients and servers are now extracted during network processing
@@ -595,7 +570,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 await asyncio.sleep(api_call_delay)
 
                 # Then port profiles
-                await self._update_port_profiles_in_dict(rules_data)
+                await self._update_rule_type_in_dict(rules_data, "port_forwards", self.api.get_port_forwards)
+                await asyncio.sleep(api_call_delay)
 
                 # Verify the data is valid - check if we have at least some data in key categories
                 # This helps prevent entity removal during temporary API errors
@@ -612,20 +588,10 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     len(rules_data["devices"]) > 0
                 )
 
-                # Special handling for authentication failures detected during update
-                if auth_failure_during_update:
-                    LOGGER.warning("Authentication issues detected during update - preserving existing data")
-                    # If authentication failures occurred, preserve previous data for key categories
-                    for key in ["port_forwards", "firewall_policies", "traffic_rules", "traffic_routes", "static_routes"]:
-                        if not rules_data[key] and previous_data and key in previous_data and previous_data[key]:
-                            LOGGER.info("Preserving previous %s data due to authentication issues", key)
-                            rules_data[key] = previous_data[key]
-
                 # Check any API responses for auth errors
                 api_error_message = getattr(self.api, "_last_error_message", "")
                 if api_error_message and ("401 Unauthorized" in api_error_message or "403 Forbidden" in api_error_message):
                     LOGGER.warning("Authentication error in API response: %s", api_error_message)
-                    auth_failure_during_update = True
 
                     # Notify entities about auth failure
                     async_dispatcher_send(self.hass, f"{DOMAIN}_auth_failure")
@@ -684,11 +650,44 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     self._last_successful_data = rules_data.copy()
 
                     # If we previously had auth issues but now have valid data, signal recovery
-                    if auth_failure_during_update:
+                    api_error_message = getattr(self.api, "_last_error_message", "")
+                    if api_error_message and ("401 unauthorized" in api_error_message.lower() or "403 forbidden" in api_error_message.lower()):
                         LOGGER.info("Successfully recovered from authentication issues")
                         async_dispatcher_send(self.hass, f"{DOMAIN}_auth_restored")
 
-                    # Mark initial update as done AFTER first successful processing and BEFORE checks
+                    # Store whether this is the initial update before setting the flag
+                    is_initial_update = not self._initial_update_done
+
+                    # Run unified change detection and fire triggers BEFORE marking initial update done
+                    # This ensures proper startup detection logic
+                    try:
+                        changes = await self.change_detector.detect_and_fire_changes(rules_data)
+                        if changes:
+                            LOGGER.info("[UNIFIED_TRIGGERS] Detected %d changes, fired unified triggers", len(changes))
+                        else:
+                            # Check if this is initial startup with no changes (expected)
+                            if is_initial_update:
+                                total_entities = (len(rules_data.get("port_forwards", [])) + 
+                                               len(rules_data.get("traffic_routes", [])) + 
+                                               len(rules_data.get("static_routes", [])) +
+                                               len(rules_data.get("nat_rules", [])) +
+                                               len(rules_data.get("firewall_policies", [])) + 
+                                               len(rules_data.get("traffic_rules", [])) + 
+                                               len(rules_data.get("legacy_firewall_rules", [])) + 
+                                               len(rules_data.get("wlans", [])) + 
+                                               len(rules_data.get("qos_rules", [])) + 
+                                               len(rules_data.get("vpn_clients", [])) + 
+                                               len(rules_data.get("vpn_servers", [])) +
+                                               len(rules_data.get("devices", [])) +
+                                               len(rules_data.get("networks", [])))
+                                LOGGER.info("[UNIFIED_TRIGGERS] Initial discovery complete: %d entities discovered (no triggers fired)", total_entities)
+                            else:
+                                LOGGER.debug("[UNIFIED_TRIGGERS] No changes detected during this update cycle")
+                    except Exception as exc:
+                        LOGGER.error("[UNIFIED_TRIGGERS] Error during change detection: %s", exc)
+                        LOGGER.exception("Change detection exception details:")
+
+                    # Mark initial update as done AFTER change detection
                     if not self._initial_update_done:
                         self._initial_update_done = True
 
@@ -718,13 +717,15 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     self.devices = rules_data.get("devices", [])
                     self.port_profiles = rules_data.get("port_profiles", [])
                     self.networks = rules_data.get("networks", [])
+                    self.nat_rules = rules_data.get("nat_rules", [])
 
-                    LOGGER.info("Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Static Routes=%d, Firewall Policies=%d, Traffic Rules=%d, Legacy Firewall Rules=%d, WLANs=%d, QoS Rules=%d, VPN Clients=%d, VPN Servers=%d, Networks=%d, Devices=%d", 
+                    LOGGER.info("Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Static Routes=%d, Firewall Policies=%d, Traffic Rules=%d, NAT Rules=%d, Legacy Firewall Rules=%d, WLANs=%d, QoS Rules=%d, VPN Clients=%d, VPN Servers=%d, Networks=%d, Devices=%d", 
                                len(self.port_forwards),
                                len(self.traffic_routes),
                                len(self.static_routes),
                                len(self.firewall_policies),
                                len(self.traffic_rules),
+                               len(self.nat_rules),
                                len(self.legacy_firewall_rules),
                                len(self.wlans),
                                len(self.qos_rules),
@@ -743,15 +744,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                         else:
                             LOGGER.debug("[SMART_POLL] Changes detected during smart polling cycle - not registering as external")
 
-                    # Run unified change detection and fire triggers
-                    try:
-                        changes = await self.change_detector.detect_and_fire_changes(rules_data)
-                        if changes:
-                            LOGGER.info("[UNIFIED_TRIGGERS] Detected %d changes, fired unified triggers", len(changes))
-                        else:
-                            LOGGER.debug("[UNIFIED_TRIGGERS] No changes detected during this update cycle")
-                    except Exception as change_err:
-                        LOGGER.error("[UNIFIED_TRIGGERS] Error in change detection: %s", change_err)
 
                 return rules_data
 
@@ -792,7 +784,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     LOGGER.info("Returning previous data during error")
                     return self.data
 
-                raise UpdateFailed(f"Error updating data: {err}")
+                raise UpdateFailed(f"Error updating data: {err}") from err
 
     def _check_for_deleted_rules(self, new_data: Dict[str, List[Any]]) -> None:
         """Check for rules previously known but not in the new data, and trigger their removal."""
@@ -812,6 +804,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             "port_forwards",
             "traffic_routes",
             "static_routes",
+            "nat_rules",
             "firewall_policies",
             "traffic_rules",
             "legacy_firewall_rules",
@@ -930,14 +923,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             # If entity_id wasn't found in registry, log it.
             LOGGER.warning("Could not find entity_id for unique_id '%s' in registry. Cannot remove.", unique_id)
 
-    async def _update_firewall_policies_in_dict(self, data: Dict[str, List[Any]]) -> None:
-        """Update firewall policies in the provided dictionary."""
-        await self._update_rule_type_in_dict(data, "firewall_policies", self.api.get_firewall_policies)
-                    
-    async def _update_traffic_rules_in_dict(self, data: Dict[str, List[Any]]) -> None:
-        """Update traffic rules in the provided dictionary."""
-        await self._update_rule_type_in_dict(data, "traffic_rules", self.api.get_traffic_rules)
-
     async def _update_port_forwards_in_dict(self, data: Dict[str, List[Any]]) -> bool:
         """Update port forwards in the provided dictionary."""
         try:
@@ -946,30 +931,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         except Exception as err:
             LOGGER.error("Error updating port forwards: %s", err)
             return False
-        
-    async def _update_traffic_routes_in_dict(self, data: Dict[str, List[Any]]) -> None:
-        """Update traffic routes in the provided dictionary."""
-        await self._update_rule_type_in_dict(data, "traffic_routes", self.api.get_traffic_routes)
-
-    async def _update_firewall_zones_in_dict(self, data: Dict[str, List[Any]]) -> None:
-        """Update firewall zones in the provided dictionary."""
-        await self._update_rule_type_in_dict(data, "firewall_zones", self.api.get_firewall_zones)
-
-    async def _update_wlans_in_dict(self, data: Dict[str, List[Any]]) -> None:
-        """Update WLANs in the provided dictionary."""
-        await self._update_rule_type_in_dict(data, "wlans", self.api.get_wlans)
-
-    async def _update_legacy_firewall_rules_in_dict(self, data: Dict[str, List[Any]]) -> None:
-        """Update legacy firewall rules in the provided dictionary."""
-        await self._update_rule_type_in_dict(data, "legacy_firewall_rules", self.api.get_legacy_firewall_rules)
-
-    async def _update_qos_rules_in_dict(self, data: Dict[str, List[Any]]) -> None:
-        """Update QoS rules in the given data dictionary."""
-        await self._update_rule_type_in_dict(data, "qos_rules", self.api.get_qos_rules)
-
-    async def _update_static_routes_in_dict(self, data: Dict[str, List[Any]]) -> None:
-        """Update static routes in the given data dictionary."""
-        await self._update_rule_type_in_dict(data, "static_routes", self.api.get_static_routes)
 
     async def _update_rule_type_in_dict(self, data: Dict[str, List[Any]], rule_type: str, api_method) -> None:
         """Generic method to update rule types in the data dictionary.
@@ -1017,6 +978,14 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             LOGGER.info("Updated %d LED-capable devices with current LED states", len(led_capable_devices))
             
         except Exception as err:
+            error_str = str(err).lower()
+            
+            # Check for authentication errors first - these should bubble up for session refresh
+            if "401 unauthorized" in error_str or "403 forbidden" in error_str:
+                LOGGER.warning("Authentication error when fetching devices: %s", str(err))
+                # Re-raise auth errors so main error handler can refresh session
+                raise
+                
             LOGGER.error("Failed to update devices: %s", str(err))
             LOGGER.exception("Device update exception details:")
             data["devices"] = []
@@ -1039,44 +1008,18 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             self.port_profiles = typed
             LOGGER.info("Updated %d port profiles", len(typed))
         except Exception as err:
+            error_str = str(err).lower()
+            
+            # Check for authentication errors first - these should bubble up for session refresh
+            if "401 unauthorized" in error_str or "403 forbidden" in error_str:
+                LOGGER.warning("Authentication error when fetching port profiles: %s", str(err))
+                # Re-raise auth errors so main error handler can refresh session
+                raise
+                
             LOGGER.error("Failed to update port profiles: %s", err)
             data["port_profiles"] = []
             if not hasattr(self, 'port_profiles'):
                 self.port_profiles = []
-
-    async def _update_networks_in_dict(self, data: Dict[str, List[Any]]) -> None:
-        """Update manageable network configurations in the given data dictionary."""
-        await self._update_rule_type_in_dict(data, "networks", self.api.get_networks)
-
-    async def _update_vpn_clients_in_dict(self, data: Dict[str, List[Any]]) -> None:
-        """Update VPN client configurations in the given data dictionary."""
-        await self._update_rule_type_in_dict(data, "vpn_clients", self.api.get_vpn_clients)
-
-    async def _update_vpn_servers_in_dict(self, data: Dict[str, List[Any]]) -> None:
-        """Update VPN server configurations in the given data dictionary."""
-        await self._update_rule_type_in_dict(data, "vpn_servers", self.api.get_vpn_servers)
-
-    async def _update_rule_type(self, rule_type: str, fetch_method: Callable) -> None:
-        """Update a specific rule type in self.data.
-        
-        Args:
-            rule_type: The key to use in the data dictionary
-            fetch_method: The API method to call to fetch the rules
-        """
-        LOGGER.debug("Updating %s rules", rule_type)
-        try:
-            # Use queue_api_operation and properly await the future
-            future = await self.api.queue_api_operation(fetch_method)
-            # Ensure we have the actual result, not the future itself
-            rules = await future if hasattr(future, "__await__") else future
-            
-            self.data[rule_type] = rules
-            LOGGER.debug("Updated %s rules: %d items", rule_type, len(rules))
-        except Exception as err:  # pylint: disable=broad-except
-            LOGGER.error("Error updating %s rules: %s", rule_type, err)
-            # Keep previous data if update fails
-            if rule_type not in self.data:
-                self.data[rule_type] = []
     
     async def _update_rule_type_in_dict(self, target_data: Dict[str, List[Any]], rule_type: str, fetch_method: Callable) -> None:
         """Update a specific rule type in the provided data dictionary.
@@ -1133,6 +1076,12 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         except Exception as err:  # pylint: disable=broad-except
             error_str = str(err).lower()
             
+            # Check for authentication errors first - these should bubble up for session refresh
+            if "401 unauthorized" in error_str or "403 forbidden" in error_str:
+                LOGGER.warning("Authentication error when fetching %s rules: %s", rule_type, str(err))
+                # Re-raise auth errors so main error handler can refresh session
+                raise
+            
             # Special handling for 404 errors - may indicate path structure issue
             if "404 not found" in error_str:
                 LOGGER.error("404 error when fetching %s rules: %s", rule_type, str(err))
@@ -1154,6 +1103,11 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                             target_data[rule_type] = retry_rules
                             return
                     except Exception as retry_err:
+                        # Check if retry error is also auth-related
+                        retry_error_str = str(retry_err).lower()
+                        if "401 unauthorized" in retry_error_str or "403 forbidden" in retry_error_str:
+                            LOGGER.warning("Authentication error in retry for %s: %s", rule_type, retry_err)
+                            raise retry_err
                         LOGGER.error("Error in retry attempt for %s: %s", rule_type, retry_err)
             
             LOGGER.error("Error updating %s rules: %s", rule_type, err)
@@ -1161,68 +1115,10 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             if rule_type not in target_data:
                 target_data[rule_type] = []
 
-    # WebSocket message handling removed - using smart polling only
-
-    async def _controlled_refresh_wrapper(self):
-        """Wrapper for the controlled refresh process to ensure proper semaphore handling."""
-        # Acquire semaphore before starting refresh
-        async def controlled_refresh():
-            async with self._refresh_semaphore:
-                await self._force_refresh_with_cache_clear()
-                # Wait a moment before refreshing entities to let states settle
-                await asyncio.sleep(0.5)
-                self.async_update_listeners()
-        
-        # Start the controlled refresh task and await it
-        await controlled_refresh()
-
-    async def _force_refresh_with_cache_clear(self) -> None:
-        """Force a refresh with cache clearing to ensure fresh data.
-        
-        This method is triggered by smart polling and follows the same core refresh
-        and entity management logic as the regular polling updates:
-        1. Clear API cache (but preserve authentication)
-        2. Call async_refresh() which updates rule collections
-        3. Process new entities through the same entity creation path
-        4. Check for deleted rules to maintain consistency with polling
-        """
-        try:
-            # Log that we're starting a refresh
-            LOGGER.debug("Starting forced refresh after change detected")
-            
-            # Clear the API cache to ensure we get fresh data
-            # But do so without disrupting authentication
-            LOGGER.debug("Clearing API cache")
-            if hasattr(self.api, "clear_cache"):
-                await self.api.clear_cache()  # Modified in API to preserve auth
-            else:
-                LOGGER.warning("API object does not have clear_cache method")
-            LOGGER.debug("API cache cleared")
-            log_data("Cache cleared before refresh")
-            
-            # Force a full data refresh
-            refresh_successful = await self.async_refresh()
-            
-            if refresh_successful:
-                # After refreshing data, discovery and deletion checks are handled within async_refresh -> _async_update_data
-                
-                # Update the data timestamp
-                self._last_update = self.hass.loop.time()
-                
-                # Force an update of all entities
-                self.async_update_listeners()
-                
-                log_data("Refresh completed successfully after change detection")
-            else:
-                LOGGER.error("Change-triggered refresh failed")
-        except Exception as err:
-            LOGGER.error("Error during forced refresh: %s", err)
 
     @callback
     def shutdown(self) -> None:
         """Clean up resources."""
-        for cleanup_callback in self._cleanup_callbacks:
-            cleanup_callback()
             
     async def async_shutdown(self) -> None:
         """Clean up resources asynchronously."""
@@ -1236,43 +1132,6 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         # Any additional async cleanup can be added here
         # For example, wait for pending tasks to complete
 
-    async def _handle_auth_failure(self):
-        """Handle authentication failures from API operations."""
-        LOGGER.info("Authentication failure callback triggered, requesting data refresh")
-        # Reset authentication flag
-        self._authentication_in_progress = False
-        
-        # Reset _consecutive_errors to avoid conflating API errors with auth errors
-        self._consecutive_errors = 0
-        
-        # Notify any entities that have optimistic state to handle auth issues appropriately
-        async_dispatcher_send(self.hass, f"{DOMAIN}_auth_failure")
-        
-        # Request a refresh with some delay to allow auth to stabilize
-        await asyncio.sleep(2.0)
-        
-        # Ensure a fresh session before refresh
-        try:
-            if hasattr(self.api, "refresh_session"):
-                LOGGER.debug("Refreshing session before data refresh")
-                await self.api.refresh_session(force=True)
-        except Exception as err:
-            LOGGER.error("Error refreshing session during auth recovery: %s", str(err))
-            
-        # Force a full refresh
-        await self.async_refresh()
-        
-        # After successful refresh, notify components to clear any error states
-        async_dispatcher_send(self.hass, f"{DOMAIN}_auth_restored")
-
-    def set_entity_removal_callback(self, callback):
-        """Set callback for entity removal.
-        
-        Args:
-            callback: Function to call when an entity should be removed
-        """
-        self._entity_removal_callback = callback
-        LOGGER.debug("Entity removal callback registered")
 
 
     async def process_new_entities(self) -> None:
@@ -1292,6 +1151,11 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         
         static_routes_to_add = {
             get_rule_id(rule) for rule in self.static_routes 
+            if get_rule_id(rule) not in self.known_unique_ids and get_rule_id(rule) is not None
+        }
+
+        nat_rules_to_add = {
+            get_rule_id(rule) for rule in self.nat_rules
             if get_rule_id(rule) not in self.known_unique_ids and get_rule_id(rule) is not None
         }
         
@@ -1335,13 +1199,13 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         
         # Log counts of new rules detected
         if (port_forwards_to_add or routes_to_add or policies_to_add or 
-            traffic_rules_to_add or firewall_rules_to_add or wlans_to_add or qos_rules_to_add or vpn_clients_to_add or vpn_servers_to_add):
+            traffic_rules_to_add or firewall_rules_to_add or wlans_to_add or qos_rules_to_add or vpn_clients_to_add or vpn_servers_to_add or nat_rules_to_add):
             LOGGER.debug(
                 "Detected new rules - Port Forwards: %d, Traffic Routes: %d, "
-                "Firewall Policies: %d, Traffic Rules: %d, Legacy Firewall Rules: %d, WLANs: %d, QoS Rules: %d, VPN Clients: %d, VPN Servers: %d",
+                "Firewall Policies: %d, Traffic Rules: %d, Legacy Firewall Rules: %d, WLANs: %d, QoS Rules: %d, VPN Clients: %d, VPN Servers: %d, NAT Rules: %d",
                 len(port_forwards_to_add), len(routes_to_add), len(policies_to_add),
                 len(traffic_rules_to_add), len(firewall_rules_to_add), len(wlans_to_add),
-                len(qos_rules_to_add), len(vpn_clients_to_add), len(vpn_servers_to_add)
+                len(qos_rules_to_add), len(vpn_clients_to_add), len(vpn_servers_to_add), len(nat_rules_to_add)
             )
         
         # Track new entities for creation (queue system removed - entities created directly)
@@ -1377,6 +1241,16 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                     self.known_unique_ids.add(rule_id)
                 else:
                     LOGGER.error("Cannot track static route rule without id attribute")
+
+        for rule in self.nat_rules:
+            rule_id = get_rule_id(rule)
+            if rule_id in nat_rules_to_add:
+                LOGGER.debug("Tracking new NAT rule for creation: %s (class: %s)",
+                           rule_id, type(rule).__name__)
+                if hasattr(rule, 'id'):
+                    self.known_unique_ids.add(rule_id)
+                else:
+                    LOGGER.error("Cannot track NAT rule without id attribute")
                 
         for rule in self.firewall_policies:
             rule_id = get_rule_id(rule)
@@ -1499,6 +1373,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             UnifiTrafficRouteKillSwitch,
             UnifiLedToggleSwitch,
             UnifiStaticRouteSwitch,
+            UnifiNATRuleSwitch,
             UnifiPortProfileSwitch,
             UnifiNetworkSwitch,
             UnifiVPNClientSwitch,
@@ -1512,6 +1387,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             ("firewall_policies", UnifiFirewallPolicySwitch),
             ("traffic_routes", UnifiTrafficRouteSwitch),
             ("static_routes", UnifiStaticRouteSwitch),
+            ("nat_rules", UnifiNATRuleSwitch),
             ("legacy_firewall_rules", UnifiLegacyFirewallRuleSwitch), 
             ("qos_rules", UnifiQoSRuleSwitch),
             ("wlans", UnifiWlanSwitch),
@@ -1711,31 +1587,3 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 LOGGER.error("Coordinator: Failed to dynamically add entities: %s", add_err)
         else:
             LOGGER.debug("Coordinator: No new entities to add dynamically in this cycle.")
-
-    async def _async_get_vpn_clients(self) -> List[VPNConfig]:
-        """Get VPN clients from the API."""
-        try:
-            result = await self.api.get_vpn_clients()
-            LOGGER.debug("Fetched %d VPN clients", len(result))
-
-            # Update the internal list
-            self.vpn_clients = result
-            return result
-        except Exception as err:
-            LOGGER.error("Failed to fetch VPN clients: %s", err)
-            self._api_errors += 1
-            raise
-
-    async def _async_get_vpn_servers(self) -> List[VPNConfig]:
-        """Get VPN servers from the API."""
-        try:
-            result = await self.api.get_vpn_servers()
-            LOGGER.debug("Fetched %d VPN servers", len(result))
-
-            # Update the internal list
-            self.vpn_servers = result
-            return result
-        except Exception as err:
-            LOGGER.error("Failed to fetch VPN servers: %s", err)
-            self._api_errors += 1
-            raise
