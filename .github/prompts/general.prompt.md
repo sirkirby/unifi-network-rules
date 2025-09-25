@@ -2,13 +2,14 @@
 
 - Always keep the code DRY for testability and separation of concerns
 - Prefer modern idiomatic Python 3.13 and open source conventions, Leverage type hints, use CONST over hard coded strings
-- Prioritize native Home Assistant libraries, like aiounifi, and other core capabilities to respect available resources and to avoid building duplicate fuctionality. Leverage the latest Home Assistant documentation.
+- Prioritize native Home Assistant libraries, like aiounifi, and other core capabilities to respect available resources and to avoid building duplicate functionality. Leverage the latest Home Assistant documentation.
 - Diagnostics enabled for observability and debugging should be targeted, respecting the resources of the system
-- All data retrived and stored from the API should be typed, if not supplied by aiounifi, then a custom type should be created
+- All data retrieved and stored from the API should be typed, if not supplied by aiounifi, then a custom type should be created
 - When designing a new feature, prefer elegant solutions using established best practices and patterns.
-- When fixing a problem or bug, avoid treating the symptop, look for the root cause.
-- Details matter, ensure to always preserve existing functionlity unless otherwise instructed.
+- When fixing a problem or bug, avoid treating the symptom, look for the root cause.
+- Details matter, ensure to always preserve existing functionality unless otherwise instructed.
 - KISS
+- Maintain consistent code hygiene by addressing code and markdown linting errors and warnings.
 
 ## Notes
 

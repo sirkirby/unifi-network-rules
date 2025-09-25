@@ -56,7 +56,8 @@ class UnifiedChangeDetector:
             "devices": "device",
             "port_profiles": "port_profile",
             "networks": "network",
-            "static_routes": "route"
+            "static_routes": "route",
+            "nat_rules": "nat",
         }
 
     async def detect_and_fire_changes(self, current_data: Dict[str, List[Any]]) -> List[ChangeEvent]:
@@ -73,11 +74,14 @@ class UnifiedChangeDetector:
         # Build current state snapshot
         current_state = self._build_state_snapshot(current_data)
         
-        LOGGER.debug("[CHANGE_DETECTOR] Built current state snapshot: %d rule types, %d total entities",
-                    len(current_state), sum(len(entities) for entities in current_state.values()))
+        total_entities = sum(len(entities) for entities in current_state.values())
+        is_initial_startup = not self.coordinator._initial_update_done
+        
+        LOGGER.debug("[CHANGE_DETECTOR] Built current state snapshot: %d rule types, %d total entities (initial_startup: %s)",
+                    len(current_state), total_entities, is_initial_startup)
         
         # Compare with previous state to detect changes
-        changes.extend(await self._detect_changes(current_state))
+        changes, suppressed_count = await self._detect_changes(current_state)
         
         # Fire triggers for all detected changes
         for change in changes:
@@ -86,19 +90,31 @@ class UnifiedChangeDetector:
         # Update previous state for next comparison
         self._previous_state = current_state
         
-        LOGGER.debug("[CHANGE_DETECTOR] Detection complete: %d changes found", len(changes))
+        # Log results with better context
+        if not self.coordinator._initial_update_done:
+            total_entities = sum(len(entities) for entities in current_state.values())
+            if len(changes) == 0:
+                LOGGER.info("[CHANGE_DETECTOR] Initial discovery complete: %d entities discovered, %d creation events suppressed (no change triggers fired)", total_entities, suppressed_count)
+            else:
+                LOGGER.warning("[CHANGE_DETECTOR] Unexpected: %d change events during initial startup (should be 0), %d suppressed", len(changes), suppressed_count)
+        else:
+            if len(changes) > 0:
+                LOGGER.info("[CHANGE_DETECTOR] Detection complete: %d changes found", len(changes))
+            else:
+                LOGGER.debug("[CHANGE_DETECTOR] Detection complete: no changes found")
         return changes
     
-    async def _detect_changes(self, current_state: Dict[str, Dict[str, Any]]) -> List[ChangeEvent]:
+    async def _detect_changes(self, current_state: Dict[str, Dict[str, Any]]) -> tuple[List[ChangeEvent], int]:
         """Detect changes between previous and current state.
         
         Args:
             current_state: Current state snapshot
             
         Returns:
-            List of detected changes
+            Tuple of (list of detected changes, count of suppressed initial discovery events)
         """
         changes = []
+        suppressed_count = 0  # Track suppressed initial discovery events
         
         # Check for new and modified entities
         for rule_type, current_entities in current_state.items():
@@ -108,13 +124,20 @@ class UnifiedChangeDetector:
                 previous_entity_state = previous_entities.get(entity_id)
                 
                 if previous_entity_state is None:
-                    # New entity created
-                    change = await self._create_change_event(
-                        entity_id, rule_type, None, current_entity_state, "created"
-                    )
-                    if change:
-                        changes.append(change)
-                        LOGGER.debug("[CHANGE_DETECTOR] New entity detected: %s (%s)", entity_id, rule_type)
+                    # Check if this is the initial startup - suppress "created" events for existing entities
+                    if not self.coordinator._initial_update_done:
+                        # This is initial discovery, not a new entity - don't fire created triggers
+                        suppressed_count += 1
+                        LOGGER.debug("[CHANGE_DETECTOR] Initial discovery (not new): %s (%s)", entity_id, rule_type)
+                        # Don't add any change event for initial discovery
+                    else:
+                        # This is truly a new entity after initial startup
+                        change = await self._create_change_event(
+                            entity_id, rule_type, None, current_entity_state, "created"
+                        )
+                        if change:
+                            changes.append(change)
+                            LOGGER.info("[CHANGE_DETECTOR] New entity detected: %s (%s)", entity_id, rule_type)
                 else:
                     # Check for modifications
                     change_action = self._determine_change_action(previous_entity_state, current_entity_state)
@@ -139,7 +162,7 @@ class UnifiedChangeDetector:
                         changes.append(change)
                         LOGGER.debug("[CHANGE_DETECTOR] Entity deleted: %s (%s)", entity_id, rule_type)
         
-        return changes
+        return changes, suppressed_count
     
     def _determine_change_action(self, old_state: Dict[str, Any], new_state: Dict[str, Any]) -> Optional[str]:
         """Determine what type of change occurred.
