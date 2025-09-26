@@ -75,10 +75,6 @@ class UnifiedChangeDetector:
         current_state = self._build_state_snapshot(current_data)
         
         total_entities = sum(len(entities) for entities in current_state.values())
-        is_initial_startup = not self.coordinator._initial_update_done
-        
-        LOGGER.debug("[CHANGE_DETECTOR] Built current state snapshot: %d rule types, %d total entities (initial_startup: %s)",
-                    len(current_state), total_entities, is_initial_startup)
         
         # Compare with previous state to detect changes
         changes, suppressed_count = await self._detect_changes(current_state)
@@ -92,7 +88,6 @@ class UnifiedChangeDetector:
         
         # Log results with better context
         if not self.coordinator._initial_update_done:
-            total_entities = sum(len(entities) for entities in current_state.values())
             if len(changes) == 0:
                 LOGGER.info("[CHANGE_DETECTOR] Initial discovery complete: %d entities discovered, %d creation events suppressed (no change triggers fired)", total_entities, suppressed_count)
             else:
@@ -137,7 +132,7 @@ class UnifiedChangeDetector:
                         )
                         if change:
                             changes.append(change)
-                            LOGGER.info("[CHANGE_DETECTOR] New entity detected: %s (%s)", entity_id, rule_type)
+                            LOGGER.debug("[CHANGE_DETECTOR] New entity detected: %s (%s)", entity_id, rule_type)
                 else:
                     # Check for modifications
                     change_action = self._determine_change_action(previous_entity_state, current_entity_state)
@@ -174,6 +169,10 @@ class UnifiedChangeDetector:
         Returns:
             Change action string or None if no significant change
         """
+        # Determine if this is a kill switch child entity
+        entity_id = new_state.get('_id') or old_state.get('_id', '')
+        is_kill_switch_child = isinstance(entity_id, str) and entity_id.endswith('_kill_switch')
+        
         # Check for enabled/disabled changes first (most important)
         old_enabled = old_state.get("enabled", False)
         new_enabled = new_state.get("enabled", False)
@@ -181,16 +180,96 @@ class UnifiedChangeDetector:
         if old_enabled != new_enabled:
             return "enabled" if new_enabled else "disabled"
         
+        # Check for LED state changes
+        led_change_action = self._determine_led_change_action(old_state, new_state)
+        if led_change_action:
+            return led_change_action
+        
+        # Check for kill switch state changes (only for kill switch child entities)
+        if is_kill_switch_child:
+            kill_switch_change_action = self._determine_kill_switch_change_action(old_state, new_state)
+            if kill_switch_change_action:
+                return kill_switch_change_action
+        
         # Check for other significant changes
         significant_fields = ["name", "description", "action", "protocol", "port", 
                             "dst_port", "fwd_port", "gateway", "next_hop", "ssid",
-                            "bandwidth_limit", "rate_limit", "kill_switch"]
+                            "bandwidth_limit", "rate_limit"]
+        
+        # For traffic route parent entities, exclude kill_switch_enabled from significant fields
+        # since that's handled by the separate kill switch child entity
+        if not is_kill_switch_child:
+            # Don't include kill_switch_enabled for parent entities
+            pass
         
         for field in significant_fields:
             if old_state.get(field) != new_state.get(field):
                 return "modified"
         
         return None  # No significant change detected
+
+    def _determine_led_change_action(self, old_state: Dict[str, Any], new_state: Dict[str, Any]) -> Optional[str]:
+        """Determine change action for LED state changes.
+        
+        Maps LED override states to appropriate change actions:
+        - LED "on" = "enabled"
+        - LED "off" = "disabled" 
+        - LED "default" or other transitions = "modified"
+        
+        Args:
+            old_state: Previous entity state
+            new_state: Current entity state
+            
+        Returns:
+            Change action string or None if no LED change
+        """
+        old_led = old_state.get("led_override")
+        new_led = new_state.get("led_override")
+        
+        # No change if both are the same or both are None
+        if old_led == new_led:
+            return None
+            
+        # Only process if there's an actual LED state change
+        if old_led is None and new_led is None:
+            return None
+            
+        # Map LED states to change actions
+        if new_led == "on":
+            return "enabled"
+        elif new_led == "off":
+            return "disabled"
+        else:
+            # For "default" state or other transitions
+            return "modified"
+
+    def _determine_kill_switch_change_action(self, old_state: Dict[str, Any], new_state: Dict[str, Any]) -> Optional[str]:
+        """Determine change action for kill switch state changes.
+        
+        Maps kill switch enabled states to appropriate change actions:
+        - kill_switch_enabled True = "enabled"
+        - kill_switch_enabled False = "disabled"
+        
+        Args:
+            old_state: Previous entity state
+            new_state: Current entity state
+            
+        Returns:
+            Change action string or None if no kill switch change
+        """
+        old_kill_switch = old_state.get("kill_switch_enabled")
+        new_kill_switch = new_state.get("kill_switch_enabled")
+        
+        # No change if both are the same
+        if old_kill_switch == new_kill_switch:
+            return None
+            
+        # Only process if there's an actual kill switch state change
+        if old_kill_switch is None and new_kill_switch is None:
+            return None
+            
+        # Map kill switch states to change actions
+        return "enabled" if new_kill_switch else "disabled"
     
     async def _create_change_event(
         self, 
@@ -224,7 +303,14 @@ class UnifiedChangeDetector:
             entity_name = self._get_entity_name(rule_type, old_state, new_state, rule_id)
             
             # Generate unique ID for Home Assistant entity
-            unique_id = f"unr_{self._rule_type_mapping.get(rule_type, rule_type)}_{rule_id}"
+            if rule_type == 'devices':
+                # Device LED switches use a special unique ID format
+                unique_id = f"unr_device_{rule_id}_led"
+            elif rule_type == 'traffic_routes' and rule_id.endswith('_kill_switch'):
+                # Kill switch child entities already have the full unique ID
+                unique_id = rule_id
+            else:
+                unique_id = f"unr_{self._rule_type_mapping.get(rule_type, rule_type)}_{rule_id}"
             
             # Generate entity ID for Home Assistant entity
             ha_entity_id = f"switch.{unique_id}"
@@ -302,6 +388,22 @@ class UnifiedChangeDetector:
             if device_name:
                 return f"Device: {device_name}"
         
+        elif rule_type == "traffic_routes":
+            # Handle kill switch child entities
+            if rule_id.endswith("_kill_switch"):
+                # This is a kill switch child entity, use the name we set in the snapshot
+                kill_switch_name = state.get("name", "")
+                if kill_switch_name:
+                    return kill_switch_name
+                # Fallback for kill switch
+                parent_name = state.get("parent_name", f"Route {rule_id[:8]}")
+                return f"{parent_name} Kill Switch"
+            else:
+                # Regular traffic route
+                route_name = state.get("name", "")
+                if route_name:
+                    return f"Traffic Route: {route_name}"
+        
         # Generic fallback
         return f"{rule_type.replace('_', ' ').title()} {rule_id[:8]}"
     
@@ -372,19 +474,47 @@ class UnifiedChangeDetector:
                         entity_data = entity.copy()
                         entity_id = entity_data.get('_id') or entity_data.get('id')
                     else:
-                        # Try to get attributes directly
-                        entity_id = getattr(entity, 'id', None) or getattr(entity, '_id', None)
+                        # Try to get attributes directly - handle different ID patterns
+                        entity_id = getattr(entity, 'id', None) or getattr(entity, '_id', None) or getattr(entity, 'mac', None)
                         if entity_id:
                             # Convert to dictionary representation
                             entity_data = {}
-                            for attr in ['id', '_id', 'enabled', 'name', 'description', 'action', 'protocol']:
-                                if hasattr(entity, attr):
-                                    entity_data[attr] = getattr(entity, attr)
+                            
+                            # Special handling for devices (LED switches)
+                            if rule_type == 'devices':
+                                # Capture device-specific attributes
+                                for attr in ['id', '_id', 'mac', 'name', 'model', 'led_override']:
+                                    if hasattr(entity, attr):
+                                        entity_data[attr] = getattr(entity, attr)
+                            else:
+                                # Standard rule attributes
+                                for attr in ['id', '_id', 'enabled', 'name', 'description', 'action', 'protocol']:
+                                    if hasattr(entity, attr):
+                                        entity_data[attr] = getattr(entity, attr)
                         else:
                             continue  # Skip entities without ID
                     
                     if entity_id:
                         snapshot[rule_type][entity_id] = entity_data
+                        
+                        # Handle child entities for traffic routes (kill switches)
+                        if rule_type == 'traffic_routes' and entity_data.get('kill_switch_enabled') is not None:
+                            from .helpers.rule import get_child_unique_id
+                            kill_switch_id = get_child_unique_id(entity_id, "kill_switch")
+                            
+                            # Generate proper name for kill switch
+                            parent_name = entity_data.get('name') or entity_data.get('description') or f"Route {entity_id[:8]}"
+                            kill_switch_name = f"{parent_name} Kill Switch"
+                            
+                            # Create a separate snapshot entry for the kill switch child entity
+                            kill_switch_data = {
+                                '_id': kill_switch_id,
+                                'parent_id': entity_id,
+                                'enabled': entity_data.get('kill_switch_enabled', False),
+                                'kill_switch_enabled': entity_data.get('kill_switch_enabled', False),
+                                'name': kill_switch_name
+                            }
+                            snapshot[rule_type][kill_switch_id] = kill_switch_data
                         
                 except Exception as err:
                     LOGGER.warning("[CHANGE_DETECTOR] Error processing entity in %s: %s", rule_type, err)
