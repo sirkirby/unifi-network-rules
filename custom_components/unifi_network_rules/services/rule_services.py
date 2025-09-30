@@ -140,6 +140,9 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
         elif rule_type == "devices":
             devices = await api.get_device_led_states()
             return next((d for d in devices if d.mac == rule_id or d.id == rule_id), None)
+        elif rule_type == "nat_rules":
+            rules = await api.get_nat_rules()
+            return next((r for r in rules if r.id == rule_id), None)
         return None
         
     # Function to toggle rule based on its type
@@ -173,6 +176,8 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
         elif rule_type == "devices":
             # Device LEDs use set_device_led with enabled state
             return await api.queue_api_operation(api.set_device_led, rule_obj, enabled)
+        elif rule_type == "nat_rules":
+            return await api.queue_api_operation(api.toggle_nat_rule, rule_obj)
         return False
 
     for coordinator in coordinators.values():
@@ -187,7 +192,7 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
                         break
             else:
                 # If rule_type is not specified, try all types
-                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules", "qos_rules", "wlans", "vpn_clients", "vpn_servers", "port_profiles", "networks", "devices"]:
+                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules", "qos_rules", "wlans", "vpn_clients", "vpn_servers", "port_profiles", "networks", "devices", "nat_rules"]:
                     try:
                         rule_obj = await get_rule_by_id(api, type_name, rule_id)
                         if rule_obj:

@@ -31,7 +31,8 @@ VALID_CHANGE_TYPES = [
     "device",
     "port_profile",
     "network",
-    "route"
+    "route",
+    "nat"
 ]
 
 # Valid change actions

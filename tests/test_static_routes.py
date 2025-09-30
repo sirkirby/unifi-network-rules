@@ -312,7 +312,7 @@ class TestStaticRoutesIntegration:
     @pytest.mark.asyncio
     async def test_coordinator_static_routes_update(self):
         """Test coordinator updates static routes collection."""
-        with patch('custom_components.unifi_network_rules.coordinator.UDMAPI') as mock_api_class:
+        with patch('custom_components.unifi_network_rules.coordination.coordinator.UDMAPI') as mock_api_class:
             mock_api = AsyncMock()
             mock_api.get_static_routes.return_value = [
                 StaticRoute({"_id": "route1", "static-route_network": "192.168.1.0/24"}),

@@ -106,15 +106,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # WebSocket removed - using smart polling only
         LOGGER.info("Smart polling architecture enabled - WebSocket disabled")
         
-        # Define entity removal callback
-        @callback
-        def handle_entity_removal(entity_id):
-            """Handle entity removal by dispatching a signal."""
-            LOGGER.debug("Entity removal callback triggered for: %s", entity_id)
-            async_dispatcher_send(hass, f"{DOMAIN}_entity_removed", entity_id)
-        
-        # Register entity removal callback
-        coordinator.set_entity_removal_callback(handle_entity_removal)
         
         # Store shared data for entity creation
         hass.data.setdefault(DOMAIN, {})
@@ -139,7 +130,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "coordinator": coordinator,
         }
         
-        # Start initial data refresh
+        # Initialize known_unique_ids from entity registry BEFORE first refresh
+        # This ensures proper entity discovery/deletion checking from the start
+        entity_registry = async_get_entity_registry(hass)
+        coordinator.known_unique_ids = {
+            entity_entry.unique_id
+            for entity_entry in entity_registry.entities.values()
+            if entity_entry.config_entry_id == entry.entry_id
+            and entity_entry.domain == "switch"
+            and entity_entry.platform == DOMAIN
+            and entity_entry.unique_id
+        }
+        LOGGER.debug("Initialized known_unique_ids from registry before first refresh: %d entries", 
+                    len(coordinator.known_unique_ids))
+        
+        # Start initial data refresh (now with proper known_unique_ids)
         await coordinator.async_config_entry_first_refresh()
         
         # Setup platforms

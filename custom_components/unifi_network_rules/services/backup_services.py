@@ -32,6 +32,7 @@ from aiounifi.models.traffic_rule import TrafficRule
 from ..models.firewall_rule import FirewallRule
 from ..models.qos_rule import QoSRule
 from ..models.vpn_config import VPNConfig
+from ..models.static_route import StaticRoute
 
 # Schema for backup_rules service
 BACKUP_RULES_SCHEMA = vol.Schema(
@@ -48,8 +49,8 @@ RESTORE_RULES_SCHEMA = vol.Schema(
         vol.Optional(CONF_NAME_FILTER): cv.string,
         vol.Optional(CONF_RULE_TYPES): vol.All(
             cv.ensure_list, 
-            [vol.In(["policy", "port_forward", "route", "qos_rule", "vpn_client", "port_profile", "network"])],
-            description="Types of rules to restore: policy (firewall), port_forward, route (traffic routes), qos_rule (QoS rules), vpn_client (VPN clients), port_profile (switch port configurations), network (network configurations)"
+            [vol.In(["policy", "port_forward", "route", "qos_rule", "vpn_client", "port_profile", "network", "nat"])],
+            description="Types of rules to restore: policy (firewall), port_forward, route (traffic routes), qos_rule (QoS rules), vpn_client (VPN clients), port_profile (switch port configurations), network (network configurations), nat (NAT rules)"
         ),
     }
 )
@@ -304,6 +305,7 @@ async def async_restore_rules_service(hass: HomeAssistant, coordinators: Dict, c
                 "port_forward": "port_forward",
                 "traffic_route": "route",
                 "static_route": "route",       # Static routes
+                "nat": "nat",
                 
                 # Legacy types - older controllers will have these instead of firewall_policy
                 "legacy_firewall": "policy",   # Maps to policy as it's the older version
@@ -630,6 +632,95 @@ async def async_restore_rules_service(hass: HomeAssistant, coordinators: Dict, c
                   restore_counts["traffic_routes"] + skip_counts["traffic_routes"],
                   restore_counts["traffic_routes"], 
                   skip_counts["traffic_routes"])
+
+    # Restore NAT rules (custom)
+    if "nat_rules" in backup_entry and hasattr(api, "update_nat_rule"):
+        restore_counts["nat_rules"] = 0
+        skip_counts["nat_rules"] = 0
+        LOGGER.info("Restoring NAT rules...")
+        for rule_dict in backup_entry["nat_rules"]:
+            rule_id = rule_dict.get("_id", "")
+
+            should_restore_rule = await should_restore(rule_dict, "nat")
+
+            if should_restore_rule:
+                rule_exists = False
+                if "nat_rules" in coordinator.data:
+                    rule_exists = rule_exists_in_collection(rule_dict, coordinator.data["nat_rules"])
+
+                try:
+                    from ..models.nat_rule import NATRule
+                    if rule_exists and force_restore:
+                        rule_obj = NATRule(rule_dict)
+                        await api.queue_api_operation(api.update_nat_rule, rule_obj)
+                    elif rule_exists:
+                        skip_counts["nat_rules"] += 1
+                    else:
+                        # Creation of NAT rules via API is not supported by this integration
+                        LOGGER.warning("Skipping creation of NAT rule %s - creating new NAT rules is not supported via restore.", rule_id)
+                        skip_counts["nat_rules"] += 1
+
+                    restore_counts["nat_rules"] += 1
+                except Exception as err:
+                    LOGGER.error("Error restoring NAT rule %s: %s", rule_id, err)
+            else:
+                skip_counts["nat_rules"] += 1
+
+        LOGGER.info("Processed %d NAT rules (restored: %d, skipped: %d)", 
+                  restore_counts["nat_rules"] + skip_counts["nat_rules"],
+                  restore_counts["nat_rules"], 
+                  skip_counts["nat_rules"])
+
+    # Restore static routes
+    if "static_routes" in backup_entry and hasattr(api, "update_static_route"):
+        restore_counts["static_routes"] = 0
+        skip_counts["static_routes"] = 0
+        LOGGER.info("Restoring static routes...")
+        for rule_dict in backup_entry["static_routes"]:
+            rule_id = rule_dict.get("_id", "")
+            
+            # Apply filters first
+            should_restore_rule = await should_restore(rule_dict, "static_route")
+            
+            if should_restore_rule:
+                # Check if this rule already exists in the system
+                rule_exists = False
+                if "static_routes" in coordinator.data:
+                    rule_exists = rule_exists_in_collection(rule_dict, coordinator.data["static_routes"])
+                
+                try:
+                    if rule_exists and force_restore:
+                        # Use update method when the rule exists and we're forcing an update
+                        LOGGER.debug("Rule %s exists and force_restore is True, updating existing rule", rule_id)
+                        # Convert to typed object for update
+                        rule_obj = StaticRoute(rule_dict)
+                        await api.queue_api_operation(api.update_static_route, rule_obj)
+                    elif rule_exists:
+                        # Rule exists but force_restore is False, so skip it
+                        LOGGER.debug("Rule %s already exists, skipping (use force_restore=True to update existing rules)", rule_id)
+                        skip_counts["static_routes"] += 1
+                    else:
+                        # Use add method when the rule doesn't exist
+                        LOGGER.debug("Creating new static route based on %s", rule_id)
+                        # For adding new rules, create a copy without the _id field
+                        # to let the API assign a new ID
+                        add_rule_dict = rule_dict.copy()
+                        if '_id' in add_rule_dict:
+                            del add_rule_dict['_id']  # Remove ID to avoid InvalidObject errors
+                        
+                        # Let the UniFi API handle validation itself
+                        await api.queue_api_operation(api.add_static_route, add_rule_dict)
+                    
+                    restore_counts["static_routes"] += 1
+                except Exception as err:
+                    LOGGER.error("Error restoring static route %s: %s", rule_id, err)
+            else:
+                skip_counts["static_routes"] += 1
+        
+        LOGGER.info("Processed %d static routes (restored: %d, skipped: %d)", 
+                  restore_counts["static_routes"] + skip_counts["static_routes"],
+                  restore_counts["static_routes"],
+                  skip_counts["static_routes"])
 
     # Restore QoS rules
     if "qos_rules" in backup_entry and hasattr(api, "update_qos_rule"):

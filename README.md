@@ -21,6 +21,7 @@ UniFi Network Rules is a custom integration for Home Assistant that integrates w
 - Port Forwarding rules
 - Traffic Routes & Traffic Route Kill Switch
 - Static Routes (network routing configurations)
+- NAT rules
 - QoS rules
 - OpenVPN Client and Server configurations
 - WireGuard Client and Server configurations
@@ -165,7 +166,7 @@ See below for more automation examples using [Services with Triggers](#service-a
 |---------|-------------|------------|
 | `unifi_network_rules.refresh_rules` | Manually refresh all network rules from the UniFi controller | None |
 | `unifi_network_rules.backup_rules` | Create a backup of all firewall policies and traffic routes | `filename`: Name of the backup file to create |
-| `unifi_network_rules.restore_rules` | Restore rules from a backup file | `filename`: Backup file to restore from<br>`name_filter`: (Optional) Only restore rules containing this string<br>`rule_ids`: (Optional) List of specific rule IDs to restore<br>`rule_types`: (Optional) List of rule types to restore (policy, port_forward, route, qos_rule, port_profile, network) |
+| `unifi_network_rules.restore_rules` | Restore rules from a backup file | `filename`: Backup file to restore from<br>`name_filter`: (Optional) Only restore rules containing this string<br>`rule_ids`: (Optional) List of specific rule IDs to restore<br>`rule_types`: (Optional) List of rule types to restore (policy, port_forward, traffic_route, qos_rule, port_profile, network, static_route, nat) |
 | `unifi_network_rules.bulk_update_rules` | Enable or disable multiple rules by name pattern | `state`: true (enable) or false (disable)<br>`name_filter`: String to match in rule names |
 | `unifi_network_rules.delete_rule` | Delete an existing firewall policy by ID | `rule_id`: ID of the rule to delete |
 | `unifi_network_rules.refresh_data` | Refresh data for a specific integration instance or all | `entry_id`: (Optional) Specific integration instance ID |
@@ -176,7 +177,7 @@ See below for more automation examples using [Services with Triggers](#service-a
 | `unifi_network_rules.save_template` | Save a rule as a template for reuse | `rule_id`: UniFi rule ID (use `trigger.rule_id` in automations)<br>`template_id`: ID to save the template as<br>`rule_type`: (Optional) Type of rule - auto-detected if not provided |
 | `unifi_network_rules.toggle_rule` | Toggle a specific rule on or off | `rule_id`: UniFi rule ID (use `trigger.rule_id` in automations)<br>`rule_type`: (Optional) Type of the rule - auto-detected if not provided |
 
-> **Note**: For `rule_types` parameter, you can specify one or more of: `policy` (firewall policies), `port_forward` (port forwarding rules), `route` (traffic routes), `qos_rule` (quality of service rules), `port_profile` (switch port profiles), or `network` (network configurations). While not all of these are strictly "rules," they are all toggleable configuration entities. See the "Understanding Rule Types" section for more details.
+> **Note**: For `rule_types` parameter, you can specify one or more of: `policy` (firewall policies), `port_forward` (port forwarding rules), `traffic_route` (policy-based routes), `qos_rule` (quality of service rules), `port_profile` (switch port profiles), or `network` (network configurations), static_route (static routes), or nat (NAT rules). While not all of these are strictly "rules," they are all toggleable configuration entities. See the "Understanding Rule Types" section for more details.
 
 ## Smart Polling Triggers
 
@@ -218,6 +219,7 @@ UniFi Network Rules provides a **unified trigger system** powered by intelligent
 - **Devices** (`device`): Device LED controls
 - **Port Profiles** (`port_profile`): Switch port profiles
 - **Networks** (`network`): Network configurations
+- **NAT Rules** (`nat`): UniFi NAT (SNAT/DNAT) rules
 
 ### Setting Up Triggers
 
