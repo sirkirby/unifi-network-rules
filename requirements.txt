@@ -3,7 +3,7 @@ asyncio
 aiofiles
 aiohttp
 argparse
-aiounifi>=82.0.0
+aiounifi>=87.0.0
 pytest
 pytest-asyncio
 pytest-aiohttp
