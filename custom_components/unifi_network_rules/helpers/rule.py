@@ -20,6 +20,7 @@ from ..models.network import NetworkConf
 from ..models.port_profile import PortProfile
 from ..models.static_route import StaticRoute
 from ..models.nat_rule import NATRule
+from ..models.oon_policy import OONPolicy
 from ..const import DOMAIN
 
 LOGGER = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ def get_rule_enabled(rule: Any) -> bool:
         True if the rule is enabled, False otherwise
     """
     # Check different rule types and return appropriate enabled status
-    if isinstance(rule, (PortForward, TrafficRoute, FirewallPolicy, TrafficRule, Wlan, QoSRule, VPNConfig, StaticRoute, NATRule)):
+    if isinstance(rule, (PortForward, TrafficRoute, FirewallPolicy, TrafficRule, Wlan, QoSRule, VPNConfig, StaticRoute, NATRule, OONPolicy)):
         return getattr(rule, "enabled", False)
     
     # Special handling for Device LED state
@@ -199,6 +200,14 @@ def get_rule_id(rule: Any) -> str | None:
         else:
             LOGGER.warning("NATRule without id attribute: %s", rule)
             return None
+
+    # Handle OONPolicy
+    if isinstance(rule, OONPolicy):
+        if rule.id:
+            return f"unr_oon_{rule.id}"
+        else:
+            LOGGER.warning("OONPolicy without id attribute: %s", rule)
+            return None
     
     # Dictionary fallback - this should not happen with properly typed data
     if isinstance(rule, dict):
@@ -236,6 +245,7 @@ def get_rule_prefix(rule_type: str) -> str:
         "wlans": "WLAN",
         "devices": "Device",
         "port_profiles": "Port Profile",
+        "oon_policies": "OON",
         # For networks we return an empty prefix because the descriptive
         # name will already include the desired label (e.g., WAN1, VLAN 1).
         "networks": ""
@@ -398,6 +408,13 @@ def extract_descriptive_name(rule: Any, coordinator=None) -> str | None:
     elif isinstance(rule, dict):
         # For dictionaries, try common name attributes
         return rule.get("name") or rule.get("description")
+
+    elif isinstance(rule, OONPolicy):
+        # For OON policies, use the name directly
+        name = getattr(rule, "name", None)
+        if name:
+            return name
+        return None
     
     elif isinstance(rule, NetworkConf):
         # Build specialized names for networks:
@@ -472,6 +489,8 @@ def get_rule_name(rule: Any, coordinator=None) -> str | None:
         rule_type = "static_routes"
     elif isinstance(rule, NATRule):
         rule_type = "nat_rules"
+    elif isinstance(rule, OONPolicy):
+        rule_type = "oon_policies"
     elif isinstance(rule, dict) and "type" in rule:
         rule_type = rule.get("type")
     

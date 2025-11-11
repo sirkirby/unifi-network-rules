@@ -46,6 +46,7 @@ class CoordinatorEntityManager:
             ("networks", "UnifiNetworkSwitch"),
             ("vpn_clients", "UnifiVPNClientSwitch"),
             ("vpn_servers", "UnifiVPNServerSwitch"),
+            ("oon_policies", "UnifiOONPolicySwitch"),
         ]
 
     async def discover_and_add_new_entities(self, new_data: Dict[str, List[Any]]) -> None:
@@ -471,7 +472,8 @@ class CoordinatorEntityManager:
                 UnifiPortProfileSwitch,
                 UnifiNetworkSwitch,
                 UnifiVPNClientSwitch,
-                UnifiVPNServerSwitch
+                UnifiVPNServerSwitch,
+                UnifiOONPolicySwitch,
             )
             
             return {
@@ -490,6 +492,7 @@ class CoordinatorEntityManager:
                 "UnifiNetworkSwitch": UnifiNetworkSwitch,
                 "UnifiVPNClientSwitch": UnifiVPNClientSwitch,
                 "UnifiVPNServerSwitch": UnifiVPNServerSwitch,
+                "UnifiOONPolicySwitch": UnifiOONPolicySwitch,
             }
         except ImportError as err:
             LOGGER.error("Failed to import entity classes: %s", err)

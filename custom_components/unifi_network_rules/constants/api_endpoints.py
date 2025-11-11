@@ -27,6 +27,9 @@ API_ENDPOINT_NETWORK_CONF: Final = "/proxy/network/api/s/{site}/rest/networkconf
 API_ENDPOINT_NETWORK_CONF_DETAIL: Final = "/proxy/network/api/s/{site}/rest/networkconf/{network_id}"
 API_ENDPOINT_NAT_RULES: Final = "/proxy/network/v2/api/site/{site}/nat"
 API_ENDPOINT_NAT_RULE_DETAIL: Final = "/proxy/network/v2/api/site/{site}/nat/{rule_id}"
+API_ENDPOINT_OON_POLICIES: Final = "/proxy/network/v2/api/site/{site}/object-oriented-network-configs"  # GET uses plural
+API_ENDPOINT_OON_POLICY_DETAIL: Final = "/proxy/network/v2/api/site/{site}/object-oriented-network-config/{policy_id}"  # PUT/DELETE use singular
+API_ENDPOINT_OON_POLICY: Final = "/proxy/network/v2/api/site/{site}/object-oriented-network-config"  # POST uses singular
 
 # Static Routes (V1 API)
 API_ENDPOINT_STATIC_ROUTES: Final = "/proxy/network/api/s/{site}/rest/routing"
@@ -69,6 +72,9 @@ API_PATH_NETWORK_CONF: Final = "/rest/networkconf"
 API_PATH_NETWORK_CONF_DETAIL: Final = "/rest/networkconf/{network_id}"
 API_PATH_NAT_RULES: Final = "/nat"
 API_PATH_NAT_RULE_DETAIL: Final = "/nat/{rule_id}"
+API_PATH_OON_POLICIES: Final = "/object-oriented-network-configs"  # GET uses plural
+API_PATH_OON_POLICY_DETAIL: Final = "/object-oriented-network-config/{policy_id}"  # PUT/DELETE use singular
+API_PATH_OON_POLICY: Final = "/object-oriented-network-config"  # POST uses singular
 
 # Static Routes (aiounifi path fragments - V1 API)
 API_PATH_STATIC_ROUTES: Final = "/rest/routing"

@@ -23,8 +23,8 @@
 
 **Purpose**: Project initialization and API endpoint constants
 
-- [ ] T001 Add OON policy API endpoint constants to `custom_components/unifi_network_rules/constants/api_endpoints.py`
-- [ ] T002 [P] Add OON policy API path constants to `custom_components/unifi_network_rules/constants/api_endpoints.py`
+- [X] T001 Add OON policy API endpoint constants to `custom_components/unifi_network_rules/constants/api_endpoints.py`
+- [X] T002 [P] Add OON policy API path constants to `custom_components/unifi_network_rules/constants/api_endpoints.py`
 
 ---
 
@@ -34,21 +34,21 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T003 [P] Create `OONPolicy` model class in `custom_components/unifi_network_rules/models/oon_policy.py` with `raw`, `id`, `name`, `enabled` properties
-- [ ] T004 [P] Add `to_api_dict()` method to `OONPolicy` class in `custom_components/unifi_network_rules/models/oon_policy.py`
-- [ ] T005 [P] Add `has_kill_switch()` helper method to `OONPolicy` class in `custom_components/unifi_network_rules/models/oon_policy.py`
-- [ ] T006 [P] Create `OONMixin` class in `custom_components/unifi_network_rules/udm/oon.py`
-- [ ] T007 [P] Implement `get_oon_policies()` method in `OONMixin` class in `custom_components/unifi_network_rules/udm/oon.py` with graceful 404 handling
-- [ ] T008 [P] Implement `update_oon_policy()` method in `OONMixin` class in `custom_components/unifi_network_rules/udm/oon.py`
-- [ ] T009 [P] Implement `toggle_oon_policy()` method in `OONMixin` class in `custom_components/unifi_network_rules/udm/oon.py`
-- [ ] T010 Add `OONPolicy` import to `custom_components/unifi_network_rules/coordinator.py`
-- [ ] T011 Add `oon_policies` property to coordinator in `custom_components/unifi_network_rules/coordinator.py`
-- [ ] T012 Add `"oon_policies": self.api.get_oon_policies` to `entity_type_methods` in `custom_components/unifi_network_rules/coordination/data_fetcher.py`
-- [ ] T013 Add `("oon_policies", "UnifiOONPolicySwitch")` to `_rule_type_entity_map` in `custom_components/unifi_network_rules/coordination/entity_manager.py`
-- [ ] T014 Add `OONPolicy` case to `get_rule_id()` function in `custom_components/unifi_network_rules/helpers/rule.py` (returns `unr_oon_{id}`)
-- [ ] T015 [P] Add `OONPolicy` case to `get_rule_name()` function in `custom_components/unifi_network_rules/helpers/rule.py` (returns `name`)
-- [ ] T016 [P] Add `OONPolicy` case to `get_rule_enabled()` function in `custom_components/unifi_network_rules/helpers/rule.py` (returns `enabled`)
-- [ ] T017 [P] Add `OONPolicy` case to `get_object_id()` function in `custom_components/unifi_network_rules/helpers/rule.py` (for entity ID generation)
+- [X] T003 [P] Create `OONPolicy` model class in `custom_components/unifi_network_rules/models/oon_policy.py` with `raw`, `id`, `name`, `enabled` properties
+- [X] T004 [P] Add `to_api_dict()` method to `OONPolicy` class in `custom_components/unifi_network_rules/models/oon_policy.py`
+- [X] T005 [P] Add `has_kill_switch()` helper method to `OONPolicy` class in `custom_components/unifi_network_rules/models/oon_policy.py`
+- [X] T006 [P] Create `OONMixin` class in `custom_components/unifi_network_rules/udm/oon.py`
+- [X] T007 [P] Implement `get_oon_policies()` method in `OONMixin` class in `custom_components/unifi_network_rules/udm/oon.py` with graceful 404 handling
+- [X] T008 [P] Implement `update_oon_policy()` method in `OONMixin` class in `custom_components/unifi_network_rules/udm/oon.py`
+- [X] T009 [P] Implement `toggle_oon_policy()` method in `OONMixin` class in `custom_components/unifi_network_rules/udm/oon.py`
+- [X] T010 Add `OONPolicy` import to `custom_components/unifi_network_rules/coordinator.py`
+- [X] T011 Add `oon_policies` property to coordinator in `custom_components/unifi_network_rules/coordinator.py`
+- [X] T012 Add `"oon_policies": self.api.get_oon_policies` to `entity_type_methods` in `custom_components/unifi_network_rules/coordination/data_fetcher.py`
+- [X] T013 Add `("oon_policies", "UnifiOONPolicySwitch")` to `_rule_type_entity_map` in `custom_components/unifi_network_rules/coordination/entity_manager.py`
+- [X] T014 Add `OONPolicy` case to `get_rule_id()` function in `custom_components/unifi_network_rules/helpers/rule.py` (returns `unr_oon_{id}`)
+- [X] T015 [P] Add `OONPolicy` case to `get_rule_name()` function in `custom_components/unifi_network_rules/helpers/rule.py` (returns `name`)
+- [X] T016 [P] Add `OONPolicy` case to `get_rule_enabled()` function in `custom_components/unifi_network_rules/helpers/rule.py` (returns `enabled`)
+- [X] T017 [P] Add `OONPolicy` case to `get_object_id()` function in `custom_components/unifi_network_rules/helpers/rule.py` (for entity ID generation)
 
 **Checkpoint**: Foundation ready - user story implementation can now begin
 
@@ -62,13 +62,13 @@
 
 ### Implementation for User Story 2
 
-- [ ] T018 [US2] Create `UnifiOONPolicySwitch` class in `custom_components/unifi_network_rules/switches/oon_policy.py` inheriting from `UnifiRuleSwitch`
-- [ ] T019 [US2] Set icon to `"mdi:shield-network"` in `UnifiOONPolicySwitch.__init__()` in `custom_components/unifi_network_rules/switches/oon_policy.py`
-- [ ] T020 [US2] Export `UnifiOONPolicySwitch` from `custom_components/unifi_network_rules/switches/__init__.py`
-- [ ] T021 [US2] Add `("oon_policies", coordinator.oon_policies or [], UnifiOONPolicySwitch)` to `all_rule_sources` in `custom_components/unifi_network_rules/switches/setup.py`
-- [ ] T022 [US2] Add `oon_policies` case to `async_create_entity()` function in `custom_components/unifi_network_rules/__init__.py`
-- [ ] T023 [US2] Import `UnifiOONPolicySwitch` in `custom_components/unifi_network_rules/__init__.py`
-- [ ] T024 [US2] Add `oon_policies` to change detection in `custom_components/unifi_network_rules/unified_change_detector.py` (if needed)
+- [X] T018 [US2] Create `UnifiOONPolicySwitch` class in `custom_components/unifi_network_rules/switches/oon_policy.py` inheriting from `UnifiRuleSwitch`
+- [X] T019 [US2] Set icon to `"mdi:shield-network"` in `UnifiOONPolicySwitch.__init__()` in `custom_components/unifi_network_rules/switches/oon_policy.py`
+- [X] T020 [US2] Export `UnifiOONPolicySwitch` from `custom_components/unifi_network_rules/switches/__init__.py`
+- [X] T021 [US2] Add `("oon_policies", coordinator.oon_policies or [], UnifiOONPolicySwitch)` to `all_rule_sources` in `custom_components/unifi_network_rules/switches/setup.py`
+- [X] T022 [US2] Add `oon_policies` case to `async_create_entity()` function in `custom_components/unifi_network_rules/__init__.py`
+- [X] T023 [US2] Import `UnifiOONPolicySwitch` in `custom_components/unifi_network_rules/__init__.py`
+- [X] T024 [US2] Add `oon_policies` to change detection in `custom_components/unifi_network_rules/unified_change_detector.py` (if needed)
 
 **Checkpoint**: At this point, User Story 2 should be fully functional - OON policies are discoverable and displayed as switch entities
 
@@ -82,10 +82,10 @@
 
 ### Implementation for User Story 1
 
-- [ ] T025 [US1] Verify `UnifiOONPolicySwitch` toggle functionality works with base class `async_turn_on()` method in `custom_components/unifi_network_rules/switches/oon_policy.py`
-- [ ] T026 [US1] Verify `UnifiOONPolicySwitch` toggle functionality works with base class `async_turn_off()` method in `custom_components/unifi_network_rules/switches/oon_policy.py`
-- [ ] T027 [US1] Ensure optimistic updates work correctly in `UnifiOONPolicySwitch` (inherited from base class)
-- [ ] T028 [US1] Ensure error handling reverts switch state on API failure in `UnifiOONPolicySwitch` (inherited from base class)
+- [X] T025 [US1] Verify `UnifiOONPolicySwitch` toggle functionality works with base class `async_turn_on()` method in `custom_components/unifi_network_rules/switches/oon_policy.py`
+- [X] T026 [US1] Verify `UnifiOONPolicySwitch` toggle functionality works with base class `async_turn_off()` method in `custom_components/unifi_network_rules/switches/oon_policy.py`
+- [X] T027 [US1] Ensure optimistic updates work correctly in `UnifiOONPolicySwitch` (inherited from base class)
+- [X] T028 [US1] Ensure error handling reverts switch state on API failure in `UnifiOONPolicySwitch` (inherited from base class)
 
 **Checkpoint**: At this point, User Stories 1 AND 2 should both work independently - users can discover and toggle OON policies
 
@@ -99,9 +99,9 @@
 
 ### Implementation for User Story 3
 
-- [ ] T029 [US3] Verify `UnifiOONPolicySwitch` works correctly when triggered by Home Assistant automations (no changes needed, inherits from base class)
-- [ ] T030 [US3] Test multiple OON policy switches toggled simultaneously in automation scenarios
-- [ ] T031 [US3] Verify error handling when UniFi controller is unreachable during automation execution
+- [X] T029 [US3] Verify `UnifiOONPolicySwitch` works correctly when triggered by Home Assistant automations (no changes needed, inherits from base class)
+- [X] T030 [US3] Test multiple OON policy switches toggled simultaneously in automation scenarios
+- [X] T031 [US3] Verify error handling when UniFi controller is unreachable during automation execution
 
 **Checkpoint**: At this point, User Stories 1, 2, AND 3 should all work independently - users can discover, toggle, and automate OON policies
 
@@ -115,16 +115,16 @@
 
 ### Implementation for User Story 4
 
-- [ ] T032 [US4] Create `UnifiOONPolicyKillSwitch` class in `custom_components/unifi_network_rules/switches/oon_policy.py` inheriting from `UnifiRuleSwitch`
-- [ ] T033 [US4] Implement kill switch initialization logic in `UnifiOONPolicyKillSwitch.__init__()` using parent policy ID and `get_child_unique_id()` helper
-- [ ] T034 [US4] Override name and entity_id for kill switch in `UnifiOONPolicyKillSwitch.__init__()` using `get_child_entity_name()` and `get_child_entity_id()` helpers
-- [ ] T035 [US4] Implement `async_turn_on()` method in `UnifiOONPolicyKillSwitch` to update `route.kill_switch=True` in `custom_components/unifi_network_rules/switches/oon_policy.py`
-- [ ] T036 [US4] Implement `async_turn_off()` method in `UnifiOONPolicyKillSwitch` to update `route.kill_switch=False` in `custom_components/unifi_network_rules/switches/oon_policy.py`
-- [ ] T037 [US4] Export `UnifiOONPolicyKillSwitch` from `custom_components/unifi_network_rules/switches/__init__.py`
-- [ ] T038 [US4] Add kill switch creation logic to `custom_components/unifi_network_rules/switches/setup.py` (similar to traffic route kill switches)
-- [ ] T039 [US4] Add kill switch creation logic to `custom_components/unifi_network_rules/__init__.py` in `async_create_entity()` function
-- [ ] T040 [US4] Import `UnifiOONPolicyKillSwitch` in `custom_components/unifi_network_rules/__init__.py`
-- [ ] T041 [US4] Implement kill switch entity removal logic when `route.enabled` becomes false or `route.kill_switch` is removed in entity manager
+- [X] T032 [US4] Create `UnifiOONPolicyKillSwitch` class in `custom_components/unifi_network_rules/switches/oon_policy.py` inheriting from `UnifiRuleSwitch`
+- [X] T033 [US4] Implement kill switch initialization logic in `UnifiOONPolicyKillSwitch.__init__()` using parent policy ID and `get_child_unique_id()` helper
+- [X] T034 [US4] Override name and entity_id for kill switch in `UnifiOONPolicyKillSwitch.__init__()` using `get_child_entity_name()` and `get_child_entity_id()` helpers
+- [X] T035 [US4] Implement `async_turn_on()` method in `UnifiOONPolicyKillSwitch` to update `route.kill_switch=True` in `custom_components/unifi_network_rules/switches/oon_policy.py`
+- [X] T036 [US4] Implement `async_turn_off()` method in `UnifiOONPolicyKillSwitch` to update `route.kill_switch=False` in `custom_components/unifi_network_rules/switches/oon_policy.py`
+- [X] T037 [US4] Export `UnifiOONPolicyKillSwitch` from `custom_components/unifi_network_rules/switches/__init__.py`
+- [X] T038 [US4] Add kill switch creation logic to `custom_components/unifi_network_rules/switches/setup.py` (similar to traffic route kill switches)
+- [X] T039 [US4] Add kill switch creation logic to `custom_components/unifi_network_rules/__init__.py` in `async_create_entity()` function
+- [X] T040 [US4] Import `UnifiOONPolicyKillSwitch` in `custom_components/unifi_network_rules/__init__.py`
+- [X] T041 [US4] Implement kill switch entity removal logic when `route.enabled` becomes false or `route.kill_switch` is removed in entity manager
 
 **Checkpoint**: At this point, all user stories should be independently functional - users can discover, toggle, automate, and control kill switches for OON policies
 
@@ -134,20 +134,20 @@
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T042 [P] Run linting tools (Ruff, Flake8) and fix all errors
-- [ ] T043 [P] Run type checking (mypy) and resolve type issues
-- [ ] T044 [P] Create unit tests in `tests/test_oon_policy.py` for `OONPolicy` model creation and properties
-- [ ] T045 [P] Add tests for `has_kill_switch()` method in `tests/test_oon_policy.py`
-- [ ] T046 [P] Add tests for `to_api_dict()` method in `tests/test_oon_policy.py`
-- [ ] T047 [P] Add tests for switch entity creation in `tests/test_oon_policy.py`
-- [ ] T048 [P] Add tests for kill switch entity creation/removal in `tests/test_oon_policy.py`
-- [ ] T049 [P] Add tests for toggle operations in `tests/test_oon_policy.py`
-- [ ] T050 [P] Add tests for error handling (404, API failures) in `tests/test_oon_policy.py`
-- [ ] T051 Update `changelog.md` with OON policy support feature description
-- [ ] T052 Update `README.md` if needed with OON policy feature documentation
-- [ ] T053 Verify quickstart.md implementation checklist is complete
-- [ ] T054 Manual testing with real UniFi controller (with OON policies)
-- [ ] T055 Manual testing with UniFi controller without OON policies (404 handling)
+- [X] T042 [P] Run linting tools (Ruff, Flake8) and fix all errors
+- [ ] T043 [P] Run type checking (mypy) and resolve type issues (mypy not configured/installed)
+- [X] T044 [P] Create unit tests in `tests/test_oon_policy.py` for `OONPolicy` model creation and properties
+- [X] T045 [P] Add tests for `has_kill_switch()` method in `tests/test_oon_policy.py`
+- [X] T046 [P] Add tests for `to_api_dict()` method in `tests/test_oon_policy.py`
+- [X] T047 [P] Add tests for switch entity creation in `tests/test_oon_policy.py` (integration tests included)
+- [X] T048 [P] Add tests for kill switch entity creation/removal in `tests/test_oon_policy.py` (integration tests included)
+- [X] T049 [P] Add tests for toggle operations in `tests/test_oon_policy.py` (API mixin tests included)
+- [X] T050 [P] Add tests for error handling (404, API failures) in `tests/test_oon_policy.py`
+- [X] T051 Update `changelog.md` with OON policy support feature description
+- [X] T052 Update `README.md` if needed with OON policy feature documentation
+- [X] T053 Verify quickstart.md implementation checklist is complete
+- [ ] T054 Manual testing with real UniFi controller (with OON policies) - requires manual verification
+- [ ] T055 Manual testing with UniFi controller without OON policies (404 handling) - requires manual verification
 
 ---
 
@@ -273,4 +273,3 @@ With multiple developers:
 - Avoid: vague tasks, same file conflicts, cross-story dependencies that break independence
 - All tasks include exact file paths for clarity
 - Tests are included but optional - can be deferred if needed
-

@@ -384,6 +384,19 @@ async def async_create_entity(hass: HomeAssistant, rule_type: str, rule: Any) ->
         elif rule_type == "vpn_servers":
             from .switch import UnifiVPNServerSwitch
             entity = UnifiVPNServerSwitch(coordinator, rule, rule_type, config_entry_id)
+        elif rule_type == "oon_policies":
+            from .switch import UnifiOONPolicySwitch
+            entity = UnifiOONPolicySwitch(coordinator, rule, rule_type, config_entry_id)
+            
+            # Also create the kill switch for OON policies if applicable
+            from ..models.oon_policy import OONPolicy
+            if isinstance(rule, OONPolicy) and rule.has_kill_switch():
+                from .switch import UnifiOONPolicyKillSwitch
+                kill_switch = UnifiOONPolicyKillSwitch(coordinator, rule, rule_type, config_entry_id)
+                # Add kill switch to platform
+                if "platforms" in hass.data[DOMAIN] and "switch" in hass.data[DOMAIN]["platforms"]:
+                    platform = hass.data[DOMAIN]["platforms"]["switch"]
+                    await platform.async_add_entities([kill_switch])
         else:
             LOGGER.warning("Unknown rule type for entity creation: %s", rule_type)
             return False

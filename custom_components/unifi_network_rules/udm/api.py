@@ -15,6 +15,7 @@ from .network import NetworkMixin
 from .qos import QoSMixin
 from .vpn import VPNMixin
 from .nat import NATMixin
+from .oon import OONMixin
 from .objects import ObjectsMixin
 from .profiles import PortProfilesMixin, WlanRateProfilesMixin, RadiusProfilesMixin, WanSlaProfilesMixin
 
@@ -38,6 +39,7 @@ class UDMAPI(
     QoSMixin,
     VPNMixin,
     NATMixin,
+    OONMixin,
     BaseAPI
 ):
     def __init__(self, *args, **kwargs):

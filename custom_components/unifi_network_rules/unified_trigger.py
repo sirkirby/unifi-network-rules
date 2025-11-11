@@ -32,7 +32,8 @@ VALID_CHANGE_TYPES = [
     "port_profile",
     "network",
     "route",
-    "nat"
+    "nat",
+    "oon_policy"
 ]
 
 # Valid change actions

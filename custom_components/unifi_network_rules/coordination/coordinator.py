@@ -35,6 +35,7 @@ from ..models.port_profile import PortProfile
 from ..models.network import NetworkConf
 from ..models.static_route import StaticRoute
 from ..models.nat_rule import NATRule
+from ..models.oon_policy import OONPolicy
 from ..smart_polling import SmartPollingManager, SmartPollingConfig
 from ..unified_change_detector import UnifiedChangeDetector
 
@@ -119,6 +120,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self.port_profiles: List[PortProfile] = []
         self.networks: List[NetworkConf] = []
         self.nat_rules: List[NATRule] = []
+        self.oon_policies: List[OONPolicy] = []
 
         # For dynamic entity creation
         self.async_add_entities_callback: AddEntitiesCallback | None = None
@@ -309,6 +311,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self.port_profiles = rules_data.get("port_profiles", [])
         self.networks = rules_data.get("networks", [])
         self.nat_rules = rules_data.get("nat_rules", [])
+        self.oon_policies = rules_data.get("oon_policies", [])
 
     def _log_collection_counts(self) -> None:
         """Log the counts of all rule collections."""

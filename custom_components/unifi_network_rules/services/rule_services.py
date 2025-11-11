@@ -143,6 +143,9 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
         elif rule_type == "nat_rules":
             rules = await api.get_nat_rules()
             return next((r for r in rules if r.id == rule_id), None)
+        elif rule_type == "oon_policies":
+            policies = await api.get_oon_policies()
+            return next((p for p in policies if p.id == rule_id), None)
         return None
         
     # Function to toggle rule based on its type
@@ -178,6 +181,8 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
             return await api.queue_api_operation(api.set_device_led, rule_obj, enabled)
         elif rule_type == "nat_rules":
             return await api.queue_api_operation(api.toggle_nat_rule, rule_obj)
+        elif rule_type == "oon_policies":
+            return await api.queue_api_operation(api.toggle_oon_policy, rule_obj)
         return False
 
     for coordinator in coordinators.values():
@@ -192,7 +197,7 @@ async def async_toggle_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
                         break
             else:
                 # If rule_type is not specified, try all types
-                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules", "qos_rules", "wlans", "vpn_clients", "vpn_servers", "port_profiles", "networks", "devices", "nat_rules"]:
+                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules", "qos_rules", "wlans", "vpn_clients", "vpn_servers", "port_profiles", "networks", "devices", "nat_rules", "oon_policies"]:
                     try:
                         rule_obj = await get_rule_by_id(api, type_name, rule_id)
                         if rule_obj:
@@ -268,6 +273,8 @@ async def async_delete_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
             return await api.queue_api_operation(api.remove_vpn_config, rule_id)
         elif rule_type == "port_profiles":
             return await api.queue_api_operation(api.remove_port_profile, rule_id)
+        elif rule_type == "oon_policies":
+            return await api.queue_api_operation(api.remove_oon_policy, rule_id)
         # Note: Networks and devices are not supported for deletion via this service
         # Networks are infrastructure components and devices are physical hardware
         return False
@@ -284,7 +291,7 @@ async def async_delete_rule(hass: HomeAssistant, coordinators: Dict, call: Servi
                     break
             else:
                 # Try all rule types that can be deleted (excludes networks and devices)
-                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules", "qos_rules", "vpn_clients", "vpn_servers", "port_profiles"]:
+                for type_name in ["firewall_policies", "traffic_rules", "port_forwards", "traffic_routes", "legacy_firewall_rules", "qos_rules", "vpn_clients", "vpn_servers", "port_profiles", "oon_policies"]:
                     try:
                         if await delete_rule(api, type_name, rule_id):
                             success = True
@@ -355,6 +362,10 @@ async def async_bulk_update_rules(hass: HomeAssistant, coordinators: Dict, call:
             elif rule_type == "devices":
                 # Device LEDs use set_device_led with desired state
                 return await api.queue_api_operation(api.set_device_led, rule_obj, desired_state)
+            elif rule_type == "nat_rules":
+                return await api.queue_api_operation(api.toggle_nat_rule, rule_obj)
+            elif rule_type == "oon_policies":
+                return await api.queue_api_operation(api.toggle_oon_policy, rule_obj)
         return True  # Already in desired state
 
     entity_registry = async_get_entity_registry(hass)

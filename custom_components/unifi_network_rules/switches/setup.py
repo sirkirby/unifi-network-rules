@@ -55,6 +55,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     from .vpn import UnifiVPNClientSwitch, UnifiVPNServerSwitch
     from .device import UnifiLedToggleSwitch
     from .qos import UnifiQoSRuleSwitch
+    from .oon_policy import UnifiOONPolicySwitch, UnifiOONPolicyKillSwitch
     
     LOGGER.debug("Setting up UniFi Network Rules switches")
 
@@ -90,6 +91,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
         # Networks are now pre-filtered in coordinator (no VPN, no default)
         ("networks", coordinator.networks or [], UnifiNetworkSwitch),
         ("nat_rules", coordinator.nat_rules or [], UnifiNATRuleSwitch),
+        ("oon_policies", coordinator.oon_policies or [], UnifiOONPolicySwitch),
     ]
 
     for rule_type, rules, entity_class in all_rule_sources:
@@ -122,6 +124,20 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
                             "entity_class": UnifiTrafficRouteKillSwitch,
                         }
                         LOGGER.debug("Gathered potential kill switch entity: %s (for parent %s)", kill_switch_id, rule_id)
+
+                # Special handling for OON Policies: Add potential Kill Switch data
+                if rule_type == "oon_policies":
+                    from ..models.oon_policy import OONPolicy
+                    if isinstance(rule, OONPolicy) and rule.has_kill_switch():
+                        kill_switch_id = get_child_unique_id(rule_id, "kill_switch")
+                        if kill_switch_id not in potential_entities_data:
+                            # Pass the PARENT rule data for the kill switch
+                            potential_entities_data[kill_switch_id] = {
+                                "rule_data": rule, # Use parent data
+                                "rule_type": rule_type, # Still oon_policies type
+                                "entity_class": UnifiOONPolicyKillSwitch,
+                            }
+                            LOGGER.debug("Gathered potential kill switch entity: %s (for parent %s)", kill_switch_id, rule_id)
 
             except Exception as err:
                 LOGGER.exception("Error processing rule during gathering phase: %s", str(err))

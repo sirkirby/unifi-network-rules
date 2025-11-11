@@ -49,8 +49,8 @@ RESTORE_RULES_SCHEMA = vol.Schema(
         vol.Optional(CONF_NAME_FILTER): cv.string,
         vol.Optional(CONF_RULE_TYPES): vol.All(
             cv.ensure_list, 
-            [vol.In(["policy", "port_forward", "route", "qos_rule", "vpn_client", "port_profile", "network", "nat"])],
-            description="Types of rules to restore: policy (firewall), port_forward, route (traffic routes), qos_rule (QoS rules), vpn_client (VPN clients), port_profile (switch port configurations), network (network configurations), nat (NAT rules)"
+            [vol.In(["policy", "port_forward", "route", "qos_rule", "vpn_client", "port_profile", "network", "nat", "oon_policy"])],
+            description="Types of rules to restore: policy (firewall), port_forward, route (traffic routes), qos_rule (QoS rules), vpn_client (VPN clients), port_profile (switch port configurations), network (network configurations), nat (NAT rules), oon_policy (Object-Oriented Network policies)"
         ),
     }
 )
@@ -314,7 +314,8 @@ async def async_restore_rules_service(hass: HomeAssistant, coordinators: Dict, c
                 "qos_rule": "qos_rule",        # Maps to qos_rule as it's the newer version of QoS rules
                 "vpn_client": "vpn_client",    # Maps to vpn_client as it's the newer version of VPN clients
                 "port_profile": "port_profile", # Switch port profiles
-                "network": "network"           # Network configurations
+                "network": "network",          # Network configurations
+                "oon_policy": "oon_policy"     # Object-Oriented Network policies
             }
             mapped_type = rule_type_map.get(rule_type)
             
@@ -931,6 +932,59 @@ async def async_restore_rules_service(hass: HomeAssistant, coordinators: Dict, c
                   restore_counts["networks"], 
                   skip_counts["networks"])
 
+    # Restore OON policies
+    if "oon_policies" in backup_entry and hasattr(api, "update_oon_policy"):
+        restore_counts["oon_policies"] = 0
+        skip_counts["oon_policies"] = 0
+        LOGGER.info("Restoring OON policies...")
+        for rule_dict in backup_entry["oon_policies"]:
+            rule_id = rule_dict.get("_id") or rule_dict.get("id", "")
+            
+            # Apply filters first
+            should_restore_rule = await should_restore(rule_dict, "oon_policy")
+            
+            if should_restore_rule:
+                # Check if this rule already exists in the system
+                rule_exists = False
+                if "oon_policies" in coordinator.data:
+                    rule_exists = rule_exists_in_collection(rule_dict, coordinator.data["oon_policies"])
+                
+                try:
+                    if rule_exists and force_restore:
+                        # Use update method when the rule exists and we're forcing an update
+                        LOGGER.debug("OON policy %s exists and force_restore is True, updating existing policy", rule_id)
+                        from ..models.oon_policy import OONPolicy
+                        policy_obj = OONPolicy(rule_dict)
+                        await api.queue_api_operation(api.update_oon_policy, policy_obj)
+                    elif rule_exists:
+                        # Rule exists but force_restore is False, so skip it
+                        LOGGER.debug("OON policy %s already exists, skipping (use force_restore=True to update existing policies)", rule_id)
+                        skip_counts["oon_policies"] += 1
+                    else:
+                        # Use add method when the policy doesn't exist
+                        LOGGER.debug("Creating new OON policy based on %s", rule_id)
+                        # For adding new policies, create a copy without the _id field
+                        # to let the API assign a new ID
+                        add_policy_dict = rule_dict.copy()
+                        if '_id' in add_policy_dict:
+                            del add_policy_dict['_id']  # Remove ID to avoid InvalidObject errors
+                        if 'id' in add_policy_dict:
+                            del add_policy_dict['id']  # Remove ID to avoid InvalidObject errors
+                        
+                        # Create the new policy
+                        await api.queue_api_operation(api.add_oon_policy, add_policy_dict)
+                    
+                    restore_counts["oon_policies"] += 1
+                except Exception as err:
+                    LOGGER.error("Error restoring OON policy %s: %s", rule_id, err)
+            else:
+                skip_counts["oon_policies"] += 1
+        
+        LOGGER.info("Processed %d OON policies (restored: %d, skipped: %d)", 
+                  restore_counts["oon_policies"] + skip_counts["oon_policies"],
+                  restore_counts["oon_policies"], 
+                  skip_counts["oon_policies"])
+
     # Refresh data after restore
     await coordinator.async_refresh()
     
@@ -992,8 +1046,8 @@ async def async_setup_backup_services(hass: HomeAssistant, coordinators: Dict) -
             vol.Optional("name_filter"): cv.string,
             vol.Optional("rule_types"): vol.All(
                 cv.ensure_list, 
-                [vol.In(["policy", "port_forward", "route", "qos_rule", "vpn_client", "port_profile", "network"])],
-                description="Types of rules to restore: policy (firewall), port_forward, route (traffic routes), qos_rule (QoS rules), vpn_client (VPN clients), port_profile (switch port configurations), network (network configurations)"
+                [vol.In(["policy", "port_forward", "route", "qos_rule", "vpn_client", "port_profile", "network", "nat", "oon_policy"])],
+                description="Types of rules to restore: policy (firewall), port_forward, route (traffic routes), qos_rule (QoS rules), vpn_client (VPN clients), port_profile (switch port configurations), network (network configurations), nat (NAT rules), oon_policy (Object-Oriented Network policies)"
             ),
         })
     )
