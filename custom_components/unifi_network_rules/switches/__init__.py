@@ -70,6 +70,12 @@ from .device import UnifiLedToggleSwitch
 # Import QoS switches
 from .qos import UnifiQoSRuleSwitch
 
+# Import OON policy switches
+from .oon_policy import (
+    UnifiOONPolicySwitch,
+    UnifiOONPolicyKillSwitch,
+)
+
 # Export all classes and functions for backward compatibility
 __all__ = [
     # Base class
@@ -118,4 +124,8 @@ __all__ = [
     
     # QoS switches
     "UnifiQoSRuleSwitch",
+    
+    # OON policy switches
+    "UnifiOONPolicySwitch",
+    "UnifiOONPolicyKillSwitch",
 ]

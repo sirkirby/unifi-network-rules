@@ -20,6 +20,7 @@ unr_changed:
             - device
             - port_profile
             - network
+            - oon_policy
     change_action:
       example: "enabled"
       selector:

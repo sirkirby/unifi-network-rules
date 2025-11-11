@@ -58,6 +58,7 @@ class UnifiedChangeDetector:
             "networks": "network",
             "static_routes": "route",
             "nat_rules": "nat",
+            "oon_policies": "oon_policy",
         }
 
     async def detect_and_fire_changes(self, current_data: Dict[str, List[Any]]) -> List[ChangeEvent]:
@@ -306,7 +307,7 @@ class UnifiedChangeDetector:
             if rule_type == 'devices':
                 # Device LED switches use a special unique ID format
                 unique_id = f"unr_device_{rule_id}_led"
-            elif rule_type == 'traffic_routes' and rule_id.endswith('_kill_switch'):
+            elif (rule_type == 'traffic_routes' or rule_type == 'oon_policies') and rule_id.endswith('_kill_switch'):
                 # Kill switch child entities already have the full unique ID
                 unique_id = rule_id
             else:
@@ -515,6 +516,39 @@ class UnifiedChangeDetector:
                                 'name': kill_switch_name
                             }
                             snapshot[rule_type][kill_switch_id] = kill_switch_data
+                        
+                        # Handle child entities for OON policies (kill switches)
+                        if rule_type == 'oon_policies':
+                            # Check if route.kill_switch exists and is a boolean
+                            route = entity_data.get('route', {})
+                            if isinstance(route, dict) and isinstance(route.get('kill_switch'), bool):
+                                from .helpers.rule import get_child_unique_id
+                                # Get the full rule ID (unr_oon_xxx format)
+                                full_rule_id = f"unr_oon_{entity_id}"
+                                # Try to get the proper rule ID from the entity if available
+                                if hasattr(entity, 'id'):
+                                    try:
+                                        from .helpers.rule import get_rule_id
+                                        rule_id_result = get_rule_id(entity)
+                                        if rule_id_result:
+                                            full_rule_id = rule_id_result
+                                    except Exception:
+                                        pass  # Fall back to default format
+                                kill_switch_id = get_child_unique_id(full_rule_id, "kill_switch")
+                                
+                                # Generate proper name for kill switch
+                                parent_name = entity_data.get('name') or f"OON Policy {entity_id[:8]}"
+                                kill_switch_name = f"{parent_name} Kill Switch"
+                                
+                                # Create a separate snapshot entry for the kill switch child entity
+                                kill_switch_data = {
+                                    '_id': kill_switch_id,
+                                    'parent_id': entity_id,
+                                    'enabled': route.get('kill_switch', False),
+                                    'kill_switch_enabled': route.get('kill_switch', False),  # For compatibility with change detection
+                                    'name': kill_switch_name
+                                }
+                                snapshot[rule_type][kill_switch_id] = kill_switch_data
                         
                 except Exception as err:
                     LOGGER.warning("[CHANGE_DETECTOR] Error processing entity in %s: %s", rule_type, err)

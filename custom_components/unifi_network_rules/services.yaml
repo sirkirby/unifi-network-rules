@@ -54,6 +54,7 @@ toggle_rule:
             - "port_profiles"
             - "networks"
             - "devices"
+            - "oon_policies"
 
 backup_rules:
   name: Backup rules
@@ -125,7 +126,8 @@ restore_rules:
         "qos_rule" (QoS quality of service rules),
         "vpn_client" (VPN client configurations),
         "port_profile" (switch port profiles),
-        "network" (network configurations)
+        "network" (network configurations),
+        "oon_policy" (Object-Oriented Network policies)
       required: false
       example: '["policy", "route", "qos_rule"]'
       selector:
@@ -138,6 +140,7 @@ restore_rules:
             - "vpn_client"
             - "port_profile"
             - "network"
+            - "oon_policy"
           multiple: true
 
 bulk_update_rules:
@@ -190,6 +193,7 @@ delete_rule:
             - "vpn_clients"
             - "vpn_servers"
             - "port_profiles"
+            - "oon_policies"
 
 apply_template:
   name: Apply template
@@ -251,6 +255,7 @@ save_template:
             - "port_profiles"
             - "networks"
             - "devices"
+            - "oon_policies"
 
 force_cleanup:
   name: Force Cleanup
