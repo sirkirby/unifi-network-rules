@@ -86,6 +86,7 @@ def get_rule_type_from_hint(type_hint: str) -> str:
         "port_profile": "port_profiles",
         "network": "networks",
         "nat": "nat_rules",
+        "oon_policy": "oon_policies",
         # Fallback mappings for edge cases
         "vpn": "vpn_clients",  # Default VPN fallback to clients
         "zone": "firewall_zones",  # Firewall zone fallback
@@ -119,6 +120,7 @@ def validate_rule_type(rule_type: str) -> bool:
         "networks",
         "devices",
         "nat_rules",
+        "oon_policies",
     }
     
     return rule_type in supported_types
@@ -152,6 +154,7 @@ def generate_entity_id_from_rule(rule_id: str, rule_type: str) -> str:
         "port_profiles": "port_profile",
         "networks": "network",
         "nat_rules": "nat",
+        "oon_policies": "oon_policy",
     }
     
     type_hint = hint_mapping.get(rule_type, rule_type)

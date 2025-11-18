@@ -514,6 +514,8 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                 toggle_func = self.coordinator.api.toggle_vpn_server
             elif self._rule_type == "nat_rules":
                 toggle_func = self.coordinator.api.toggle_nat_rule
+            elif self._rule_type == "oon_policies":
+                toggle_func = self.coordinator.api.toggle_oon_policy
             elif self._rule_type == "port_profiles":
                 async def port_profile_toggle_wrapper(profile_obj):
                     # When enabling, provide a native_networkconf_id if missing by

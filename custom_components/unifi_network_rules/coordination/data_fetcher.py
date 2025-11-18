@@ -49,6 +49,7 @@ class CoordinatorDataFetcher:
             "legacy_firewall_rules": self.api.get_legacy_firewall_rules,
             "qos_rules": self.api.get_qos_rules,
             "port_forwards": self.api.get_port_forwards,
+            "oon_policies": self.api.get_oon_policies,
         }
 
     async def fetch_all_entity_data(self) -> Dict[str, List[Any]]:
@@ -87,6 +88,10 @@ class CoordinatorDataFetcher:
         
         # Handle special entity types that need custom processing
         await self._fetch_special_entities(rules_data)
+        
+        # Filter out OON policies from QoS and Traffic Routes to prevent duplicates
+        # UniFi may return OON policies in multiple endpoints
+        self._filter_oon_policy_duplicates(rules_data)
 
         return rules_data
 
@@ -294,6 +299,93 @@ class CoordinatorDataFetcher:
         """Check if error is authentication-related."""
         error_str = str(error).lower()
         return "401 unauthorized" in error_str or "403 forbidden" in error_str
+
+    def _filter_oon_policy_duplicates(self, rules_data: Dict[str, List[Any]]) -> None:
+        """Filter out OON policies from QoS and Traffic Routes collections.
+        
+        UniFi may return the same OON policy in multiple endpoints (QoS rules,
+        Traffic Routes, and OON Policies). The QoS/Traffic Route endpoints return
+        portions of the OON policy with the same name but different IDs, so we
+        match by name to prevent duplicate entities.
+        
+        Args:
+            rules_data: The fetched data dictionary to filter
+        """
+        oon_policies = rules_data.get("oon_policies", [])
+        if not oon_policies:
+            return  # No OON policies to filter against
+        
+        # Build a set of OON policy names for fast lookup
+        # Name is the reliable way to match since IDs differ between endpoints
+        oon_policy_names = set()
+        for policy in oon_policies:
+            policy_name = getattr(policy, "name", None)
+            if not policy_name and hasattr(policy, "raw"):
+                policy_name = policy.raw.get("name")
+            if policy_name:
+                # Normalize name for comparison (strip whitespace, case-insensitive)
+                normalized_name = policy_name.strip().lower()
+                oon_policy_names.add(normalized_name)
+                LOGGER.debug("OON policy name for filtering: '%s' (normalized: '%s')", policy_name, normalized_name)
+        
+        if not oon_policy_names:
+            LOGGER.debug("No OON policy names found for filtering")
+            return  # No valid names found
+        
+        LOGGER.debug("Filtering duplicates using %d OON policy name(s): %s", len(oon_policy_names), oon_policy_names)
+        
+        # Filter QoS rules - remove any that match OON policy names
+        qos_rules = rules_data.get("qos_rules", [])
+        if qos_rules:
+            filtered_qos = []
+            removed_count = 0
+            for rule in qos_rules:
+                # Get rule name from property or raw data
+                rule_name = getattr(rule, "name", None)
+                if not rule_name and hasattr(rule, "raw"):
+                    rule_name = rule.raw.get("name")
+                
+                if rule_name:
+                    normalized_rule_name = rule_name.strip().lower()
+                    if normalized_rule_name in oon_policy_names:
+                        removed_count += 1
+                        LOGGER.info("Filtering OON policy duplicate from QoS rules: '%s' (matches OON policy name)", rule_name)
+                        continue
+                
+                filtered_qos.append(rule)
+            
+            if removed_count > 0:
+                LOGGER.info("Filtered %d OON policy duplicate(s) from QoS rules", removed_count)
+                rules_data["qos_rules"] = filtered_qos
+        
+        # Filter Traffic Routes - remove any that match OON policy names
+        traffic_routes = rules_data.get("traffic_routes", [])
+        if traffic_routes:
+            filtered_routes = []
+            removed_count = 0
+            for route in traffic_routes:
+                # Get route name from property or raw data
+                route_name = getattr(route, "name", None)
+                if not route_name and hasattr(route, "raw"):
+                    route_name = route.raw.get("name")
+                # Traffic routes might use "description" instead of "name"
+                if not route_name and hasattr(route, "description"):
+                    route_name = getattr(route, "description", None)
+                if not route_name and hasattr(route, "raw"):
+                    route_name = route.raw.get("description")
+                
+                if route_name:
+                    normalized_route_name = route_name.strip().lower()
+                    if normalized_route_name in oon_policy_names:
+                        removed_count += 1
+                        LOGGER.info("Filtering OON policy duplicate from Traffic Routes: '%s' (matches OON policy name)", route_name)
+                        continue
+                
+                filtered_routes.append(route)
+            
+            if removed_count > 0:
+                LOGGER.info("Filtered %d OON policy duplicate(s) from Traffic Routes", removed_count)
+                rules_data["traffic_routes"] = filtered_routes
 
     def validate_fetched_data(self, data: Dict[str, List[Any]]) -> bool:
         """Validate that fetched data contains expected content.
