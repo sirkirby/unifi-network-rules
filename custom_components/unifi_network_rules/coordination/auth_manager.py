@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from ..const import DOMAIN, LOGGER
+from ..constants.integration import HA_INITIATED_OPERATION_TIMEOUT_SECONDS
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -44,7 +45,8 @@ class CoordinatorAuthManager:
         self._ha_initiated_operations: dict[str, float] = {}
 
     def register_ha_initiated_operation(
-        self, rule_id: str, entity_id: str, change_type: str = "modified", timeout: int = 15
+        self, rule_id: str, entity_id: str, change_type: str = "modified",
+        timeout: int = HA_INITIATED_OPERATION_TIMEOUT_SECONDS
     ) -> None:
         """Register that a rule change was initiated from HA.
 

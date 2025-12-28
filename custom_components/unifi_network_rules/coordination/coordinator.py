@@ -28,6 +28,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 # Import our modules and models
 from ..const import DEFAULT_UPDATE_INTERVAL, DOMAIN, LOG_TRIGGERS, LOGGER
+from ..constants.integration import HA_INITIATED_OPERATION_TIMEOUT_SECONDS
 from ..models.firewall_rule import FirewallRule
 from ..models.nat_rule import NATRule
 from ..models.network import NetworkConf
@@ -136,7 +137,8 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
 
     # Backward compatibility methods - delegate to auth manager
     def register_ha_initiated_operation(
-        self, rule_id: str, entity_id: str, change_type: str = "modified", timeout: int = 15
+        self, rule_id: str, entity_id: str, change_type: str = "modified",
+        timeout: int = HA_INITIATED_OPERATION_TIMEOUT_SECONDS
     ) -> None:
         """Register that a rule change was initiated from HA."""
         self.auth_manager.register_ha_initiated_operation(rule_id, entity_id, change_type, timeout)
