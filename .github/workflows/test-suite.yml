@@ -31,6 +31,11 @@ jobs:
 
     - name: Lint with Ruff
       run: |
+        echo "Ruff version:"
+        ruff --version
+        echo "Config file exists:"
+        ls -la ruff.toml
+        echo "Running lint..."
         ruff check custom_components/ --config ruff.toml
 
     - name: Run tests with coverage
