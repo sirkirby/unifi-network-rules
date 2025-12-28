@@ -46,8 +46,7 @@
   "triggers": {
     "unr_changed": {
       "name": "UniFi-configuratie gewijzigd",
-      "description": "Geactiveerd wanneer elke UniFi-netwerkconfiguratie wijzigt (regels, profielen, netwerken, apparaten)",
-      "description_configured": "UniFi-configuratie gewijzigd"
+      "description": "Geactiveerd wanneer elke UniFi-netwerkconfiguratie wijzigt (regels, profielen, netwerken, apparaten)"
     }
   },
   "services": {

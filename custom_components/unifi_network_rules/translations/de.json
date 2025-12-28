@@ -46,8 +46,7 @@
   "triggers": {
     "unr_changed": {
       "name": "UniFi-Konfiguration geändert",
-      "description": "Wird ausgelöst, wenn sich eine UniFi-Netzwerkkonfiguration ändert (Regeln, Profile, Netzwerke, Geräte)",
-      "description_configured": "UniFi-Konfiguration geändert"
+      "description": "Wird ausgelöst, wenn sich eine UniFi-Netzwerkkonfiguration ändert (Regeln, Profile, Netzwerke, Geräte)"
     }
   },
   "services": {
