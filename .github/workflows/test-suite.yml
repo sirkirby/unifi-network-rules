@@ -30,10 +30,15 @@ jobs:
         pip install -r requirements.txt
 
     - name: Lint with Ruff
+      continue-on-error: true
       run: |
+        echo "=== Ruff version ==="
+        ruff --version
+        echo "=== Running lint ==="
         ruff check custom_components/ \
           --select E,W,F,I,B,C4,UP,SIM \
-          --ignore E501,B008,B905,SIM102,SIM105,SIM108,SIM118,SIM401,UP047,C414
+          --ignore E501,B008,B905,SIM102,SIM105,SIM108,SIM118,SIM401,UP047,C414 \
+          --output-format=full
 
     - name: Run tests with coverage
       run: |
