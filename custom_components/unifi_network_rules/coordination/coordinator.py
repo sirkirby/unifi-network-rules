@@ -11,12 +11,6 @@ import asyncio
 from datetime import timedelta
 from typing import Any
 
-from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-
 from aiounifi.models.device import Device
 from aiounifi.models.firewall_policy import FirewallPolicy
 from aiounifi.models.firewall_zone import FirewallZone
@@ -26,6 +20,11 @@ from aiounifi.models.port_forward import PortForward
 from aiounifi.models.traffic_route import TrafficRoute
 from aiounifi.models.traffic_rule import TrafficRule
 from aiounifi.models.wlan import Wlan
+from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 # Import our modules and models
 from ..const import DEFAULT_UPDATE_INTERVAL, DOMAIN, LOG_TRIGGERS, LOGGER

@@ -40,6 +40,11 @@ ignore = [
     "F841",   # unused variables (common in test mocks)
 ]
 
+[tool.ruff.lint.isort]
+known-first-party = ["custom_components.unifi_network_rules"]
+known-third-party = ["homeassistant", "aiounifi", "voluptuous", "aiohttp", "aiofiles"]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"

@@ -6,12 +6,6 @@ import asyncio
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 
 # Import interface classes from aiounifi
 from aiounifi.interfaces.firewall_policies import FirewallPolicies
@@ -20,6 +14,12 @@ from aiounifi.interfaces.port_forwarding import PortForwarding
 from aiounifi.interfaces.traffic_routes import TrafficRoutes
 from aiounifi.interfaces.traffic_rules import TrafficRules
 from aiounifi.interfaces.wlans import Wlans
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 
 from .const import CONF_SITE, DEFAULT_SITE, DOMAIN, LOGGER, PLATFORMS
 

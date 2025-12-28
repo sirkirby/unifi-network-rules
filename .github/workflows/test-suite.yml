@@ -29,10 +29,8 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    # TODO: Re-enable lint after investigating CI discrepancy
-    # - name: Lint with Ruff
-    #   run: |
-    #     ruff check custom_components/
+    - name: Lint with Ruff
+      run: ruff check custom_components/
 
     - name: Run tests with coverage
       run: |

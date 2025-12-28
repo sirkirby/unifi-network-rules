@@ -6,11 +6,10 @@ import logging
 import time
 from typing import Any
 
+from aiounifi.models.device import Device
 from homeassistant.components.switch import SwitchDeviceClass
 from homeassistant.core import callback
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
-
-from aiounifi.models.device import Device
 
 from ..const import DOMAIN, LOG_TRIGGERS, MANUFACTURER
 from ..coordinator import UnifiRuleUpdateCoordinator
