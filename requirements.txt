@@ -7,4 +7,7 @@ aiounifi>=87.0.0
 pytest
 pytest-asyncio
 pytest-aiohttp
+pytest-cov
+coverage
 freezegun==1.1.0
+ruff

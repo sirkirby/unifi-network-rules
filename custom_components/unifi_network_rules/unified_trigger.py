@@ -1,18 +1,18 @@
 """Unified Trigger System for UniFi Network Rules."""
+
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, Optional
-import voluptuous as vol
+from typing import Any
 
-from homeassistant.const import CONF_TYPE, CONF_PLATFORM
+import voluptuous as vol
+from homeassistant.const import CONF_PLATFORM, CONF_TYPE
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.trigger import TriggerActionType, TriggerInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.trigger import TriggerActionType, TriggerInfo
 
 from .const import DOMAIN, LOGGER
-
 
 # Unified trigger type
 TRIGGER_UNR_CHANGED = "unr_changed"
@@ -20,30 +20,24 @@ TRIGGER_UNR_CHANGED = "unr_changed"
 # Valid change types (entity types)
 VALID_CHANGE_TYPES = [
     "firewall_policy",
-    "traffic_rule", 
+    "traffic_rule",
     "traffic_route",
     "port_forward",
     "firewall_zone",
     "wlan",
     "qos_rule",
-    "vpn_client", 
+    "vpn_client",
     "vpn_server",
     "device",
     "port_profile",
     "network",
     "route",
     "nat",
-    "oon_policy"
+    "oon_policy",
 ]
 
 # Valid change actions
-VALID_CHANGE_ACTIONS = [
-    "created",
-    "deleted", 
-    "enabled",
-    "disabled",
-    "modified"
-]
+VALID_CHANGE_ACTIONS = ["created", "deleted", "enabled", "disabled", "modified"]
 
 # Configuration schema for unified triggers
 UNIFIED_TRIGGER_SCHEMA = vol.Schema(
@@ -53,8 +47,7 @@ UNIFIED_TRIGGER_SCHEMA = vol.Schema(
         vol.Optional("entity_id"): cv.string,  # Specific entity filter
         vol.Optional("change_type"): vol.In(VALID_CHANGE_TYPES),  # Entity type filter
         vol.Optional("change_action"): vol.Any(
-            vol.In(VALID_CHANGE_ACTIONS),
-            vol.All(cv.ensure_list, [vol.In(VALID_CHANGE_ACTIONS)])
+            vol.In(VALID_CHANGE_ACTIONS), vol.All(cv.ensure_list, [vol.In(VALID_CHANGE_ACTIONS)])
         ),  # Action filter - can be single or list
         vol.Optional("name_filter"): cv.string,  # Name pattern filter
     }
@@ -85,9 +78,10 @@ async def async_attach_trigger(
         if key in config:
             trigger_data[key] = config[key]
 
-    LOGGER.info("[UNIFIED_TRIGGER] Setting up unified trigger: %s", 
-               {k: v for k, v in config.items() if k not in ["platform"]})
-    
+    LOGGER.info(
+        "[UNIFIED_TRIGGER] Setting up unified trigger: %s", {k: v for k, v in config.items() if k not in ["platform"]}
+    )
+
     trigger = UnifiedRuleTrigger(
         hass,
         config,
@@ -107,7 +101,7 @@ class UnifiedRuleTrigger:
         config: dict,
         action: TriggerActionType,
         trigger_info: TriggerInfo,
-        trigger_data: Dict[str, Any],
+        trigger_data: dict[str, Any],
     ) -> None:
         """Initialize unified trigger."""
         self.hass = hass
@@ -115,57 +109,58 @@ class UnifiedRuleTrigger:
         self.action = action
         self.trigger_info = trigger_info
         self.trigger_data = trigger_data
-        self.remove_handler: Optional[CALLBACK_TYPE] = None
+        self.remove_handler: CALLBACK_TYPE | None = None
 
     async def async_attach(self) -> CALLBACK_TYPE:
         """Attach the unified trigger."""
+
         @callback
-        def _handle_trigger_event(trigger_event_data: Dict[str, Any]) -> None:
+        def _handle_trigger_event(trigger_event_data: dict[str, Any]) -> None:
             """Handle incoming trigger event."""
             try:
                 # Apply filters
                 if not self._matches_filters(trigger_event_data):
-                    LOGGER.debug("[UNIFIED_TRIGGER] Event filtered out: %s", 
-                               {k: v for k, v in trigger_event_data.items() if k in ["entity_id", "change_type", "change_action", "entity_name"]})
+                    LOGGER.debug(
+                        "[UNIFIED_TRIGGER] Event filtered out: %s",
+                        {
+                            k: v
+                            for k, v in trigger_event_data.items()
+                            if k in ["entity_id", "change_type", "change_action", "entity_name"]
+                        },
+                    )
                     return
 
-                LOGGER.debug("[UNIFIED_TRIGGER] Trigger firing for: %s (%s) - %s", 
-                           trigger_event_data.get("entity_name", "unknown"),
-                           trigger_event_data.get("change_type", "unknown"),
-                           trigger_event_data.get("change_action", "unknown"))
-                
+                LOGGER.debug(
+                    "[UNIFIED_TRIGGER] Trigger firing for: %s (%s) - %s",
+                    trigger_event_data.get("entity_name", "unknown"),
+                    trigger_event_data.get("change_type", "unknown"),
+                    trigger_event_data.get("change_action", "unknown"),
+                )
+
                 # Fire the trigger action
-                trigger_vars = {
-                    "trigger": {
-                        "platform": DOMAIN,
-                        "type": TRIGGER_UNR_CHANGED,
-                        **trigger_event_data
-                    }
-                }
-                
+                trigger_vars = {"trigger": {"platform": DOMAIN, "type": TRIGGER_UNR_CHANGED, **trigger_event_data}}
+
                 # Execute the action
                 result = self.action(trigger_vars)
                 if asyncio.iscoroutine(result):
                     self.hass.async_create_task(result)
-                    
+
             except Exception as err:
                 LOGGER.error("[UNIFIED_TRIGGER] Error handling trigger event: %s", err)
 
         # Connect to the unified trigger signal
         signal_name = f"{DOMAIN}_trigger_unr_changed"
-        self.remove_handler = async_dispatcher_connect(
-            self.hass, signal_name, _handle_trigger_event
-        )
-        
+        self.remove_handler = async_dispatcher_connect(self.hass, signal_name, _handle_trigger_event)
+
         LOGGER.info("[UNIFIED_TRIGGER] Unified trigger attached and listening for signal: %s", signal_name)
         return self.async_detach
 
-    def _matches_filters(self, event_data: Dict[str, Any]) -> bool:
+    def _matches_filters(self, event_data: dict[str, Any]) -> bool:
         """Check if event matches the trigger's filters.
-        
+
         Args:
             event_data: The trigger event data
-            
+
         Returns:
             True if the event matches all configured filters
         """
@@ -183,7 +178,7 @@ class UnifiedRuleTrigger:
         if "change_action" in self.config:
             configured_actions = self.config["change_action"]
             event_action = event_data.get("change_action")
-            
+
             # Handle both single action and list of actions
             if isinstance(configured_actions, list):
                 if event_action not in configured_actions:
@@ -206,30 +201,15 @@ class UnifiedRuleTrigger:
         if self.remove_handler:
             self.remove_handler()
             self.remove_handler = None
-            
+
         LOGGER.debug("[UNIFIED_TRIGGER] Unified trigger detached")
 
 
 # Legacy trigger compatibility mapping for migration purposes
 LEGACY_TRIGGER_MAPPING = {
-    "rule_enabled": {
-        "type": TRIGGER_UNR_CHANGED,
-        "change_action": "enabled"
-    },
-    "rule_disabled": {
-        "type": TRIGGER_UNR_CHANGED,
-        "change_action": "disabled"
-    },
-    "rule_changed": {
-        "type": TRIGGER_UNR_CHANGED,
-        "change_action": ["enabled", "disabled", "modified"]
-    },
-    "rule_deleted": {
-        "type": TRIGGER_UNR_CHANGED,
-        "change_action": "deleted"
-    },
-    "device_changed": {
-        "type": TRIGGER_UNR_CHANGED,
-        "change_type": "device"
-    }
+    "rule_enabled": {"type": TRIGGER_UNR_CHANGED, "change_action": "enabled"},
+    "rule_disabled": {"type": TRIGGER_UNR_CHANGED, "change_action": "disabled"},
+    "rule_changed": {"type": TRIGGER_UNR_CHANGED, "change_action": ["enabled", "disabled", "modified"]},
+    "rule_deleted": {"type": TRIGGER_UNR_CHANGED, "change_action": "deleted"},
+    "device_changed": {"type": TRIGGER_UNR_CHANGED, "change_type": "device"},
 }

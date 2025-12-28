@@ -1,0 +1,984 @@
+# Constitution Decision Points Framework
+# This file defines the interactive decision points for constitution creation
+# Agents should use this to guide users through key decisions
+
+# =============================================================================
+# RESEARCH TRIGGERS
+# =============================================================================
+# These patterns help agents identify when web research should be conducted
+# before presenting decision options. Research enriches decisions with
+# real-world best practices and current patterns.
+
+research_triggers:
+  # Language/Runtime Version Patterns
+  # When users mention specific versions, research current best practices
+  language_versions:
+    - pattern: "python\\s*3\\.1[0-9]"
+      extract_version: true
+      topics:
+        - "{language} {version} best practices"
+        - "{language} {version} new features to adopt"
+        - "{language} {version} typing patterns"
+        - "{language} {version} async/await patterns"
+      present_as: "Python {version} Idiomatic Patterns"
+
+    - pattern: "typescript\\s*[45]\\.[0-9]"
+      extract_version: true
+      topics:
+        - "TypeScript {version} best practices 2025"
+        - "TypeScript {version} strict mode patterns"
+        - "TypeScript {version} type inference improvements"
+      present_as: "TypeScript {version} Modern Patterns"
+
+    - pattern: "node\\s*(1[89]|2[0-9])|nodejs\\s*(1[89]|2[0-9])"
+      extract_version: true
+      topics:
+        - "Node.js {version} best practices"
+        - "Node.js {version} ESM patterns"
+        - "Node.js {version} performance patterns"
+      present_as: "Node.js {version} Patterns"
+
+    - pattern: "java\\s*(1[789]|2[0-9])"
+      extract_version: true
+      topics:
+        - "Java {version} modern features"
+        - "Java {version} records and sealed classes"
+        - "Java {version} virtual threads patterns"
+      present_as: "Java {version} Modern Patterns"
+
+    - pattern: "go\\s*1\\.(1[89]|2[0-9])|golang\\s*1\\.(1[89]|2[0-9])"
+      extract_version: true
+      topics:
+        - "Go {version} best practices"
+        - "Go {version} generics patterns"
+        - "Go {version} error handling patterns"
+      present_as: "Go {version} Idiomatic Patterns"
+
+    - pattern: "rust\\s*1\\.[67][0-9]"
+      extract_version: true
+      topics:
+        - "Rust {version} best practices"
+        - "Rust {version} async patterns"
+        - "Rust {version} error handling Result patterns"
+      present_as: "Rust {version} Patterns"
+
+    - pattern: "c#\\s*1[0-3]|csharp\\s*1[0-3]"
+      extract_version: true
+      topics:
+        - "C# {version} new features"
+        - "C# {version} pattern matching"
+        - "C# {version} records and primary constructors"
+        - "C# {version} best practices"
+      present_as: "C# {version} Modern Patterns"
+
+    - pattern: "\\.net\\s*[89]|dotnet\\s*[89]"
+      extract_version: true
+      topics:
+        - ".NET {version} best practices"
+        - ".NET {version} performance improvements"
+        - ".NET {version} minimal API patterns"
+        - ".NET {version} Native AOT patterns"
+      present_as: ".NET {version} Patterns"
+
+  # Framework-Specific Patterns
+  # Research idiomatic patterns for specific frameworks
+  frameworks:
+    - pattern: "fastapi"
+      topics:
+        - "FastAPI project structure best practices"
+        - "FastAPI async patterns 2025"
+        - "FastAPI dependency injection patterns"
+        - "Pydantic V2 validation patterns"
+      present_as: "FastAPI Idiomatic Patterns"
+      affects_decisions:
+        - architectural_patterns
+        - testing_strategy
+
+    - pattern: "django\\s*[45]"
+      topics:
+        - "Django {version} best practices"
+        - "Django {version} async views patterns"
+        - "Django REST framework patterns"
+      present_as: "Django Modern Patterns"
+      affects_decisions:
+        - architectural_patterns
+        - testing_strategy
+
+    - pattern: "flask"
+      topics:
+        - "Flask application factory pattern"
+        - "Flask blueprints best practices"
+        - "Flask async patterns"
+      present_as: "Flask Patterns"
+
+    - pattern: "express|expressjs"
+      topics:
+        - "Express.js project structure 2025"
+        - "Express.js middleware patterns"
+        - "Express.js error handling best practices"
+      present_as: "Express.js Patterns"
+
+    - pattern: "nextjs|next\\.js|next\\s*1[45]"
+      topics:
+        - "Next.js App Router patterns"
+        - "Next.js server components best practices"
+        - "Next.js data fetching patterns 2025"
+      present_as: "Next.js Modern Patterns"
+
+    - pattern: "react\\s*1[89]|react\\s*19"
+      topics:
+        - "React {version} best practices"
+        - "React {version} server components"
+        - "React {version} hooks patterns"
+      present_as: "React {version} Patterns"
+
+    - pattern: "vue\\s*3"
+      topics:
+        - "Vue 3 Composition API patterns"
+        - "Vue 3 project structure best practices"
+        - "Pinia state management patterns"
+      present_as: "Vue 3 Patterns"
+
+    - pattern: "spring\\s*boot|springboot"
+      topics:
+        - "Spring Boot 3 best practices"
+        - "Spring Boot microservices patterns"
+        - "Spring Boot testing patterns"
+      present_as: "Spring Boot Modern Patterns"
+
+    - pattern: "rails|ruby\\s*on\\s*rails"
+      topics:
+        - "Ruby on Rails 7 best practices"
+        - "Rails Hotwire patterns"
+        - "Rails service object patterns"
+      present_as: "Rails Modern Patterns"
+
+    - pattern: "asp\\.?net\\s*core|aspnetcore"
+      topics:
+        - "ASP.NET Core 8 best practices"
+        - "ASP.NET Core minimal API patterns"
+        - "ASP.NET Core dependency injection patterns"
+        - "ASP.NET Core middleware patterns"
+      present_as: "ASP.NET Core Patterns"
+      affects_decisions:
+        - architectural_patterns
+        - testing_strategy
+
+    - pattern: "blazor"
+      topics:
+        - "Blazor component patterns"
+        - "Blazor state management best practices"
+        - "Blazor Server vs WebAssembly patterns"
+        - "Blazor performance optimization"
+      present_as: "Blazor Patterns"
+      affects_decisions:
+        - architectural_patterns
+        - testing_strategy
+
+    - pattern: "entity\\s*framework|ef\\s*core"
+      topics:
+        - "Entity Framework Core best practices"
+        - "EF Core performance optimization"
+        - "EF Core repository pattern"
+        - "EF Core migrations best practices"
+      present_as: "Entity Framework Core Patterns"
+
+    - pattern: "maui|\\.net\\s*maui"
+      topics:
+        - ".NET MAUI best practices"
+        - "MAUI MVVM patterns"
+        - "MAUI cross-platform patterns"
+      present_as: ".NET MAUI Patterns"
+
+  # CLI/TUI Framework Patterns
+  cli_frameworks:
+    - pattern: "ink|ink-cli|ink\\s*library"
+      topics:
+        - "Ink CLI library best practices"
+        - "Ink React-based CLI component patterns"
+        - "Ink state management patterns"
+        - "TypeScript CLI application architecture"
+      present_as: "Ink CLI Framework Patterns"
+      affects_decisions:
+        - architectural_patterns
+        - testing_strategy
+
+    - pattern: "commander\\.js|commander"
+      topics:
+        - "Commander.js CLI patterns"
+        - "Node.js CLI best practices"
+      present_as: "Commander.js CLI Patterns"
+
+    - pattern: "click|typer"
+      topics:
+        - "Python CLI best practices with Click/Typer"
+        - "Typer CLI application patterns"
+      present_as: "Python CLI Patterns"
+
+    - pattern: "cobra|golang\\s*cli"
+      topics:
+        - "Cobra CLI patterns Go"
+        - "Go CLI application architecture"
+      present_as: "Go CLI Patterns"
+
+  # Architecture Pattern Research
+  # When users mention architecture patterns, research real implementations
+  architecture:
+    - pattern: "vertical\\s*slice"
+      topics:
+        - "vertical slice architecture examples"
+        - "vertical slice vs clean architecture comparison"
+        - "vertical slice folder structure"
+      present_as: "Vertical Slice Architecture Research"
+
+    - pattern: "hexagonal|ports\\s*and\\s*adapters"
+      topics:
+        - "hexagonal architecture implementation examples"
+        - "ports and adapters pattern best practices"
+        - "hexagonal architecture testing patterns"
+      present_as: "Hexagonal Architecture Research"
+
+    - pattern: "clean\\s*architecture"
+      topics:
+        - "clean architecture implementation {tech_stack}"
+        - "clean architecture folder structure"
+        - "clean architecture dependency rule"
+      present_as: "Clean Architecture Research"
+
+    - pattern: "ddd|domain.driven"
+      topics:
+        - "domain driven design tactical patterns"
+        - "DDD aggregates and entities best practices"
+        - "DDD bounded context patterns"
+      present_as: "Domain-Driven Design Research"
+
+    - pattern: "cqrs|event.sourc"
+      topics:
+        - "CQRS implementation patterns"
+        - "event sourcing best practices"
+        - "CQRS vs CRUD when to use"
+      present_as: "CQRS/Event Sourcing Research"
+
+    - pattern: "microservice"
+      topics:
+        - "microservices patterns 2025"
+        - "microservices communication patterns"
+        - "microservices testing strategies"
+      present_as: "Microservices Patterns Research"
+
+    - pattern: "event.driven|eda|message.driven"
+      topics:
+        - "event-driven architecture patterns"
+        - "event-driven vs request-response comparison"
+        - "message broker patterns Kafka RabbitMQ"
+        - "eventual consistency patterns"
+      present_as: "Event-Driven Architecture Research"
+
+    - pattern: "serverless|lambda|azure\\s*functions|cloud\\s*functions|faas"
+      topics:
+        - "serverless architecture best practices"
+        - "serverless design patterns"
+        - "cold start optimization patterns"
+        - "serverless testing strategies"
+      present_as: "Serverless/FaaS Architecture Research"
+      affects_decisions:
+        - testing_strategy
+        - ci_cd
+
+    - pattern: "actor\\s*model|akka|orleans|proto\\.?actor"
+      topics:
+        - "actor model architecture patterns"
+        - "Akka/Orleans best practices"
+        - "actor supervision patterns"
+        - "actor concurrency patterns"
+      present_as: "Actor Model Architecture Research"
+
+    - pattern: "bff|backend.for.frontend"
+      topics:
+        - "Backend for Frontend pattern implementation"
+        - "BFF vs API Gateway comparison"
+        - "BFF per-client patterns"
+      present_as: "Backend for Frontend (BFF) Research"
+
+    - pattern: "monorepo|nx\\s|turborepo|lerna|bazel"
+      topics:
+        - "monorepo best practices 2025"
+        - "monorepo tooling comparison Nx Turborepo"
+        - "monorepo dependency management"
+        - "monorepo CI/CD patterns"
+      present_as: "Monorepo Architecture Research"
+      affects_decisions:
+        - ci_cd
+
+    - pattern: "saga|choreography|orchestration"
+      topics:
+        - "saga pattern implementation"
+        - "choreography vs orchestration comparison"
+        - "distributed transaction patterns"
+        - "compensating transaction patterns"
+      present_as: "Saga/Distributed Transaction Research"
+
+    - pattern: "repr|request.endpoint.response|minimal\\s*api\\s*pattern"
+      topics:
+        - "REPR pattern implementation"
+        - "minimal API design patterns"
+        - "endpoint-per-action patterns"
+      present_as: "REPR Pattern Research"
+
+    - pattern: "mvc|mvvm|mvp|model.view"
+      topics:
+        - "MVC vs MVVM vs MVP comparison"
+        - "MVVM data binding patterns"
+        - "presentation layer architecture patterns"
+      present_as: "MVC/MVVM/MVP Pattern Research"
+
+    - pattern: "plugin|extension|extensib"
+      topics:
+        - "plugin architecture patterns"
+        - "extension point design patterns"
+        - "plugin discovery and loading patterns"
+        - "plugin API versioning"
+      present_as: "Plugin Architecture Research"
+
+    - pattern: "strangler|legacy\\s*modernization"
+      topics:
+        - "strangler fig pattern implementation"
+        - "legacy modernization strategies"
+        - "incremental migration patterns"
+      present_as: "Legacy Modernization Research"
+
+    - pattern: "outbox|inbox\\s*pattern|transactional\\s*messaging"
+      topics:
+        - "outbox pattern implementation"
+        - "transactional messaging patterns"
+        - "reliable messaging patterns"
+      present_as: "Outbox/Reliable Messaging Research"
+
+  # Testing Framework Research
+  testing:
+    - pattern: "pytest"
+      topics:
+        - "pytest best practices 2025"
+        - "pytest fixtures patterns"
+        - "pytest async testing"
+      present_as: "Pytest Best Practices"
+
+    - pattern: "jest"
+      topics:
+        - "Jest testing best practices"
+        - "Jest mocking patterns"
+        - "Jest async testing patterns"
+      present_as: "Jest Testing Patterns"
+
+    - pattern: "vitest"
+      topics:
+        - "Vitest best practices"
+        - "Vitest vs Jest comparison"
+        - "Vitest component testing patterns"
+      present_as: "Vitest Testing Patterns"
+
+    - pattern: "playwright"
+      topics:
+        - "Playwright E2E testing best practices"
+        - "Playwright page object pattern"
+        - "Playwright CI/CD integration"
+      present_as: "Playwright E2E Patterns"
+
+    - pattern: "cypress"
+      topics:
+        - "Cypress testing best practices 2025"
+        - "Cypress component testing patterns"
+      present_as: "Cypress Testing Patterns"
+
+    - pattern: "xunit|xunit\\.net"
+      topics:
+        - "xUnit.net best practices"
+        - "xUnit test organization patterns"
+        - "xUnit fixtures and collections"
+      present_as: "xUnit.net Testing Patterns"
+
+    - pattern: "nunit"
+      topics:
+        - "NUnit best practices"
+        - "NUnit test fixtures patterns"
+        - "NUnit parameterized tests"
+      present_as: "NUnit Testing Patterns"
+
+    - pattern: "mstest"
+      topics:
+        - "MSTest best practices"
+        - "MSTest data-driven testing"
+      present_as: "MSTest Testing Patterns"
+
+    - pattern: "specflow|bdd\\s*\\.?net"
+      topics:
+        - "SpecFlow BDD patterns"
+        - "SpecFlow step definitions best practices"
+        - "BDD testing in .NET"
+      present_as: "SpecFlow BDD Patterns"
+
+    - pattern: "fluentassertions|shouldly"
+      topics:
+        - "FluentAssertions best practices"
+        - ".NET assertion library patterns"
+      present_as: ".NET Assertion Library Patterns"
+
+  # Industry/Compliance Patterns
+  compliance:
+    - pattern: "fintech|financial|banking"
+      topics:
+        - "fintech software compliance requirements"
+        - "financial services testing requirements"
+        - "PCI DSS development best practices"
+      present_as: "Fintech Compliance Patterns"
+      affects_decisions:
+        - testing_strategy
+        - code_review
+        - documentation
+
+    - pattern: "healthcare|hipaa|medical"
+      topics:
+        - "HIPAA software development requirements"
+        - "healthcare application security patterns"
+        - "medical software testing requirements"
+      present_as: "Healthcare/HIPAA Compliance Patterns"
+
+    - pattern: "gdpr|privacy"
+      topics:
+        - "GDPR compliant software patterns"
+        - "privacy by design implementation"
+      present_as: "GDPR/Privacy Compliance Patterns"
+
+# Research presentation template for agents
+research_presentation_template: |
+  📚 RESEARCH FINDINGS: {topic_title}
+
+  Based on my research of current best practices, here are the key patterns:
+
+  {findings_formatted}
+
+  **How this affects your constitution:**
+  {implications}
+
+  Would you like me to incorporate these patterns? (yes/no/tell me more)
+
+# =============================================================================
+# DECISION CATEGORIES
+# =============================================================================
+
+testing_strategy:
+  question: "What testing approach fits your project?"
+  description: "Testing strategy affects development speed, confidence, and infrastructure needs"
+  options:
+    - id: "comprehensive"
+      name: "Comprehensive Testing"
+      description: "Test-first development with high coverage and multiple test types"
+      requirements:
+        - "Test-Driven Development (TDD) approach"
+        - "80%+ code coverage required"
+        - "Unit tests for all functions"
+        - "Integration tests for all critical paths"
+        - "End-to-end tests for key user flows"
+      best_for:
+        - "Production systems"
+        - "Regulated industries"
+        - "Large teams"
+        - "High-reliability requirements"
+      requires:
+        - "E2E test infrastructure"
+        - "Testing discipline across team"
+        - "More development time"
+        - "CI/CD infrastructure"
+
+    - id: "balanced"
+      name: "Balanced Testing"
+      description: "Test-after acceptable with moderate coverage and selective integration tests"
+      requirements:
+        - "Test-after implementation acceptable"
+        - "60-80% code coverage target"
+        - "Unit tests required for new code"
+        - "Integration tests for critical paths"
+        - "E2E tests optional/recommended"
+      best_for:
+        - "Most production applications"
+        - "Medium-sized teams"
+        - "Standard reliability needs"
+      requires:
+        - "Standard testing frameworks"
+        - "Basic CI/CD"
+
+    - id: "pragmatic"
+      name: "Pragmatic Testing"
+      description: "Essential tests only, focusing on critical functionality"
+      requirements:
+        - "Tests for critical functionality"
+        - "40-60% coverage acceptable"
+        - "Unit tests focused approach"
+        - "Integration tests as needed"
+        - "E2E tests optional"
+      best_for:
+        - "Prototypes and MVPs"
+        - "Internal tools"
+        - "Small teams"
+        - "Rapid iteration needs"
+      requires:
+        - "Minimal infrastructure"
+        - "Clear definition of 'critical'"
+
+    - id: "custom"
+      name: "Custom Testing Strategy"
+      description: "Define your own specific requirements"
+      prompt: "Describe your testing requirements in detail"
+
+  follow_up_questions:
+    - condition: "if comprehensive or balanced"
+      questions:
+        - id: "coverage_target"
+          text: "What coverage percentage target? (e.g., 70, 80, 85)"
+          type: "integer"
+          validation: "between 40 and 100"
+        - id: "coverage_strict"
+          text: "Should coverage checks block CI/CD merges?"
+          type: "boolean"
+          help: "yes = strict enforcement, no = advisory only"
+
+    - condition: "if comprehensive"
+      questions:
+        - id: "has_e2e_infrastructure"
+          text: "Do you have E2E test infrastructure set up?"
+          type: "boolean"
+          help: "Examples: Playwright, Cypress, Selenium setup"
+        - id: "e2e_planned"
+          text: "Are E2E tests planned for the future?"
+          type: "boolean"
+          condition: "if has_e2e_infrastructure is false"
+        - id: "tdd_required"
+          text: "Is Test-Driven Development (TDD) required?"
+          type: "boolean"
+          help: "yes = tests before implementation, no = test-after acceptable"
+        - id: "critical_integration_points"
+          text: "List critical integration points requiring tests (comma-separated)"
+          type: "list"
+          help: "Examples: authentication, payment processing, data sync"
+          optional: true
+
+    - condition: "if balanced"
+      questions:
+        - id: "critical_integration_points"
+          text: "Which integration points require integration tests? (comma-separated)"
+          type: "list"
+          help: "Examples: authentication, payment processing, external APIs"
+          optional: true
+
+    - condition: "if pragmatic"
+      questions:
+        - id: "critical_functionality"
+          text: "Define what qualifies as 'critical functionality'"
+          type: "text"
+          help: "This helps determine what must be tested"
+
+    - condition: "always"
+      questions:
+        - id: "testing_rationale"
+          text: "Brief rationale for this testing strategy"
+          type: "text"
+          help: "Why does this approach fit your project?"
+
+code_review:
+  question: "What code review process do you want?"
+  description: "Review requirements affect merge speed and code quality"
+  options:
+    - id: "strict"
+      name: "Strict Review Policy"
+      description: "All code requires review and approval before merge"
+      requirements:
+        - "All pull requests MUST be reviewed"
+        - "At least 1 approval required before merge"
+        - "No direct commits to main/master"
+        - "Review checklist must be followed"
+        - "No exceptions for urgent fixes"
+      best_for:
+        - "Production systems"
+        - "Regulated environments"
+        - "Distributed teams"
+
+    - id: "standard"
+      name: "Standard Review Policy"
+      description: "Reviews required with flexibility for urgent situations"
+      requirements:
+        - "Pull requests MUST be reviewed"
+        - "At least 1 approval required"
+        - "Direct commits allowed for urgent hotfixes"
+        - "Hotfixes must be reviewed post-merge"
+      best_for:
+        - "Most production applications"
+        - "Teams with on-call rotation"
+
+    - id: "flexible"
+      name: "Flexible Review Policy"
+      description: "Reviews recommended but not strictly enforced"
+      requirements:
+        - "Code reviews SHOULD be conducted"
+        - "Team members MAY merge without approval"
+        - "Complex changes SHOULD be reviewed"
+        - "Reviews encouraged for knowledge sharing"
+      best_for:
+        - "Small teams"
+        - "Prototypes"
+        - "Internal tools"
+
+    - id: "custom"
+      name: "Custom Review Policy"
+      description: "Define your own review requirements"
+      prompt: "Describe your code review policy"
+
+  follow_up_questions:
+    - condition: "if strict or standard"
+      questions:
+        - id: "num_reviewers"
+          text: "How many reviewers required?"
+          type: "integer"
+          default: 1
+          validation: "between 1 and 5"
+        - id: "reviewer_qualifications"
+          text: "Any specific reviewer qualifications? (optional)"
+          type: "text"
+          optional: true
+          help: "Examples: senior engineer, domain expert"
+
+    - condition: "if standard"
+      questions:
+        - id: "hotfix_definition"
+          text: "What qualifies as an urgent hotfix?"
+          type: "text"
+          help: "When can the review process be bypassed?"
+
+documentation:
+  question: "How comprehensive should documentation requirements be?"
+  description: "Documentation level affects onboarding and maintainability"
+  options:
+    - id: "extensive"
+      name: "Extensive Documentation"
+      description: "Comprehensive documentation for all aspects"
+      requirements:
+        - "All public APIs MUST be documented"
+        - "All modules MUST have docstrings"
+        - "Complex algorithms MUST have inline comments"
+        - "ADRs MUST be written for architectural decisions"
+        - "README MUST be kept current"
+        - "CHANGELOG MUST track all releases"
+        - "API documentation MUST be generated"
+      best_for:
+        - "Open source projects"
+        - "Large teams"
+        - "High turnover environments"
+
+    - id: "standard"
+      name: "Standard Documentation"
+      description: "Documentation for public interfaces and complex logic"
+      requirements:
+        - "Public APIs MUST have docstrings"
+        - "Complex logic MUST have comments"
+        - "README MUST include setup instructions"
+        - "ADRs SHOULD be written for major decisions"
+        - "CHANGELOG SHOULD track releases"
+      best_for:
+        - "Most projects"
+        - "Standard team sizes"
+
+    - id: "minimal"
+      name: "Minimal Documentation"
+      description: "Essential documentation only"
+      requirements:
+        - "README MUST exist with basic setup"
+        - "Critical functions SHOULD have docstrings"
+        - "Complex logic SHOULD have comments"
+      best_for:
+        - "Prototypes"
+        - "Small teams with high context"
+        - "Internal tools"
+
+    - id: "custom"
+      name: "Custom Documentation"
+      description: "Define your own documentation requirements"
+      prompt: "Describe your documentation standards"
+
+  follow_up_questions:
+    - condition: "if extensive or standard"
+      questions:
+        - id: "adr_required"
+          text: "Are Architecture Decision Records (ADRs) required?"
+          type: "boolean"
+        - id: "docstring_style"
+          text: "Preferred docstring style? (google/numpy/sphinx)"
+          type: "choice"
+          options: ["google", "numpy", "sphinx", "other"]
+          default: "google"
+
+architectural_patterns:
+  question: "What architectural patterns and principles guide your codebase?"
+  description: "Architectural patterns define how code is organized and how components interact"
+  options:
+    - id: "vertical_slice"
+      name: "Vertical Slice Architecture"
+      description: "Organize code by features/use-cases rather than technical layers"
+      characteristics:
+        - "Features are self-contained vertical slices"
+        - "Each slice contains all layers needed (UI, business logic, data access)"
+        - "Minimal coupling between slices"
+        - "Easy to understand feature scope"
+      best_for:
+        - "Feature-driven development"
+        - "Teams organized by product areas"
+        - "Rapid feature iteration"
+        - "Microservices preparation"
+      patterns:
+        - "Feature folders (e.g., features/user-registration/)"
+        - "Command/Query separation (CQRS-lite)"
+        - "Mediator pattern for feature orchestration"
+
+    - id: "clean_architecture"
+      name: "Clean Architecture (Onion/Hexagonal)"
+      description: "Layer code with dependency inversion, business logic at the center"
+      characteristics:
+        - "Core business logic has no external dependencies"
+        - "Dependencies point inward toward domain"
+        - "Ports & Adapters for external integrations"
+        - "Testable business rules in isolation"
+      best_for:
+        - "Complex business domains"
+        - "Long-lived applications"
+        - "Multiple UI or integration points"
+        - "High testability requirements"
+      patterns:
+        - "Domain entities and value objects"
+        - "Repository pattern"
+        - "Use cases / Application services"
+        - "Dependency injection"
+
+    - id: "layered"
+      name: "Traditional Layered Architecture"
+      description: "Organize by technical layers (presentation, business, data)"
+      characteristics:
+        - "Horizontal separation by technical concern"
+        - "Presentation → Business → Data access"
+        - "Each layer depends on layer below"
+        - "Clear separation of technical responsibilities"
+      best_for:
+        - "Traditional enterprise applications"
+        - "Teams organized by technical specialty"
+        - "Well-understood problem domains"
+        - "CRUD-heavy applications"
+      patterns:
+        - "Controllers, Services, Repositories"
+        - "DTOs for layer boundaries"
+        - "Transaction script pattern"
+
+    - id: "modular_monolith"
+      name: "Modular Monolith"
+      description: "Single deployment with strong module boundaries"
+      characteristics:
+        - "Modules are independently developable"
+        - "Clear module interfaces and contracts"
+        - "Shared database but isolated schemas/tables"
+        - "Eventual microservices extraction path"
+      best_for:
+        - "Teams wanting microservices benefits without complexity"
+        - "Growing applications"
+        - "Cost-conscious deployments"
+      patterns:
+        - "Module boundaries with public APIs"
+        - "Domain events for module communication"
+        - "Shared kernel for cross-cutting concerns"
+
+    - id: "pragmatic"
+      name: "Pragmatic / Adaptive"
+      description: "Mix patterns based on context, no single architecture"
+      characteristics:
+        - "Use patterns where they add value"
+        - "Simple code for simple features"
+        - "Sophisticated patterns for complex domains"
+        - "Architecture emerges from needs"
+      best_for:
+        - "Small to medium projects"
+        - "Rapid prototyping"
+        - "Teams with diverse experience"
+
+    - id: "custom"
+      name: "Custom Architecture"
+      description: "Define your own architectural approach"
+      prompt: "Describe your architectural patterns and principles"
+
+  follow_up_questions:
+    - condition: "if vertical_slice or clean_architecture or modular_monolith"
+      questions:
+        - id: "error_handling_pattern"
+          text: "What error/result handling pattern do you use?"
+          type: "choice"
+          options:
+            - value: "result_pattern"
+              label: "Result Pattern (Result<T, Error>)"
+              description: "Explicit success/failure types, no exceptions for expected errors"
+            - value: "exceptions"
+              label: "Exception-based"
+              description: "Use exceptions for all error handling"
+            - value: "mixed"
+              label: "Mixed approach"
+              description: "Result pattern for domain, exceptions for infrastructure"
+            - value: "other"
+              label: "Other pattern"
+          help: "How do you represent and propagate errors?"
+
+        - id: "dependency_injection"
+          text: "Is dependency injection required?"
+          type: "boolean"
+          help: "DI is typical for Clean Architecture and testability"
+
+        - id: "domain_events"
+          text: "Do you use domain events for decoupling?"
+          type: "boolean"
+          help: "Domain events enable loose coupling between modules/slices"
+
+    - condition: "if vertical_slice or modular_monolith"
+      questions:
+        - id: "feature_organization"
+          text: "How are features/modules organized?"
+          type: "text"
+          help: "Example: 'features/{feature-name}/' or 'modules/{module-name}/'"
+          placeholder: "features/{feature-name}/"
+
+    - condition: "if clean_architecture or layered"
+      questions:
+        - id: "layer_organization"
+          text: "What are your primary layers?"
+          type: "text"
+          help: "Example: 'domain, application, infrastructure, presentation'"
+          placeholder: "domain, application, infrastructure, presentation"
+
+    - condition: "always"
+      questions:
+        - id: "coding_principles"
+          text: "Key coding principles? (comma-separated)"
+          type: "list"
+          help: "Examples: SOLID, DRY, YAGNI, KISS"
+          optional: true
+
+        - id: "architectural_rationale"
+          text: "Why does this architecture fit your project?"
+          type: "text"
+          help: "Brief explanation of the architectural choice"
+
+ci_cd:
+  question: "What CI/CD checks should be enforced?"
+  description: "CI/CD enforcement affects merge speed and quality gates"
+  options:
+    - id: "full"
+      name: "Full Enforcement"
+      description: "Comprehensive checks that block merges"
+      requirements:
+        - "Linting MUST pass"
+        - "Type checking MUST pass"
+        - "All tests MUST pass"
+        - "Security scans MUST pass"
+        - "Coverage requirements MUST be met"
+        - "All checks MUST pass before merge"
+      best_for:
+        - "Production systems"
+        - "Mature projects"
+        - "Large teams"
+
+    - id: "standard"
+      name: "Standard Enforcement"
+      description: "Core checks that block merges"
+      requirements:
+        - "Linting MUST pass"
+        - "Tests MUST pass"
+        - "Coverage checks (if enabled) MUST pass"
+        - "Type checking SHOULD pass"
+        - "Core checks MUST pass before merge"
+      best_for:
+        - "Most projects"
+        - "Growing codebases"
+
+    - id: "basic"
+      name: "Basic Enforcement"
+      description: "Essential checks, advisory only"
+      requirements:
+        - "Tests SHOULD pass"
+        - "Linting results displayed but non-blocking"
+        - "Checks are advisory"
+      best_for:
+        - "Early-stage projects"
+        - "Small teams"
+        - "Rapid iteration"
+
+    - id: "none"
+      name: "No CI/CD Yet"
+      description: "Planning phase, no enforcement"
+      requirements:
+        - "CI/CD to be implemented"
+      best_for:
+        - "New projects"
+        - "Pre-CI phase"
+
+    - id: "custom"
+      name: "Custom CI/CD"
+      description: "Define your own CI/CD requirements"
+      prompt: "Describe your CI/CD checks"
+
+  follow_up_questions:
+    - condition: "if full or standard"
+      questions:
+        - id: "required_checks"
+          text: "Which checks are required? (comma-separated)"
+          type: "list"
+          default: "tests,linting"
+          help: "Options: tests, linting, type-checking, security, coverage"
+        - id: "ci_platform"
+          text: "CI/CD platform? (optional)"
+          type: "text"
+          optional: true
+          help: "Examples: GitHub Actions, GitLab CI, CircleCI"
+
+    - condition: "if none"
+      questions:
+        - id: "ci_planned"
+          text: "Is CI/CD implementation planned?"
+          type: "boolean"
+        - id: "ci_timeline"
+          text: "When is CI/CD planned? (optional)"
+          type: "text"
+          optional: true
+          condition: "if ci_planned is true"
+
+# Decision confirmation template
+confirmation_template: |
+  === Constitution Decision Summary ===
+
+  Based on our conversation, here's what will be in your constitution:
+
+  ## Testing Strategy: {testing_strategy}
+  {testing_details}
+
+  ## Code Review: {code_review_policy}
+  {code_review_details}
+
+  ## Documentation: {documentation_level}
+  {documentation_details}
+
+  ## CI/CD: {ci_enforcement}
+  {ci_cd_details}
+
+  ---
+
+  This will result in:
+  - {must_count} MUST requirements (mandatory)
+  - {should_count} SHOULD recommendations (encouraged)
+  - {may_count} MAY options (flexible)
+
+  Rationale: {overall_rationale}
+
+  Do these decisions accurately reflect your project needs?
+  - yes: Proceed with constitution generation
+  - no: Cancel and restart
+  - revise: Modify specific decisions

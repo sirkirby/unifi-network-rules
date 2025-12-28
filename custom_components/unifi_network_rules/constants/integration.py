@@ -1,4 +1,5 @@
 """Integration constants for UniFi Network Rules."""
+
 from __future__ import annotations
 
 from typing import Final

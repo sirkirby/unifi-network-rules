@@ -1,0 +1,57 @@
+version: 0.4.2.dev0+g553a12cd4.d20251228
+agents:
+- copilot
+- cursor
+- codex
+- claude
+ides: [cursor, vscode]
+agent_capabilities:
+  copilot:
+    has_background_agents: true
+    has_native_web: true
+    has_mcp: true
+    research_strategy: Use Copilot's built-in web tools + keyless MCP
+    custom: {}
+  cursor:
+    has_background_agents: true
+    has_native_web: false
+    has_mcp: true
+    research_strategy: Deep research via MCP web-search + background agents
+    custom: {}
+  codex:
+    has_background_agents: false
+    has_native_web: false
+    has_mcp: false
+    research_strategy: Offline/spec-only; degrade gracefully to general knowledge
+    custom: {}
+  claude:
+    has_background_agents: true
+    has_native_web: true
+    has_mcp: true
+    research_strategy: Use Claude's web tools or keyless MCP web-search (DuckDuckGo/fetch)
+    custom: {}
+rfc:
+  directory: oak/rfc
+  template: engineering
+  auto_number: true
+  number_format: sequential
+  validate_on_create: true
+issue:
+  azure_devops:
+    default_branch: main
+  github:
+    default_branch: main
+plan:
+  directory: oak/plan
+constitution:
+  directory: oak
+features:
+  enabled: [constitution, plan]
+skills:
+  installed:
+  - constitution-authoring
+  - constitution-governance
+  - planning-workflow
+  - research-synthesis
+  - task-decomposition
+  auto_install: true

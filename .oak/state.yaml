@@ -1,0 +1,131 @@
+migrations:
+- 2024.11.13_gitignore_issue_context
+- 2024.11.18_copilot_agents_folder
+- 2025.11.28_cleanup_old_templates
+- 2025.11.28_features_restructure
+- 2025.12.05_unify_plan_create
+managed_assets:
+  directories:
+  - .claude/commands
+  - .codex/prompts
+  - .cursor/commands
+  - .github/agents
+  created_files:
+  - path: .github/agents/oak.constitution-create.agent.md
+    hash: d7962c85d16283e4114b953dd56a964a7929baa65ea01b301d692af7a68ffed8
+    created_at: '2025-12-28T13:40:25.000086'
+  - path: .github/agents/oak.constitution-validate.agent.md
+    hash: bb098761d2ee583bf9bd051c51b55679fb95615f6c2ba0106a294e197f802ee7
+    created_at: '2025-12-28T13:40:25.007503'
+  - path: .github/agents/oak.constitution-amend.agent.md
+    hash: 4e42198041e9ed6d25f77913b56da03176328fa64004975e96928f0040b1f099
+    created_at: '2025-12-28T13:40:25.014394'
+  - path: .cursor/commands/oak.constitution-create.md
+    hash: 937d7b51ed3f9aed37d080b5179d642f7c76a82149a07946d6e12bb6605e090c
+    created_at: '2025-12-28T13:40:25.023492'
+  - path: .cursor/commands/oak.constitution-validate.md
+    hash: bb098761d2ee583bf9bd051c51b55679fb95615f6c2ba0106a294e197f802ee7
+    created_at: '2025-12-28T13:40:25.031209'
+  - path: .cursor/commands/oak.constitution-amend.md
+    hash: 07eb9b55469d86f2ae417858fb2cba145e5b73e00e7a032ddb34f5d27f6f7b69
+    created_at: '2025-12-28T13:40:25.038062'
+  - path: .codex/prompts/oak.constitution-create.md
+    hash: d4c727288c012e74289547d1e515ccbf515bf18e3b4e271811fc762f416eda4b
+    created_at: '2025-12-28T13:40:25.047159'
+  - path: .codex/prompts/oak.constitution-validate.md
+    hash: b8fbf64d6be8a02348ae3f3e8fc0afeb6096a33c69af4721553871c14f766e88
+    created_at: '2025-12-28T13:40:25.055276'
+  - path: .codex/prompts/oak.constitution-amend.md
+    hash: 2ddaff6f31655d8291dc54207e44049a47e75ef4bad57cdc8a8f1020be39650b
+    created_at: '2025-12-28T13:40:25.062171'
+  - path: .claude/commands/oak.constitution-create.md
+    hash: 3f769cff4db3abfdcb6dee9868245aacc5e01e5fe7eb9f4703f2753534b53bc6
+    created_at: '2025-12-28T13:40:25.071261'
+  - path: .claude/commands/oak.constitution-validate.md
+    hash: b8fbf64d6be8a02348ae3f3e8fc0afeb6096a33c69af4721553871c14f766e88
+    created_at: '2025-12-28T13:40:25.079589'
+  - path: .claude/commands/oak.constitution-amend.md
+    hash: 4ea9acd26003e64f60094ae721524192dbb692a7d1ca05132d0bac901c3be70e
+    created_at: '2025-12-28T13:40:25.087066'
+  - path: .github/agents/oak.plan-create.agent.md
+    hash: 1fb51ea21401d15abe2bafc90d89908e857e55ce5588df6be34252e194205daf
+    created_at: '2025-12-28T13:40:25.130211'
+  - path: .github/agents/oak.plan-research.agent.md
+    hash: 42be11b2f19de50c9dae2887c43d49c1c32aff9dc836470fbf074531c186561a
+    created_at: '2025-12-28T13:40:25.138381'
+  - path: .github/agents/oak.plan-tasks.agent.md
+    hash: 9c3d9a8b4afa367081c533ce5a156eb78f323043bfeb2d9404b28e72f8a9ae37
+    created_at: '2025-12-28T13:40:25.146326'
+  - path: .github/agents/oak.plan-implement.agent.md
+    hash: a8dc42f4335d02955ccb562577c2bb6bc2198d22bee3243d136d044f673d4973
+    created_at: '2025-12-28T13:40:25.155028'
+  - path: .github/agents/oak.plan-export.agent.md
+    hash: 155adf43655734a8c21b2c2cb1a1db0d1e81b98763fd4c6c0773e2bc85e30f65
+    created_at: '2025-12-28T13:40:25.163133'
+  - path: .github/agents/oak.plan-validate.agent.md
+    hash: b0092fdbaed50b4f2ecef11a2ad1a4a3aa2cef7c3190d27d2d5b9239bc0299db
+    created_at: '2025-12-28T13:40:25.173670'
+  - path: .cursor/commands/oak.plan-create.md
+    hash: afbcc00972798a626b157b89c460d4354098110860ef091f9116c4148d244729
+    created_at: '2025-12-28T13:40:25.185395'
+  - path: .cursor/commands/oak.plan-research.md
+    hash: 0a0f6bf2ff06f3ea77ab4bb346b2706dc3a772455198d646234fb02cfde1b37a
+    created_at: '2025-12-28T13:40:25.195036'
+  - path: .cursor/commands/oak.plan-tasks.md
+    hash: 918d8c4fc34cef2ecf7797cc22b39ff5d30f171626431a34e56cacf308521e44
+    created_at: '2025-12-28T13:40:25.204214'
+  - path: .cursor/commands/oak.plan-implement.md
+    hash: c3b0c3773cb76d4af6e39c77dd56553881854495eb3dd944da603e95d44009f1
+    created_at: '2025-12-28T13:40:25.214243'
+  - path: .cursor/commands/oak.plan-export.md
+    hash: 625e1fb027db59525c05a537b5ba40c612040c33e58d56630dab838b4b810f8b
+    created_at: '2025-12-28T13:40:25.224349'
+  - path: .cursor/commands/oak.plan-validate.md
+    hash: fd6b9a8bffa4f078ddca3e717ab5191bf74791ddd4189b50e09d93f774b8db5b
+    created_at: '2025-12-28T13:40:25.237270'
+  - path: .codex/prompts/oak.plan-create.md
+    hash: d30fe225345ad6ab9fa93ca8a05c97c4582d7b1d7ca74c7db22de1a7bcb1eae0
+    created_at: '2025-12-28T13:40:25.251187'
+  - path: .codex/prompts/oak.plan-research.md
+    hash: 1b6b995e40ba3de410633b940acb06df022e49f8abec76e4b7f972e268adfc8b
+    created_at: '2025-12-28T13:40:25.261992'
+  - path: .codex/prompts/oak.plan-tasks.md
+    hash: 7cf64c03e08c758a7c3ca06fee133df0d990f6cdb037bf5cc4c05d29a639abc6
+    created_at: '2025-12-28T13:40:25.272597'
+  - path: .codex/prompts/oak.plan-implement.md
+    hash: 0276dfd62751f2759900c91863dff5a579bb91578a66fa4099153c3a1db0826c
+    created_at: '2025-12-28T13:40:25.284092'
+  - path: .codex/prompts/oak.plan-export.md
+    hash: 18f319e6a91a3ebeda6a91769fc9c66194af855bbbd3fe6f71dc72f49b477456
+    created_at: '2025-12-28T13:40:25.295101'
+  - path: .codex/prompts/oak.plan-validate.md
+    hash: a41a81733fbe5771df96702b778ad4a889be18532a1f9e3a2c7a102b91c3f67d
+    created_at: '2025-12-28T13:40:25.308427'
+  - path: .claude/commands/oak.plan-create.md
+    hash: 1fb51ea21401d15abe2bafc90d89908e857e55ce5588df6be34252e194205daf
+    created_at: '2025-12-28T13:40:25.323036'
+  - path: .claude/commands/oak.plan-research.md
+    hash: 40b47ebd05197c0cf93edaae9345febc0031448bc769a7e03b705c1a7636c7ee
+    created_at: '2025-12-28T13:40:25.335201'
+  - path: .claude/commands/oak.plan-tasks.md
+    hash: 080b78d9254795fa8628d99b511972c48e2e6389e039f8889cc76620dccc496f
+    created_at: '2025-12-28T13:40:25.347111'
+  - path: .claude/commands/oak.plan-implement.md
+    hash: 59d610aa5698cf77b919b39b3454a425b9b97bfef4d94f56b98b3dc39213c930
+    created_at: '2025-12-28T13:40:25.359787'
+  - path: .claude/commands/oak.plan-export.md
+    hash: db1822377569b9e95f22ed5f699fc203c7ef8f393c9074ae09a1743c95bc1026
+    created_at: '2025-12-28T13:40:25.372619'
+  - path: .claude/commands/oak.plan-validate.md
+    hash: e2461c410f90c1e9bf54c424cba97012aaff160158edc153b9dd38b102f014db
+    created_at: '2025-12-28T13:40:25.387126'
+  - path: .github/copilot-instructions.md
+    hash: 12c9e1e6458ee715a9f325bf1579bcffb5f97c2ec5abf70449ad0f8bc57d9a77
+    created_at: '2025-12-28T13:52:53.109823'
+  - path: AGENTS.md
+    hash: 1f8ea151b6d3d403f54bc0eed9b7c93ea9e06cc25efc953c8201a34b9b8cadfb
+    created_at: '2025-12-28T13:52:53.115751'
+  - path: CLAUDE.md
+    hash: 14d0b0d5da1b31d6ca8365e682d3aa77395f440a80e93f769e9862bfa2623421
+    created_at: '2025-12-28T13:52:53.121811'
+  modified_files: []

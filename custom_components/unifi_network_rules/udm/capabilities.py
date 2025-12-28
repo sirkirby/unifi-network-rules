@@ -1,5 +1,7 @@
 """Module for UniFi capabilities detection."""
+
 from ..const import LOGGER
+
 
 class _Capabilities:
     """Class to detect and store UniFi device capabilities."""
@@ -37,28 +39,29 @@ class _Capabilities:
         """Return if legacy traffic is supported."""
         return self._legacy_traffic is True
 
+
 class CapabilitiesMixin:
     """Mixin class for device capability detection."""
 
     @property
     def capabilities(self):
         """Get device capabilities.
-        
+
         Returns the capabilities object, creating it if it doesn't exist.
         """
         if not hasattr(self, "_capabilities") or self._capabilities is None:
             self._capabilities = _Capabilities(self)
         return self._capabilities
-    
+
     async def check_capabilities(self) -> None:
         """Check all device capabilities."""
         LOGGER.debug("Checking device capabilities")
-        
+
         # Check if we have the capabilities object
         if not hasattr(self, "_capabilities") or self._capabilities is None:
             self._capabilities = _Capabilities(self)
-            
+
         # Check legacy firewall capability
         await self.capabilities.check_legacy_firewall()
-        
-        LOGGER.debug("Capabilities check completed") 
+
+        LOGGER.debug("Capabilities check completed")

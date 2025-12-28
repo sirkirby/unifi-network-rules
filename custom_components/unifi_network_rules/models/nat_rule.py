@@ -1,9 +1,9 @@
 """Typed model for UniFi NAT rule configuration (V2 API)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional
-
+from typing import Any, Literal
 
 NatType = Literal["SNAT", "DNAT"]
 IPVersion = Literal["IPV4", "IPV6"]
@@ -15,8 +15,8 @@ class NATAddressPortFilter:
     """Filter object for NAT source/destination conditions."""
 
     filter_type: FilterType
-    address: Optional[str] = None
-    firewall_group_ids: Optional[List[str]] = None
+    address: str | None = None
+    firewall_group_ids: list[str] | None = None
     invert_address: bool = False
     invert_port: bool = False
 
@@ -24,9 +24,9 @@ class NATAddressPortFilter:
 class NATRule:
     """Typed wrapper for a UniFi NAT rule with helpers for HA integration."""
 
-    def __init__(self, raw: Dict[str, Any]) -> None:
+    def __init__(self, raw: dict[str, Any]) -> None:
         # Store a shallow copy of raw
-        self.raw: Dict[str, Any] = dict(raw or {})
+        self.raw: dict[str, Any] = dict(raw or {})
 
         # Ensure required defaults
         self.raw.setdefault("enabled", False)
@@ -52,7 +52,7 @@ class NATRule:
         return bool(self.raw.get("is_predefined", False))
 
     @property
-    def type(self) -> Optional[NatType]:
+    def type(self) -> NatType | None:
         val = self.raw.get("type")
         return val if val in ("SNAT", "DNAT") else None
 
@@ -62,15 +62,15 @@ class NATRule:
         return "IPV6" if str(val).upper() == "IPV6" else "IPV4"
 
     @property
-    def ip_address(self) -> Optional[str]:
+    def ip_address(self) -> str | None:
         return self.raw.get("ip_address")
 
     @property
-    def out_interface(self) -> Optional[str]:
+    def out_interface(self) -> str | None:
         return self.raw.get("out_interface")
 
     @property
-    def rule_index(self) -> Optional[int]:
+    def rule_index(self) -> int | None:
         return self.raw.get("rule_index")
 
     # --- Filters ---
@@ -99,20 +99,21 @@ class NATRule:
         """Return True if rule is user-defined (not predefined/system)."""
         return not self.is_predefined
 
-    def to_api_dict(self) -> Dict[str, Any]:
+    def to_api_dict(self) -> dict[str, Any]:
         """Return a dict suitable for sending back to the API."""
         return dict(self.raw)
 
     def display_suffix(self) -> str:
         """Build a succinct suffix for names and IDs using description/IP/ports when available."""
-        pieces: List[str] = []
+        pieces: list[str] = []
         if self.description:
             pieces.append(self.description)
         # Add IP address info if present
         if self.ip_address:
             pieces.append(self.ip_address.replace("/", "_").replace(".", "_"))
+
         # Try to include port hints from filters if set to PORT or ADDRESS_AND_PORT
-        def extract_port_label(f: NATAddressPortFilter | None) -> Optional[str]:
+        def extract_port_label(f: NATAddressPortFilter | None) -> str | None:
             if not f:
                 return None
             if f.filter_type in ("PORT", "ADDRESS_AND_PORT"):
@@ -130,5 +131,3 @@ class NATRule:
             rid = self.id or "unknown"
             pieces.append(rid[:8])
         return "_".join(x for x in pieces if x)
-
-

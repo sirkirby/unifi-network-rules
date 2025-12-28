@@ -3,6 +3,7 @@
 This module provides backward compatibility for the old const.py import path.
 All constants have been moved to organized modules in the constants/ directory.
 """
+
 from __future__ import annotations
 
 # Import all constants from the new organized structure for backward compatibility
