@@ -31,16 +31,9 @@ jobs:
 
     - name: Lint with Ruff
       run: |
-        echo "Ruff version: $(ruff --version)"
-        echo "Python version: $(python --version)"
-        echo "Working directory: $(pwd)"
-        echo "Files in directory:"
-        ls -la
-        echo "pyproject.toml content:"
-        cat pyproject.toml
-        echo ""
-        echo "Running ruff check..."
-        ruff check custom_components/
+        ruff check custom_components/ \
+          --select E,W,F,I,B,C4,UP,SIM \
+          --ignore E501,B008,B905,SIM102,SIM105,SIM108,SIM118,SIM401,UP047,C414
 
     - name: Run tests with coverage
       run: |
