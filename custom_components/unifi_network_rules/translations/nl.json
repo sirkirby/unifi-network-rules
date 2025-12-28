@@ -43,12 +43,6 @@
       "devices": "Apparaat"
     }
   },
-  "triggers": {
-    "unr_changed": {
-      "name": "UniFi-configuratie gewijzigd",
-      "description": "Geactiveerd wanneer elke UniFi-netwerkconfiguratie wijzigt (regels, profielen, netwerken, apparaten)"
-    }
-  },
   "services": {
     "refresh": {
       "name": "Vernieuwen",

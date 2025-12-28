@@ -43,12 +43,6 @@
       "devices": "Dispositivo"
     }
   },
-  "triggers": {
-    "unr_changed": {
-      "name": "Configuração UniFi alterada",
-      "description": "Disparado quando qualquer configuração da Rede UniFi é alterada (regras, perfis, redes, dispositivos)"
-    }
-  },
   "services": {
     "refresh": {
       "name": "Atualizar",

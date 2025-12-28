@@ -43,12 +43,6 @@
       "devices": "Appareil"
     }
   },
-  "triggers": {
-    "unr_changed": {
-      "name": "Configuration UniFi modifiée",
-      "description": "Déclenché lorsque toute configuration du Réseau UniFi change (règles, profils, réseaux, appareils)"
-    }
-  },
   "services": {
     "refresh": {
       "name": "Actualiser",

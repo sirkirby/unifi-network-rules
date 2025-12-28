@@ -43,12 +43,6 @@
       "devices": "Device"
     }
   },
-  "triggers": {
-    "unr_changed": {
-      "name": "UniFi configuration changed",
-      "description": "Triggered when any UniFi Network configuration changes (rules, profiles, networks, devices)"
-    }
-  },
   "services": {
     "refresh": {
       "name": "Refresh",
