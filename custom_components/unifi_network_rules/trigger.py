@@ -1,4 +1,5 @@
 """UniFi Network Rules trigger platform."""
+
 from __future__ import annotations
 
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant
@@ -9,8 +10,12 @@ from .const import LOGGER
 # Import unified trigger system
 from .unified_trigger import (
     TRIGGER_UNR_CHANGED,
-    async_validate_trigger_config as unified_validate_trigger_config,
+)
+from .unified_trigger import (
     async_attach_trigger as unified_attach_trigger,
+)
+from .unified_trigger import (
+    async_validate_trigger_config as unified_validate_trigger_config,
 )
 
 # Trigger type description for UI display
@@ -31,8 +36,9 @@ async def async_attach_trigger(
     trigger_info: TriggerInfo,
 ) -> CALLBACK_TYPE:
     """Set up a trigger."""
-    LOGGER.info("[UNIFIED_TRIGGER] Setting up unified trigger: %s", 
-               {k: v for k, v in config.items() if k not in ["platform"]})
+    LOGGER.info(
+        "[UNIFIED_TRIGGER] Setting up unified trigger: %s", {k: v for k, v in config.items() if k not in ["platform"]}
+    )
     return await unified_attach_trigger(hass, config, action, trigger_info)
 
 

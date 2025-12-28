@@ -1,0 +1,60 @@
+# Project configuration
+[project]
+name = "unifi-network-rules"
+requires-python = ">=3.13"
+
+# Ruff configuration for UniFi Network Rules
+# https://docs.astral.sh/ruff/configuration/
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+    "SIM",    # flake8-simplify
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B008",   # do not perform function calls in argument defaults
+    "B905",   # zip strict parameter - not always needed
+    "SIM102", # nested if statements - sometimes more readable
+    "SIM105", # contextlib.suppress - try/except is often clearer
+    "SIM108", # use ternary operator instead of if-else
+    "SIM118", # key in dict vs key in dict.keys() - minor
+    "SIM401", # dict.get instead of if block - style preference
+    "UP047",  # generic function type parameters - Python 3.12+ syntax
+    "C414",   # unnecessary list() in sorted() - harmless
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",   # assert allowed in tests
+    "E402",   # module level import not at top (needed for sys.path manipulation)
+    "F841",   # unused variables (common in test mocks)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["custom_components.unifi_network_rules"]
+known-third-party = ["homeassistant", "aiounifi", "voluptuous", "aiohttp", "aiofiles"]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+    "ignore:coroutine.*was never awaited:RuntimeWarning",
+    "ignore:.*event_loop.*:pytest.PytestDeprecationWarning",
+    "ignore::DeprecationWarning",
+]

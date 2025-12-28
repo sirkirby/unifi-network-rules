@@ -1,10 +1,12 @@
-from typing import Self
 from dataclasses import dataclass
+from typing import Self
 
 from aiounifi.models.api import ApiRequestV2
 from aiounifi.models.traffic_route import (
-    TypedTrafficRoute as AioUnifiTypedTrafficRoute,
     TrafficRoute as AioUnifiTrafficRoute,
+)
+from aiounifi.models.traffic_route import (
+    TypedTrafficRoute as AioUnifiTypedTrafficRoute,
 )
 
 
@@ -25,7 +27,7 @@ class TrafficRouteKillSwitchRequest(ApiRequestV2):
         # Make a copy of the raw data to avoid modifying the original
         updated_route = traffic_route.copy()
         updated_route["kill_switch_enabled"] = enable_kill_switch
-        
+
         return cls(
             method="put",
             path=f"/trafficroutes/{updated_route['_id']}",
@@ -49,4 +51,4 @@ class TrafficRoute(AioUnifiTrafficRoute):
     @property
     def kill_switch_enabled(self) -> bool:
         """Return if kill switch is enabled."""
-        return self.raw.get("kill_switch_enabled", False) 
+        return self.raw.get("kill_switch_enabled", False)

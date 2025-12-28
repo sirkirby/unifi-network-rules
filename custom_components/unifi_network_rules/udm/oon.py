@@ -1,13 +1,13 @@
 """Module for UniFi Object-Oriented Network policy operations."""
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..const import (
-    LOGGER,
     API_PATH_OON_POLICIES,  # GET uses plural
-    API_PATH_OON_POLICY_DETAIL,  # PUT/DELETE use singular
     API_PATH_OON_POLICY,  # POST uses singular
+    API_PATH_OON_POLICY_DETAIL,  # PUT/DELETE use singular
+    LOGGER,
 )
 from ..models.oon_policy import OONPolicy
 
@@ -15,7 +15,7 @@ from ..models.oon_policy import OONPolicy
 class OONMixin:
     """Mixin class for Object-Oriented Network policy operations."""
 
-    async def get_oon_policies(self) -> List[OONPolicy]:
+    async def get_oon_policies(self) -> list[OONPolicy]:
         """Get all Object-Oriented Network policies.
 
         Returns:
@@ -126,7 +126,7 @@ class OONMixin:
             LOGGER.error("Failed to toggle OON policy: %s", str(err))
             return False
 
-    async def add_oon_policy(self, policy_data: Dict[str, Any]) -> Optional[OONPolicy]:
+    async def add_oon_policy(self, policy_data: dict[str, Any]) -> OONPolicy | None:
         """Add a new Object-Oriented Network policy.
 
         Args:
@@ -205,4 +205,3 @@ class OONMixin:
         except Exception as err:
             LOGGER.error("Failed to remove OON policy %s: %s", policy_id, str(err))
             return False
-

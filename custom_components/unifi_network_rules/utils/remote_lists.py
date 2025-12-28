@@ -1,11 +1,12 @@
 """Utilities for fetching and parsing curated lists from remote repos."""
+
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 from urllib.parse import urlparse
 
 
-def build_raw_url_candidates(clone_url: str | None, ref: str, filename: str) -> List[str]:
+def build_raw_url_candidates(clone_url: str | None, ref: str, filename: str) -> list[str]:
     """Return candidate raw URLs for common providers.
 
     Supports:
@@ -15,7 +16,7 @@ def build_raw_url_candidates(clone_url: str | None, ref: str, filename: str) -> 
     - Bitbucket.org: https://bitbucket.org/{owner}/{repo}/raw/{ref}/{file}
     - Direct URL in `filename` (http/https) is accepted as-is
     """
-    candidates: List[str] = []
+    candidates: list[str] = []
 
     # If filename is itself a URL, prefer it
     if filename.lower().startswith(("http://", "https://")):
@@ -67,7 +68,7 @@ def build_raw_url_candidates(clone_url: str | None, ref: str, filename: str) -> 
     return candidates
 
 
-def parse_curated_text(content: str) -> Dict[str, Any]:
+def parse_curated_text(content: str) -> dict[str, Any]:
     """Parse curated list text into a payload for firewall group creation.
 
     Format:
@@ -79,8 +80,8 @@ def parse_curated_text(content: str) -> Dict[str, Any]:
     If type is missing, we attempt a basic inference.
     """
     lines = content.splitlines()
-    meta: Dict[str, str] = {}
-    entries: List[str] = []
+    meta: dict[str, str] = {}
+    entries: list[str] = []
     in_header = True
     for raw in lines:
         line = raw.strip()

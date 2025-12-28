@@ -6,6 +6,7 @@ with a modular, maintainable architecture.
 
 All exports maintain backward compatibility with existing imports.
 """
+
 from __future__ import annotations
 
 # Import the main coordinator class for backward compatibility

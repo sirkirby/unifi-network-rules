@@ -29,9 +29,21 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Run tests
+    - name: Lint with Ruff
+      run: ruff check custom_components/
+
+    - name: Run tests with coverage
       run: |
-        pytest
+        pytest --cov=custom_components/unifi_network_rules --cov-report=term-missing --cov-report=xml --cov-fail-under=0
+
+    - name: Coverage Report
+      if: always()
+      run: |
+        echo "## Coverage Summary" >> $GITHUB_STEP_SUMMARY
+        echo "Coverage target: 60% (advisory, non-blocking)" >> $GITHUB_STEP_SUMMARY
+        if [ -f coverage.xml ]; then
+          coverage report --format=markdown >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "See test output for coverage details" >> $GITHUB_STEP_SUMMARY
+        fi
       
     - name: Report Status
       if: always()

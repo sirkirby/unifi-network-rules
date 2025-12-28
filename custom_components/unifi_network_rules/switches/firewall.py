@@ -1,15 +1,16 @@
 """Firewall switches for UniFi Network Rules integration."""
+
 from __future__ import annotations
 
 from typing import Any
 
-from .base import UnifiRuleSwitch
 from ..coordinator import UnifiRuleUpdateCoordinator
+from .base import UnifiRuleSwitch
 
 
 class UnifiFirewallPolicySwitch(UnifiRuleSwitch):
     """Switch to enable/disable a UniFi firewall policy."""
-    
+
     def __init__(
         self,
         coordinator: UnifiRuleUpdateCoordinator,
@@ -25,7 +26,7 @@ class UnifiFirewallPolicySwitch(UnifiRuleSwitch):
 
 class UnifiLegacyFirewallRuleSwitch(UnifiRuleSwitch):
     """Switch to enable/disable a UniFi legacy firewall rule."""
-    
+
     def __init__(
         self,
         coordinator: UnifiRuleUpdateCoordinator,

@@ -1,24 +1,25 @@
 """OON policy switches for UniFi Network Rules integration."""
+
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from homeassistant.core import callback
-from homeassistant.helpers.entity import generate_entity_id
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.entity import generate_entity_id
 
-from .base import UnifiRuleSwitch
 from ..const import SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS
 from ..coordinator import UnifiRuleUpdateCoordinator
 from ..helpers.rule import (
-    get_rule_id,
-    get_child_unique_id,
-    get_child_entity_name,
-    get_child_entity_id,
-    get_object_id,
     extract_descriptive_name,
+    get_child_entity_id,
+    get_child_entity_name,
+    get_child_unique_id,
+    get_object_id,
+    get_rule_id,
 )
+from .base import UnifiRuleSwitch
 
 LOGGER = logging.getLogger(__name__)
 
@@ -78,7 +79,9 @@ class UnifiOONPolicyKillSwitch(UnifiRuleSwitch):
         parent_object_id = get_object_id(rule_data, "oon_policies")
         kill_switch_object_id = get_child_entity_id(parent_object_id, "kill_switch")
         self.entity_id = generate_entity_id(
-            "switch.{}", kill_switch_object_id, hass=coordinator.hass  # OVERRIDE
+            "switch.{}",
+            kill_switch_object_id,
+            hass=coordinator.hass,  # OVERRIDE
         )
 
         # 4. Initialize kill switch state specifically
@@ -90,8 +93,9 @@ class UnifiOONPolicyKillSwitch(UnifiRuleSwitch):
             actual_state = route.get("kill_switch", False)
             self._optimistic_state = actual_state  # Start optimistic state matching actual
             self._optimistic_timestamp = 0
-            LOGGER.debug("KillSwitch %s: Initialized specific state to %s from parent rule data",
-                        self.unique_id, actual_state)
+            LOGGER.debug(
+                "KillSwitch %s: Initialized specific state to %s from parent rule data", self.unique_id, actual_state
+            )
         else:
             LOGGER.warning("KillSwitch %s: Initialized without specific state from rule data.", self.unique_id)
 
@@ -102,8 +106,9 @@ class UnifiOONPolicyKillSwitch(UnifiRuleSwitch):
         # Set icon for kill switch
         self._attr_icon = "mdi:shield-off"
 
-        LOGGER.debug("Finished KillSwitch __init__ for unique_id=%s, entity_id=%s",
-                    self._attr_unique_id, self.entity_id)
+        LOGGER.debug(
+            "Finished KillSwitch __init__ for unique_id=%s, entity_id=%s", self._attr_unique_id, self.entity_id
+        )
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -119,10 +124,12 @@ class UnifiOONPolicyKillSwitch(UnifiRuleSwitch):
         LOGGER.debug("KillSwitch(%s): Delegating coordinator update to base class", self.entity_id or self.unique_id)
         super()._handle_coordinator_update()
 
-    def _get_actual_state_from_rule(self, rule: Any) -> Optional[bool]:
+    def _get_actual_state_from_rule(self, rule: Any) -> bool | None:
         """Helper to get the actual kill switch state from the PARENT rule object."""
         if rule is None:
-            LOGGER.debug("KillSwitch(%s): Cannot get state, parent rule object is None.", self.entity_id or self.unique_id)
+            LOGGER.debug(
+                "KillSwitch(%s): Cannot get state, parent rule object is None.", self.entity_id or self.unique_id
+            )
             return None
 
         # Check if the rule has the route.kill_switch attribute
@@ -132,8 +139,12 @@ class UnifiOONPolicyKillSwitch(UnifiRuleSwitch):
             if state is not None:
                 return bool(state)
 
-        LOGGER.warning("KillSwitch(%s): Cannot determine actual state from parent rule object %s (type: %s)",
-                      self.entity_id or self.unique_id, getattr(rule, 'id', 'N/A'), type(rule).__name__)
+        LOGGER.warning(
+            "KillSwitch(%s): Cannot determine actual state from parent rule object %s (type: %s)",
+            self.entity_id or self.unique_id,
+            getattr(rule, "id", "N/A"),
+            type(rule).__name__,
+        )
         return None  # Return None if state cannot be determined
 
     def _get_current_rule(self) -> Any | None:
@@ -145,16 +156,14 @@ class UnifiOONPolicyKillSwitch(UnifiRuleSwitch):
         try:
             # 1. Validate the kill switch ID format
             kill_switch_id = self._rule_id  # This should be a kill switch ID like "unr_oon_abc_kill_switch"
-            if not kill_switch_id or not kill_switch_id.endswith('_kill_switch'):
-                LOGGER.warning("KillSwitch(%s): Invalid kill switch ID format: %s",
-                              self.entity_id, kill_switch_id)
+            if not kill_switch_id or not kill_switch_id.endswith("_kill_switch"):
+                LOGGER.warning("KillSwitch(%s): Invalid kill switch ID format: %s", self.entity_id, kill_switch_id)
                 return None
 
             # 2. Get the parent unique ID from our stored property
             parent_unique_id = self._linked_parent_id
             if not parent_unique_id:
-                LOGGER.error("KillSwitch(%s): Cannot find parent rule - _linked_parent_id is not set!",
-                            self.entity_id)
+                LOGGER.error("KillSwitch(%s): Cannot find parent rule - _linked_parent_id is not set!", self.entity_id)
                 return None
 
             # 3. Look for the parent rule in oon_policies collection
@@ -180,8 +189,7 @@ class UnifiOONPolicyKillSwitch(UnifiRuleSwitch):
             return parent_rule
 
         except Exception as err:
-            LOGGER.error("KillSwitch(%s): Error finding parent rule: %s",
-                        self.entity_id, err)
+            LOGGER.error("KillSwitch(%s): Error finding parent rule: %s", self.entity_id, err)
             return None
 
     @property
@@ -201,8 +209,7 @@ class UnifiOONPolicyKillSwitch(UnifiRuleSwitch):
             return route.get("kill_switch", False)
 
         # As a last resort, default to False
-        LOGGER.warning("Kill switch %s cannot determine state from rule %s",
-                      self._rule_id, type(current_rule).__name__)
+        LOGGER.warning("Kill switch %s cannot determine state from rule %s", self._rule_id, type(current_rule).__name__)
         return False
 
     @property
@@ -222,7 +229,10 @@ class UnifiOONPolicyKillSwitch(UnifiRuleSwitch):
 
         # Log the availability status, especially if it's False
         if not is_available:
-            LOGGER.debug("KillSwitch(%s): Determined unavailable because parent rule lookup failed.", self.entity_id or self.unique_id)
+            LOGGER.debug(
+                "KillSwitch(%s): Determined unavailable because parent rule lookup failed.",
+                self.entity_id or self.unique_id,
+            )
         else:
             LOGGER.debug("KillSwitch(%s): Determined available (parent rule found).", self.entity_id or self.unique_id)
 
@@ -257,6 +267,7 @@ class UnifiOONPolicyKillSwitch(UnifiRuleSwitch):
             # Get the toggle function from the API client
             # We need to update the policy's route.kill_switch property
             from ..models.oon_policy import OONPolicy
+
             policy_dict = rule.to_api_dict()
             policy_dict["route"]["kill_switch"] = enable
 
@@ -275,11 +286,14 @@ class UnifiOONPolicyKillSwitch(UnifiRuleSwitch):
                         LOGGER.debug("Successfully toggled kill switch for %s", self.name)
                         # Smart Verification Task
                         import asyncio
+
                         async def delayed_verification():
                             await asyncio.sleep(SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS)
                             kill_switch_id = self._rule_id  # The unique ID for the kill switch
                             if self.coordinator.check_and_consume_ha_initiated_operation(kill_switch_id):
-                                LOGGER.warning("Delayed verification for kill switch %s failed. Forcing refresh.", kill_switch_id)
+                                LOGGER.warning(
+                                    "Delayed verification for kill switch %s failed. Forcing refresh.", kill_switch_id
+                                )
                                 await self.coordinator.async_request_refresh()
                             else:
                                 LOGGER.debug("Delayed verification for kill switch %s confirmed.", kill_switch_id)
@@ -307,9 +321,7 @@ class UnifiOONPolicyKillSwitch(UnifiRuleSwitch):
                     self.async_write_ha_state()
 
             # Add the completion callback
-            future.add_done_callback(
-                lambda f: self.hass.async_create_task(handle_operation_complete(f))
-            )
+            future.add_done_callback(lambda f: self.hass.async_create_task(handle_operation_complete(f)))
 
             LOGGER.debug("Successfully queued kill switch toggle operation for rule %s", self._rule_id)
 
@@ -328,4 +340,3 @@ class UnifiOONPolicyKillSwitch(UnifiRuleSwitch):
             self.async_write_ha_state()
 
             raise HomeAssistantError(f"Error toggling kill switch for {self.name}: {error}") from error
-

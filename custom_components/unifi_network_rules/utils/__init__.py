@@ -1,1 +1,1 @@
-"""Utility functions for UniFi Network Rules integration.""" 
+"""Utility functions for UniFi Network Rules integration."""

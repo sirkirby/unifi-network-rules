@@ -1,11 +1,12 @@
 """Port profile switches for UniFi Network Rules integration."""
+
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
-from .base import UnifiRuleSwitch
 from ..coordinator import UnifiRuleUpdateCoordinator
 from ..models.port_profile import PortProfile
+from .base import UnifiRuleSwitch
 
 
 class UnifiPortProfileSwitch(UnifiRuleSwitch):
@@ -26,8 +27,8 @@ class UnifiPortProfileSwitch(UnifiRuleSwitch):
         self._attr_icon = "mdi:ethernet"
 
     @property
-    def extra_state_attributes(self) -> Dict[str, Any]:
-        attrs: Dict[str, Any] = {}
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attrs: dict[str, Any] = {}
         profile = self._get_current_rule()
         if profile and hasattr(profile, "raw"):
             raw = profile.raw

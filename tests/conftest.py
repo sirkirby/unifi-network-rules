@@ -1,6 +1,7 @@
 import pytest
 from homeassistant.core import HomeAssistant
 
+
 @pytest.fixture
 async def hass(event_loop):
     """Fixture to provide a test instance of Home Assistant."""

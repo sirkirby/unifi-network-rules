@@ -1,15 +1,16 @@
 """Static route switches for UniFi Network Rules integration."""
+
 from __future__ import annotations
 
 from typing import Any
 
-from .base import UnifiRuleSwitch
 from ..coordinator import UnifiRuleUpdateCoordinator
+from .base import UnifiRuleSwitch
 
 
 class UnifiStaticRouteSwitch(UnifiRuleSwitch):
     """Switch to enable/disable a UniFi static route."""
-    
+
     def __init__(
         self,
         coordinator: UnifiRuleUpdateCoordinator,
