@@ -31,7 +31,7 @@ jobs:
 
     - name: Lint with Ruff
       run: |
-        ruff check custom_components/
+        ruff check custom_components/ --config ruff.toml
 
     - name: Run tests with coverage
       run: |

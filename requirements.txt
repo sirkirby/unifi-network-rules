@@ -10,4 +10,4 @@ pytest-aiohttp
 pytest-cov
 coverage
 freezegun==1.1.0
-ruff
+ruff>=0.14.0
