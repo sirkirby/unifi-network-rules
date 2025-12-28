@@ -31,14 +31,16 @@ jobs:
 
     - name: Lint with Ruff
       run: |
-        echo "=== Ruff version ==="
-        ruff --version
-        echo "=== pyproject.toml exists ==="
-        cat pyproject.toml | head -20
-        echo "=== Running ruff ==="
-        ruff check custom_components/ --verbose || true
-        echo "=== Running with output-format ==="
-        ruff check custom_components/ --output-format=text
+        echo "Ruff version: $(ruff --version)"
+        echo "Python version: $(python --version)"
+        echo "Working directory: $(pwd)"
+        echo "Files in directory:"
+        ls -la
+        echo "pyproject.toml content:"
+        cat pyproject.toml
+        echo ""
+        echo "Running ruff check..."
+        ruff check custom_components/
 
     - name: Run tests with coverage
       run: |
