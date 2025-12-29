@@ -1,13 +1,14 @@
 """OON policy model for UniFi Network Rules integration."""
+
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 
 class OONPolicy:
     """Representation of a UniFi Object-Oriented Network policy."""
 
-    def __init__(self, data: Dict[str, Any]) -> None:
+    def __init__(self, data: dict[str, Any]) -> None:
         """Initialize OON policy from raw API data."""
         self.raw = data.copy()  # Store raw data for API updates
 
@@ -29,15 +30,11 @@ class OONPolicy:
         """Get the policy ID."""
         return self._id or ""
 
-    def to_api_dict(self) -> Dict[str, Any]:
+    def to_api_dict(self) -> dict[str, Any]:
         """Convert to dictionary for API updates."""
         return dict(self.raw)
 
     def has_kill_switch(self) -> bool:
         """Check if policy has routing enabled with kill switch."""
         route = self.route
-        return (
-            route.get("enabled", False) is True
-            and isinstance(route.get("kill_switch"), bool)
-        )
-
+        return route.get("enabled", False) is True and isinstance(route.get("kill_switch"), bool)

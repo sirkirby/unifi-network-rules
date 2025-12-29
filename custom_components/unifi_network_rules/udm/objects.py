@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from ..const import (
-    LOGGER,
-    API_PATH_FIREWALL_GROUPS,
     API_PATH_FIREWALL_GROUP_DETAIL,
+    API_PATH_FIREWALL_GROUPS,
+    LOGGER,
 )
 from ..models.network_object import NetworkObject
 
@@ -23,24 +23,25 @@ class ObjectsMixin:
                 for grp in data["data"]:
                     grp_type = grp.get("group_type", "address-group")
                     mapped_type = (
-                        "port-group" if grp_type == "port-group" else
-                        "ipv6-address-group" if grp_type == "ipv6-address-group" else
-                        "address-group"
+                        "port-group"
+                        if grp_type == "port-group"
+                        else "ipv6-address-group"
+                        if grp_type == "ipv6-address-group"
+                        else "address-group"
                     )
                     member_type = (
-                        "port" if mapped_type == "port-group" else
-                        "ipv6-address" if mapped_type == "ipv6-address-group" else
-                        "ipv4-address"
+                        "port"
+                        if mapped_type == "port-group"
+                        else "ipv6-address"
+                        if mapped_type == "ipv6-address-group"
+                        else "ipv4-address"
                     )
                     mapped = {
                         "_id": grp.get("_id"),
                         "name": grp.get("name"),
                         "description": grp.get("name", ""),
                         "type": mapped_type,
-                        "members": [
-                            {"type": member_type, "value": str(m)}
-                            for m in grp.get("group_members", [])
-                        ],
+                        "members": [{"type": member_type, "value": str(m)} for m in grp.get("group_members", [])],
                     }
                     items.append(NetworkObject(mapped))
             return items
@@ -48,14 +49,16 @@ class ObjectsMixin:
             LOGGER.error("Failed to get firewall groups: %s", err)
             return []
 
-    async def add_object(self, payload: dict[str, Any]) -> Optional[NetworkObject]:
+    async def add_object(self, payload: dict[str, Any]) -> NetworkObject | None:
         """Create a firewall group from a network object payload."""
         try:
             obj_type = payload.get("type", "address-group")
             group_type = (
-                "port-group" if obj_type == "port-group" else
-                "ipv6-address-group" if obj_type == "ipv6-address-group" else
-                "address-group"
+                "port-group"
+                if obj_type == "port-group"
+                else "ipv6-address-group"
+                if obj_type == "ipv6-address-group"
+                else "address-group"
             )
             # normalize members to strings (ports may be ints/ranges encoded as strings)
             group_members = [str(m.get("value")) for m in payload.get("members", []) if isinstance(m, dict)]
@@ -75,10 +78,7 @@ class ObjectsMixin:
                         "name": created.get("name"),
                         "description": created.get("name", ""),
                         "type": "address-group",
-                        "members": [
-                            {"type": "ipv4-address", "value": m}
-                            for m in created.get("group_members", [])
-                        ],
+                        "members": [{"type": "ipv4-address", "value": m} for m in created.get("group_members", [])],
                     }
                     return NetworkObject(mapped)
             return None
@@ -93,9 +93,11 @@ class ObjectsMixin:
             object_id = payload.get("_id") or payload.get("id")
             obj_type = payload.get("type", "address-group")
             group_type = (
-                "port-group" if obj_type == "port-group" else
-                "ipv6-address-group" if obj_type == "ipv6-address-group" else
-                "address-group"
+                "port-group"
+                if obj_type == "port-group"
+                else "ipv6-address-group"
+                if obj_type == "ipv6-address-group"
+                else "address-group"
             )
             group_members = [str(m.get("value")) for m in payload.get("members", []) if isinstance(m, dict)]
             group_payload = {
@@ -111,6 +113,7 @@ class ObjectsMixin:
         except Exception as err:
             LOGGER.error("Failed to update firewall group: %s", err)
             return False
+
     async def remove_object(self, object_id: str) -> bool:
         """Delete a network object (v2)."""
         try:
@@ -121,4 +124,3 @@ class ObjectsMixin:
         except Exception as err:
             LOGGER.error("Failed to remove firewall group %s: %s", object_id, err)
             return False
-

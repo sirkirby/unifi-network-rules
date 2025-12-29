@@ -7,7 +7,7 @@ and computed enabled state that we use for switch entities.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any
 
 
 @dataclass
@@ -18,7 +18,7 @@ class PortProfile:
     when it has a native network assigned and management VLAN is not blocked.
     """
 
-    raw: Dict[str, Any]
+    raw: dict[str, Any]
 
     @property
     def id(self) -> str:
@@ -35,6 +35,6 @@ class PortProfile:
         # Treat as enabled if a native network is configured and mgmt VLANs are not blocked
         return bool(native) and tagged_mgmt not in {"block_all", "block-custom"}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Return a shallow copy of the raw dict suitable for updates."""
         return dict(self.raw)

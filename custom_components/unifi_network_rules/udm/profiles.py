@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from ..const import (
-    LOGGER,
-    API_PATH_PORT_PROFILES,
     API_PATH_PORT_PROFILE_DETAIL,
-    API_PATH_WLAN_RATE_PROFILES,
-    API_PATH_WLAN_RATE_PROFILE_DETAIL,
-    API_PATH_RADIUS_PROFILES,
+    API_PATH_PORT_PROFILES,
     API_PATH_RADIUS_PROFILE_DETAIL,
-    API_PATH_WAN_SLA_PROFILES,
+    API_PATH_RADIUS_PROFILES,
     API_PATH_WAN_SLA_PROFILE_DETAIL,
+    API_PATH_WAN_SLA_PROFILES,
+    API_PATH_WLAN_RATE_PROFILE_DETAIL,
+    API_PATH_WLAN_RATE_PROFILES,
+    LOGGER,
 )
 
 
@@ -27,7 +27,7 @@ class PortProfilesMixin:
             LOGGER.error("Failed to get port profiles: %s", str(err))
             return []
 
-    async def add_port_profile(self, payload: dict[str, Any]) -> Optional[dict[str, Any]]:
+    async def add_port_profile(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         try:
             request = self.create_api_request("POST", API_PATH_PORT_PROFILES, data=payload)
             data = await self.controller.request(request)
@@ -46,6 +46,7 @@ class PortProfilesMixin:
         except Exception as err:
             LOGGER.error("Failed to update port profile: %s", str(err))
             return False
+
     async def remove_port_profile(self, profile_id: str) -> bool:
         try:
             path = API_PATH_PORT_PROFILE_DETAIL.format(profile_id=profile_id)
@@ -56,7 +57,9 @@ class PortProfilesMixin:
             LOGGER.error("Failed to remove port profile %s: %s", profile_id, str(err))
             return False
 
-    async def toggle_port_profile(self, profile: dict[str, Any] | Any, native_networkconf_id: Optional[str] = None) -> bool:
+    async def toggle_port_profile(
+        self, profile: dict[str, Any] | Any, native_networkconf_id: str | None = None
+    ) -> bool:
         """Enable/disable a port profile by toggling native network assignment.
 
         Behavior follows sub-issue #99 example payloads: enabling ensures
@@ -97,7 +100,9 @@ class PortProfilesMixin:
                         # Prefer LAN/corporate
                         preferred = next((n for n in networks if getattr(n, "purpose", "") == "corporate"), None)
                         if not preferred:
-                            preferred = next((n for n in networks if getattr(n, "name", "").upper() in {"LAN", "DEFAULT"}), None)
+                            preferred = next(
+                                (n for n in networks if getattr(n, "name", "").upper() in {"LAN", "DEFAULT"}), None
+                            )
                         if preferred:
                             desired_native = preferred.id
                     except Exception:
@@ -128,7 +133,7 @@ class WlanRateProfilesMixin:
             LOGGER.error("Failed to get WLAN rate profiles: %s", str(err))
             return []
 
-    async def add_wlan_rate_profile(self, payload: dict[str, Any]) -> Optional[dict[str, Any]]:
+    async def add_wlan_rate_profile(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         try:
             request = self.create_api_request("POST", API_PATH_WLAN_RATE_PROFILES, data=payload, is_v2=True)
             data = await self.controller.request(request)
@@ -169,7 +174,7 @@ class RadiusProfilesMixin:
             LOGGER.error("Failed to get RADIUS profiles: %s", str(err))
             return []
 
-    async def add_radius_profile(self, payload: dict[str, Any]) -> Optional[dict[str, Any]]:
+    async def add_radius_profile(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         try:
             request = self.create_api_request("POST", API_PATH_RADIUS_PROFILES, data=payload)
             data = await self.controller.request(request)
@@ -210,7 +215,7 @@ class WanSlaProfilesMixin:
             LOGGER.error("Failed to get WAN SLA profiles: %s", str(err))
             return []
 
-    async def add_wan_sla_profile(self, payload: dict[str, Any]) -> Optional[dict[str, Any]]:
+    async def add_wan_sla_profile(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         try:
             request = self.create_api_request("POST", API_PATH_WAN_SLA_PROFILES, data=payload, is_v2=True)
             data = await self.controller.request(request)
@@ -239,4 +244,3 @@ class WanSlaProfilesMixin:
         except Exception as err:
             LOGGER.error("Failed to remove WAN SLA profile %s: %s", profile_id, str(err))
             return False
-

@@ -33,4 +33,4 @@ CONF_REMOTE_FILES = "files"
 CONF_REMOTE_URLS = "urls"
 
 # Signal for entity cleanup
-SIGNAL_ENTITIES_CLEANUP = "unifi_network_rules_cleanup" 
+SIGNAL_ENTITIES_CLEANUP = "unifi_network_rules_cleanup"

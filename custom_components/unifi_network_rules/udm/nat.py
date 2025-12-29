@@ -1,13 +1,11 @@
 """Module for UniFi NAT rule operations (V2 API)."""
+
 from __future__ import annotations
 
-from typing import List
 from ..const import LOGGER
 from ..constants.api_endpoints import (
-    API_ENDPOINT_NAT_RULES,
-    API_ENDPOINT_NAT_RULE_DETAIL,
-    API_PATH_NAT_RULES,
     API_PATH_NAT_RULE_DETAIL,
+    API_PATH_NAT_RULES,
 )
 from ..models.nat_rule import NATRule
 
@@ -15,7 +13,7 @@ from ..models.nat_rule import NATRule
 class NATMixin:
     """Mixin class for NAT rule operations using UniFi V2 API."""
 
-    async def get_nat_rules(self, include_predefined: bool = False) -> List[NATRule]:
+    async def get_nat_rules(self, include_predefined: bool = False) -> list[NATRule]:
         """Fetch NAT rules and return typed NATRule objects."""
         try:
             # Build request via base API helper if available
@@ -26,7 +24,7 @@ class NATMixin:
                 # Fallback direct call without relying on site attribute (for isolated tests)
                 response = await self.controller.request({"method": "GET", "path": API_PATH_NAT_RULES})
 
-            result: List[NATRule] = []
+            result: list[NATRule] = []
             if response and "data" in response:
                 for item in response["data"]:
                     rule = NATRule(item)
@@ -72,5 +70,3 @@ class NATMixin:
         except Exception as err:
             LOGGER.error("Failed to toggle NAT rule: %s", err)
             return False
-
-

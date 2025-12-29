@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any
 
 
 @dataclass
 class NetworkConf:
-    raw: Dict[str, Any]
+    raw: dict[str, Any]
 
     @property
     def id(self) -> str:

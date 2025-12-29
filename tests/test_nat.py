@@ -1,12 +1,14 @@
 """Tests for NAT rules support (model, API mixin, switch, mappings)."""
-import pytest
+
 from unittest.mock import AsyncMock, Mock
 
+import pytest
+
 from custom_components.unifi_network_rules.models.nat_rule import NATRule
+from custom_components.unifi_network_rules.switch import UnifiNATRuleSwitch
 from custom_components.unifi_network_rules.udm.nat import NATMixin
 from custom_components.unifi_network_rules.unified_change_detector import UnifiedChangeDetector
 from custom_components.unifi_network_rules.unified_trigger import VALID_CHANGE_TYPES
-from custom_components.unifi_network_rules.switch import UnifiNATRuleSwitch
 
 
 @pytest.fixture
@@ -116,6 +118,7 @@ class TestUnifiNATRuleSwitch:
     def test_icon_selection_by_type(self, nat_rule_payload):
         # SNAT
         from custom_components.unifi_network_rules.coordinator import UnifiRuleUpdateCoordinator
+
         coordinator = Mock(spec=UnifiRuleUpdateCoordinator)
         coordinator.hass = Mock()
         coordinator.api = Mock()
@@ -130,5 +133,3 @@ class TestUnifiNATRuleSwitch:
         dnat_rule = NATRule(dnat)
         switch2 = UnifiNATRuleSwitch(coordinator, dnat_rule, "nat_rules")
         assert switch2._attr_icon == "mdi:swap-vertical"
-
-

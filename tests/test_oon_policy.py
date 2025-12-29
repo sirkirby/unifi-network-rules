@@ -1,11 +1,14 @@
 """Tests for OON policy support (model, API mixin, switch, mappings)."""
-import pytest
+
 from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 from custom_components.unifi_network_rules.models.oon_policy import OONPolicy
 from custom_components.unifi_network_rules.udm.oon import OONMixin
 from custom_components.unifi_network_rules.unified_change_detector import UnifiedChangeDetector
 from custom_components.unifi_network_rules.unified_trigger import VALID_CHANGE_TYPES
+
 # Note: Switch imports commented out - require Home Assistant to be installed
 # from custom_components.unifi_network_rules.switches.oon_policy import (
 #     UnifiOONPolicySwitch,
@@ -143,7 +146,7 @@ class TestOONMixin:
         mixin.controller = AsyncMock()
         # Mock create_api_request to return a request dict
         mixin.create_api_request = Mock(return_value={"method": "GET", "path": "/test"})
-        
+
         response_data = {
             "data": [
                 {"_id": "test1", "name": "Policy 1", "enabled": True},
@@ -151,7 +154,7 @@ class TestOONMixin:
             ]
         }
         mixin.controller.request = AsyncMock(return_value=response_data)
-        
+
         policies = await mixin.get_oon_policies()
         assert len(policies) == 2
         assert isinstance(policies[0], OONPolicy)
@@ -165,7 +168,7 @@ class TestOONMixin:
         mixin.controller = AsyncMock()
         mixin.create_api_request = Mock(return_value={"method": "GET", "path": "/test"})
         mixin.controller.request = AsyncMock(side_effect=Exception("404 Not Found"))
-        
+
         policies = await mixin.get_oon_policies()
         assert policies == []
         assert isinstance(policies, list)
@@ -177,7 +180,7 @@ class TestOONMixin:
         mixin.controller = AsyncMock()
         mixin.create_api_request = Mock(return_value={"method": "PUT", "path": "/test"})
         mixin.controller.request = AsyncMock(return_value={})
-        
+
         policy = OONPolicy(oon_policy_payload)
         result = await mixin.update_oon_policy(policy)
         assert result is True
@@ -189,7 +192,7 @@ class TestOONMixin:
         mixin.controller = AsyncMock()
         mixin.create_api_request = Mock(return_value={"method": "PUT", "path": "/test"})
         mixin.controller.request = AsyncMock(return_value={})
-        
+
         policy = OONPolicy(oon_policy_payload)
         result = await mixin.toggle_oon_policy(policy)
         assert result is True
@@ -203,7 +206,7 @@ class TestOONMixin:
         mixin = OONMixin()
         mixin.controller = AsyncMock()
         mixin.create_api_request = Mock(return_value={"method": "POST", "path": "/test"})
-        
+
         # API may return data as dict or list
         response_data = {
             "data": {
@@ -213,7 +216,7 @@ class TestOONMixin:
             }
         }
         mixin.controller.request = AsyncMock(return_value=response_data)
-        
+
         policy_data = {"name": "New Policy", "enabled": True}
         policy = await mixin.add_oon_policy(policy_data)
         assert policy is not None
@@ -226,17 +229,19 @@ class TestOONMixin:
         mixin = OONMixin()
         mixin.controller = AsyncMock()
         mixin.create_api_request = Mock(return_value={"method": "POST", "path": "/test"})
-        
+
         # Some APIs return data as a list
         response_data = {
-            "data": [{
-                "_id": "new456",
-                "name": "New Policy List",
-                "enabled": True,
-            }]
+            "data": [
+                {
+                    "_id": "new456",
+                    "name": "New Policy List",
+                    "enabled": True,
+                }
+            ]
         }
         mixin.controller.request = AsyncMock(return_value=response_data)
-        
+
         policy_data = {"name": "New Policy List", "enabled": True}
         policy = await mixin.add_oon_policy(policy_data)
         assert policy is not None
@@ -250,7 +255,7 @@ class TestOONMixin:
         mixin.controller = AsyncMock()
         mixin.create_api_request = Mock(return_value={"method": "DELETE", "path": "/test"})
         mixin.controller.request = AsyncMock(return_value=None)  # 204 No Content
-        
+
         result = await mixin.remove_oon_policy("test123")
         assert result is True
 
@@ -267,4 +272,3 @@ class TestOONPolicyIntegration:
         detector = UnifiedChangeDetector(Mock(), Mock())
         assert "oon_policies" in detector._rule_type_mapping
         assert detector._rule_type_mapping["oon_policies"] == "oon_policy"
-

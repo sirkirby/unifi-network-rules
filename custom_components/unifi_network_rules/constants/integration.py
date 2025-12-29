@@ -1,4 +1,5 @@
 """Integration constants for UniFi Network Rules."""
+
 from __future__ import annotations
 
 from typing import Final
@@ -29,3 +30,6 @@ MAX_FAILED_ATTEMPTS: Final = 5
 MIN_REQUEST_INTERVAL: Final = 2.0
 STATE_VERIFICATION_SLEEP_SECONDS: Final = 2
 SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS: Final = 20
+# Must be > SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS + typical API response time
+# to prevent cleanup racing with delayed verification (see issue #136)
+HA_INITIATED_OPERATION_TIMEOUT_SECONDS: Final = 30

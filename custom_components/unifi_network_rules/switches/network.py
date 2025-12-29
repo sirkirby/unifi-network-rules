@@ -1,18 +1,19 @@
 """Network switches for UniFi Network Rules integration."""
+
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from homeassistant.exceptions import HomeAssistantError
 
-from .base import UnifiRuleSwitch
 from ..coordinator import UnifiRuleUpdateCoordinator
 from ..models.network import NetworkConf
+from .base import UnifiRuleSwitch
 
 
 class UnifiWlanSwitch(UnifiRuleSwitch):
     """Switch to enable/disable a UniFi wireless network."""
-    
+
     def __init__(
         self,
         coordinator: UnifiRuleUpdateCoordinator,
@@ -68,8 +69,8 @@ class UnifiNetworkSwitch(UnifiRuleSwitch):
         future.add_done_callback(lambda f: self.hass.async_create_task(handle_operation_complete(f)))
 
     @property
-    def extra_state_attributes(self) -> Dict[str, Any]:
-        attrs: Dict[str, Any] = {}
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attrs: dict[str, Any] = {}
         net = self._get_current_rule()
         if net and hasattr(net, "raw"):
             raw = net.raw

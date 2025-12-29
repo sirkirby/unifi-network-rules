@@ -4,45 +4,47 @@ This is the main coordinator class that orchestrates data fetching, entity manag
 authentication, and state tracking through dedicated modules. It replaces the monolithic
 coordinator with a clean, modular architecture while maintaining full backward compatibility.
 """
+
 from __future__ import annotations
 
-from datetime import timedelta
 import asyncio
-from typing import Any, Dict, List, Optional, Set
+from datetime import timedelta
+from typing import Any
 
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.const import Platform
+from aiounifi.models.device import Device
+from aiounifi.models.firewall_policy import FirewallPolicy
+from aiounifi.models.firewall_zone import FirewallZone
+from aiounifi.models.port_forward import PortForward
 
 # Import aiounifi models for type hints
 from aiounifi.models.traffic_route import TrafficRoute
-from aiounifi.models.firewall_policy import FirewallPolicy
 from aiounifi.models.traffic_rule import TrafficRule
-from aiounifi.models.port_forward import PortForward
-from aiounifi.models.firewall_zone import FirewallZone
 from aiounifi.models.wlan import Wlan
-from aiounifi.models.device import Device
+from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 # Import our modules and models
-from ..const import DOMAIN, LOGGER, DEFAULT_UPDATE_INTERVAL, LOG_TRIGGERS
-from ..udm import UDMAPI
+from ..const import DEFAULT_UPDATE_INTERVAL, DOMAIN, LOG_TRIGGERS, LOGGER
+from ..constants.integration import HA_INITIATED_OPERATION_TIMEOUT_SECONDS
 from ..models.firewall_rule import FirewallRule
-from ..models.qos_rule import QoSRule
-from ..models.vpn_config import VPNConfig
-from ..models.port_profile import PortProfile
-from ..models.network import NetworkConf
-from ..models.static_route import StaticRoute
 from ..models.nat_rule import NATRule
+from ..models.network import NetworkConf
 from ..models.oon_policy import OONPolicy
-from ..smart_polling import SmartPollingManager, SmartPollingConfig
+from ..models.port_profile import PortProfile
+from ..models.qos_rule import QoSRule
+from ..models.static_route import StaticRoute
+from ..models.vpn_config import VPNConfig
+from ..smart_polling import SmartPollingConfig, SmartPollingManager
+from ..udm import UDMAPI
 from ..unified_change_detector import UnifiedChangeDetector
+from .auth_manager import CoordinatorAuthManager
 
 # Import coordination modules
 from .data_fetcher import CoordinatorDataFetcher
 from .entity_manager import CoordinatorEntityManager
-from .auth_manager import CoordinatorAuthManager
 from .state_manager import CoordinatorStateManager
 
 # Fallback scan interval
@@ -57,12 +59,12 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
     """UniFi Network Rules API Coordinator with modular architecture."""
 
     def __init__(
-        self, 
-        hass: HomeAssistant, 
-        api: UDMAPI, 
+        self,
+        hass: HomeAssistant,
+        api: UDMAPI,
         update_interval: int = DEFAULT_UPDATE_INTERVAL,
-        platforms: Optional[List[Platform]] = None,
-        smart_polling_config: Optional[Dict[str, Any]] = None,
+        platforms: list[Platform] | None = None,
+        smart_polling_config: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the coordinator with modular components."""
         super().__init__(
@@ -74,53 +76,53 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
 
         # Keep a reference to the API
         self.api = api
-        
+
         # Initialize config_entry to None - it will be looked up when needed
         self.config_entry = None
-        
+
         # Initialize coordination modules
         self.data_fetcher = CoordinatorDataFetcher(api, hass, self)
         self.entity_manager = CoordinatorEntityManager(hass, self)
         self.auth_manager = CoordinatorAuthManager(hass, api)
         self.state_manager = CoordinatorStateManager(hass, self)
-        
+
         # Initialize Smart Polling Manager
         polling_config = SmartPollingConfig(
-            base_interval=smart_polling_config.get('base_interval', 300) if smart_polling_config else 300,
-            active_interval=smart_polling_config.get('active_interval', 30) if smart_polling_config else 30,
-            realtime_interval=smart_polling_config.get('realtime_interval', 10) if smart_polling_config else 10,
-            activity_timeout=smart_polling_config.get('activity_timeout', 120) if smart_polling_config else 120,
-            debounce_seconds=smart_polling_config.get('debounce_seconds', 10) if smart_polling_config else 10,
-            optimistic_timeout=smart_polling_config.get('optimistic_timeout', 15) if smart_polling_config else 15,
+            base_interval=smart_polling_config.get("base_interval", 300) if smart_polling_config else 300,
+            active_interval=smart_polling_config.get("active_interval", 30) if smart_polling_config else 30,
+            realtime_interval=smart_polling_config.get("realtime_interval", 10) if smart_polling_config else 10,
+            activity_timeout=smart_polling_config.get("activity_timeout", 120) if smart_polling_config else 120,
+            debounce_seconds=smart_polling_config.get("debounce_seconds", 10) if smart_polling_config else 10,
+            optimistic_timeout=smart_polling_config.get("optimistic_timeout", 15) if smart_polling_config else 15,
         )
         self.smart_polling = SmartPollingManager(self, polling_config)
-        
+
         # Initialize Unified Change Detector
         self.change_detector = UnifiedChangeDetector(hass, self)
-        
+
         # Update lock - prevent simultaneous updates
         self._update_lock = asyncio.Lock()
 
         # Track entities we added or removed (by unique ID)
-        self.known_unique_ids: Set[str] = set()
-        
+        self.known_unique_ids: set[str] = set()
+
         # Rule collections - maintained for backward compatibility
-        self.port_forwards: List[PortForward] = []
-        self.traffic_routes: List[TrafficRoute] = []
-        self.firewall_policies: List[FirewallPolicy] = []
-        self.traffic_rules: List[TrafficRule] = []
-        self.static_routes: List[StaticRoute] = []
-        self.legacy_firewall_rules: List[FirewallRule] = []
-        self.firewall_zones: List[FirewallZone] = []
-        self.wlans: List[Wlan] = []
-        self.qos_rules: List[QoSRule] = []
-        self.vpn_clients: List[VPNConfig] = []
-        self.vpn_servers: List[VPNConfig] = []
-        self.devices: List[Device] = []
-        self.port_profiles: List[PortProfile] = []
-        self.networks: List[NetworkConf] = []
-        self.nat_rules: List[NATRule] = []
-        self.oon_policies: List[OONPolicy] = []
+        self.port_forwards: list[PortForward] = []
+        self.traffic_routes: list[TrafficRoute] = []
+        self.firewall_policies: list[FirewallPolicy] = []
+        self.traffic_rules: list[TrafficRule] = []
+        self.static_routes: list[StaticRoute] = []
+        self.legacy_firewall_rules: list[FirewallRule] = []
+        self.firewall_zones: list[FirewallZone] = []
+        self.wlans: list[Wlan] = []
+        self.qos_rules: list[QoSRule] = []
+        self.vpn_clients: list[VPNConfig] = []
+        self.vpn_servers: list[VPNConfig] = []
+        self.devices: list[Device] = []
+        self.port_profiles: list[PortProfile] = []
+        self.networks: list[NetworkConf] = []
+        self.nat_rules: list[NATRule] = []
+        self.oon_policies: list[OONPolicy] = []
 
         # For dynamic entity creation
         self.async_add_entities_callback: AddEntitiesCallback | None = None
@@ -134,25 +136,29 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
         self.webhook_registered = False
 
     # Backward compatibility methods - delegate to auth manager
-    def register_ha_initiated_operation(self, rule_id: str, entity_id: str, change_type: str = "modified", timeout: int = 15) -> None:
+    def register_ha_initiated_operation(
+        self, rule_id: str, entity_id: str, change_type: str = "modified",
+        timeout: int = HA_INITIATED_OPERATION_TIMEOUT_SECONDS
+    ) -> None:
         """Register that a rule change was initiated from HA."""
         self.auth_manager.register_ha_initiated_operation(rule_id, entity_id, change_type, timeout)
-        
+
         # Register with smart polling system for debounced refresh
-        self.hass.async_create_task(
-            self.smart_polling.register_entity_change(entity_id, change_type)
-        )
-        
+        self.hass.async_create_task(self.smart_polling.register_entity_change(entity_id, change_type))
+
     def check_and_consume_ha_initiated_operation(self, rule_id: str) -> bool:
         """Check if a rule change was HA-initiated and consume the flag."""
         return self.auth_manager.check_and_consume_ha_initiated_operation(rule_id)
 
-    def fire_device_trigger_via_dispatcher(self, device_id: str, device_name: str, change_type: str, old_state: Any = None, new_state: Any = None) -> None:
+    def fire_device_trigger_via_dispatcher(
+        self, device_id: str, device_name: str, change_type: str, old_state: Any = None, new_state: Any = None
+    ) -> None:
         """Fire device_changed triggers using Home Assistant's dispatcher pattern."""
         if LOG_TRIGGERS:
-            LOGGER.info("🔥 COORDINATOR: Dispatching device trigger for %s (%s): %s", 
-                       device_name, device_id, change_type)
-        
+            LOGGER.info(
+                "🔥 COORDINATOR: Dispatching device trigger for %s (%s): %s", device_name, device_id, change_type
+            )
+
         # Prepare trigger data
         trigger_data = {
             "device_id": device_id,
@@ -160,35 +166,35 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             "change_type": change_type,
             "old_state": old_state,
             "new_state": new_state,
-            "trigger_type": "device_changed"
+            "trigger_type": "device_changed",
         }
-        
+
         # Dispatch via Home Assistant's dispatcher system
         try:
             entry_id = self.config_entry.entry_id if self.config_entry else "unknown"
             signal_name = f"{DOMAIN}_device_trigger_{entry_id}"
-            
+
             async_dispatcher_send(self.hass, signal_name, trigger_data)
-            
+
             if LOG_TRIGGERS:
                 LOGGER.info("✅ COORDINATOR: Dispatched device trigger signal: %s", signal_name)
-                
+
         except Exception as err:
             LOGGER.error("Error dispatching device trigger: %s", err)
 
     async def register_external_change_detected(self) -> None:
         """Register that external changes were detected during polling."""
         await self.smart_polling.register_external_change_detected()
-        
-    def get_smart_polling_status(self) -> Dict[str, Any]:
+
+    def get_smart_polling_status(self) -> dict[str, Any]:
         """Get smart polling status for diagnostics."""
         return self.smart_polling.get_status()
-    
-    def get_change_detector_status(self) -> Dict[str, Any]:
+
+    def get_change_detector_status(self) -> dict[str, Any]:
         """Get change detector status for diagnostics."""
         return self.change_detector.get_status()
 
-    async def _async_update_data(self) -> Dict[str, List[Any]]:
+    async def _async_update_data(self) -> dict[str, list[Any]]:
         """Fetch data from API endpoint using modular architecture."""
         # Use a lock to prevent concurrent updates
         if self._update_lock.locked():
@@ -197,7 +203,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                 return self.data
             elif self.state_manager._last_successful_data:
                 return self.state_manager._last_successful_data
-        
+
         async with self._update_lock:
             try:
                 # Check if authentication is in progress
@@ -222,7 +228,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
 
                 # Check for API authentication errors
                 api_error_message = getattr(self.api, "_last_error_message", "")
-                if api_error_message and ("401 Unauthorized" in api_error_message or "403 Forbidden" in api_error_message):
+                if api_error_message and (
+                    "401 Unauthorized" in api_error_message or "403 Forbidden" in api_error_message
+                ):
                     LOGGER.warning("Authentication error in API response: %s", api_error_message)
                     async_dispatcher_send(self.hass, f"{DOMAIN}_auth_failure")
 
@@ -239,13 +247,28 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                         LOGGER.info("[UNIFIED_TRIGGERS] Detected %d changes, fired unified triggers", len(changes))
                     else:
                         if is_initial_update:
-                            total_entities = sum(len(rules_data.get(key, [])) for key in [
-                                "port_forwards", "traffic_routes", "static_routes", "nat_rules",
-                                "firewall_policies", "traffic_rules", "legacy_firewall_rules", 
-                                "wlans", "qos_rules", "vpn_clients", "vpn_servers", 
-                                "devices", "networks"
-                            ])
-                            LOGGER.info("[UNIFIED_TRIGGERS] Initial discovery complete: %d entities discovered (no triggers fired)", total_entities)
+                            total_entities = sum(
+                                len(rules_data.get(key, []))
+                                for key in [
+                                    "port_forwards",
+                                    "traffic_routes",
+                                    "static_routes",
+                                    "nat_rules",
+                                    "firewall_policies",
+                                    "traffic_rules",
+                                    "legacy_firewall_rules",
+                                    "wlans",
+                                    "qos_rules",
+                                    "vpn_clients",
+                                    "vpn_servers",
+                                    "devices",
+                                    "networks",
+                                ]
+                            )
+                            LOGGER.info(
+                                "[UNIFIED_TRIGGERS] Initial discovery complete: %d entities discovered (no triggers fired)",
+                                total_entities,
+                            )
                         else:
                             LOGGER.debug("[UNIFIED_TRIGGERS] No changes detected during this update cycle")
                 except Exception as exc:
@@ -276,7 +299,9 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
                         LOGGER.debug("[SMART_POLL] External changes detected during baseline polling cycle")
                         await self.register_external_change_detected()
                     else:
-                        LOGGER.debug("[SMART_POLL] Changes detected during smart polling cycle - not registering as external")
+                        LOGGER.debug(
+                            "[SMART_POLL] Changes detected during smart polling cycle - not registering as external"
+                        )
 
                 return rules_data
 
@@ -294,7 +319,7 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
 
                 raise UpdateFailed(f"Error updating data: {err}") from err
 
-    def _update_internal_collections(self, rules_data: Dict[str, List[Any]]) -> None:
+    def _update_internal_collections(self, rules_data: dict[str, list[Any]]) -> None:
         """Update internal collections for backward compatibility."""
         self.port_forwards = rules_data.get("port_forwards", [])
         self.traffic_routes = rules_data.get("traffic_routes", [])
@@ -315,40 +340,51 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
 
     def _log_collection_counts(self) -> None:
         """Log the counts of all rule collections."""
-        LOGGER.info("Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Static Routes=%d, "
-                   "Firewall Policies=%d, Traffic Rules=%d, NAT Rules=%d, Legacy Firewall Rules=%d, "
-                   "WLANs=%d, QoS Rules=%d, VPN Clients=%d, VPN Servers=%d, Networks=%d, Devices=%d", 
-                   len(self.port_forwards), len(self.traffic_routes), len(self.static_routes),
-                   len(self.firewall_policies), len(self.traffic_rules), len(self.nat_rules),
-                   len(self.legacy_firewall_rules), len(self.wlans), len(self.qos_rules),
-                   len(self.vpn_clients), len(self.vpn_servers), len(self.networks), len(self.devices))
+        LOGGER.info(
+            "Rule collections after refresh: Port Forwards=%d, Traffic Routes=%d, Static Routes=%d, "
+            "Firewall Policies=%d, Traffic Rules=%d, NAT Rules=%d, Legacy Firewall Rules=%d, "
+            "WLANs=%d, QoS Rules=%d, VPN Clients=%d, VPN Servers=%d, Networks=%d, Devices=%d",
+            len(self.port_forwards),
+            len(self.traffic_routes),
+            len(self.static_routes),
+            len(self.firewall_policies),
+            len(self.traffic_rules),
+            len(self.nat_rules),
+            len(self.legacy_firewall_rules),
+            len(self.wlans),
+            len(self.qos_rules),
+            len(self.vpn_clients),
+            len(self.vpn_servers),
+            len(self.networks),
+            len(self.devices),
+        )
 
     # Backward compatibility methods
     async def process_new_entities(self) -> None:
         """Process and create entities that were discovered (backward compatibility)."""
         LOGGER.debug("process_new_entities called - delegating to entity_manager")
         # This method is kept for backward compatibility but functionality is now in entity_manager
-        
+
     @callback
     def shutdown(self) -> None:
         """Clean up resources."""
         pass
-            
+
     async def async_shutdown(self) -> None:
         """Clean up resources asynchronously."""
         # Clean up smart polling first
-        if hasattr(self, 'smart_polling'):
+        if hasattr(self, "smart_polling"):
             await self.smart_polling.cleanup()
-        
+
         # Call the synchronous shutdown method
         self.shutdown()
 
     # Properties for backward compatibility - delegate to state manager
-    @property 
+    @property
     def _initial_update_done(self) -> bool:
         """Check if initial update is done (backward compatibility)."""
         return self.state_manager.is_initial_update_done()
-    
+
     @_initial_update_done.setter
     def _initial_update_done(self, value: bool) -> None:
         """Set initial update done state (backward compatibility)."""
@@ -356,11 +392,11 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
             self.state_manager.mark_initial_update_done()
 
     @property
-    def _last_successful_data(self) -> Dict[str, List[Any]]:
+    def _last_successful_data(self) -> dict[str, list[Any]]:
         """Get last successful data (backward compatibility)."""
         return self.state_manager._last_successful_data
 
-    @_last_successful_data.setter 
-    def _last_successful_data(self, value: Dict[str, List[Any]]) -> None:
+    @_last_successful_data.setter
+    def _last_successful_data(self, value: dict[str, list[Any]]) -> None:
         """Set last successful data (backward compatibility)."""
         self.state_manager._last_successful_data = value

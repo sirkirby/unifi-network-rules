@@ -2,6 +2,7 @@
 
 Represents v2 Objects (addresses, address-groups, ports, etc.).
 """
+
 from __future__ import annotations
 
 from typing import Any, Literal, TypedDict

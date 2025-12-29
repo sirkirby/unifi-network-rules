@@ -1,10 +1,11 @@
 """NAT switches for UniFi Network Rules integration."""
+
 from __future__ import annotations
 
 from typing import Any
 
-from .base import UnifiRuleSwitch
 from ..coordinator import UnifiRuleUpdateCoordinator
+from .base import UnifiRuleSwitch
 
 
 class UnifiNATRuleSwitch(UnifiRuleSwitch):

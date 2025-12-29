@@ -216,3 +216,6 @@ aiounifi/
 
 changelog.md
 test_automations*
+
+# open-agent-kit: Issue raw JSON (local debugging only)
+oak/issue/**/context.json

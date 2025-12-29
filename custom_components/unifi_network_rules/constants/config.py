@@ -1,4 +1,5 @@
 """Configuration constants for UniFi Network Rules."""
+
 from __future__ import annotations
 
 from typing import Final
@@ -64,7 +65,4 @@ ZONE_BASED_FIREWALL_FEATURE: Final = "ZONE_BASED_FIREWALL"
 COOKIE_TOKEN: Final = "TOKEN"
 
 # Headers
-DEFAULT_HEADERS: Final = {
-    "Accept": "application/json",
-    "Content-Type": "application/json"
-}
+DEFAULT_HEADERS: Final = {"Accept": "application/json", "Content-Type": "application/json"}

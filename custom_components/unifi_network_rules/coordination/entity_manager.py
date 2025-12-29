@@ -3,16 +3,15 @@
 Handles entity discovery, creation, deletion, and lifecycle management.
 Consolidates complex entity tracking logic into a focused, maintainable module.
 """
+
 from __future__ import annotations
 
-from typing import Any, Dict, List, Set, TYPE_CHECKING
-import asyncio
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from ..const import DOMAIN, LOGGER
-from ..helpers.rule import get_rule_id, get_child_unique_id
+from ..helpers.rule import get_child_unique_id, get_rule_id
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -21,16 +20,16 @@ if TYPE_CHECKING:
 class CoordinatorEntityManager:
     """Manages entity lifecycle for the coordinator."""
 
-    def __init__(self, hass: "HomeAssistant", coordinator) -> None:
+    def __init__(self, hass: HomeAssistant, coordinator) -> None:
         """Initialize the entity manager.
-        
+
         Args:
             hass: Home Assistant instance
             coordinator: Reference to parent coordinator
         """
         self.hass = hass
         self.coordinator = coordinator
-        
+
         # Define entity type to entity class mapping for discovery
         self._rule_type_entity_map = [
             ("port_forwards", "UnifiPortForwardSwitch"),
@@ -39,7 +38,7 @@ class CoordinatorEntityManager:
             ("traffic_routes", "UnifiTrafficRouteSwitch"),
             ("static_routes", "UnifiStaticRouteSwitch"),
             ("nat_rules", "UnifiNATRuleSwitch"),
-            ("legacy_firewall_rules", "UnifiLegacyFirewallRuleSwitch"), 
+            ("legacy_firewall_rules", "UnifiLegacyFirewallRuleSwitch"),
             ("qos_rules", "UnifiQoSRuleSwitch"),
             ("wlans", "UnifiWlanSwitch"),
             ("port_profiles", "UnifiPortProfileSwitch"),
@@ -49,23 +48,25 @@ class CoordinatorEntityManager:
             ("oon_policies", "UnifiOONPolicySwitch"),
         ]
 
-    async def discover_and_add_new_entities(self, new_data: Dict[str, List[Any]]) -> None:
+    async def discover_and_add_new_entities(self, new_data: dict[str, list[Any]]) -> None:
         """Discover new rules from fetched data and dynamically add corresponding entities.
-        
+
         Args:
             new_data: The newly fetched data from API
         """
-        LOGGER.debug("Entity discovery called - callback set: %s, initial_update_done: %s", 
-                    bool(self.coordinator.async_add_entities_callback), 
-                    self.coordinator._initial_update_done)
-        
+        LOGGER.debug(
+            "Entity discovery called - callback set: %s, initial_update_done: %s",
+            bool(self.coordinator.async_add_entities_callback),
+            self.coordinator._initial_update_done,
+        )
+
         if not self.coordinator.async_add_entities_callback:
             LOGGER.warning("Cannot add entities: callback not set (this is normal during initial setup)")
             return
-        
+
         # Import entity classes dynamically to avoid circular imports
         entity_classes = self._import_entity_classes()
-        
+
         # Gather potential entities from the NEW data
         potential_entities_data = {}  # Map: unique_id -> {rule_data, rule_type, entity_class}
         all_current_unique_ids = set()  # Keep track of all IDs found in this run
@@ -76,20 +77,21 @@ class CoordinatorEntityManager:
             if not entity_class:
                 LOGGER.warning("Could not find entity class: %s", entity_class_name)
                 continue
-                
+
             rules = new_data.get(rule_type_key, [])
             if not rules:
                 continue
-                
+
             await self._process_entity_type_for_discovery(
-                rules, rule_type_key, entity_class, 
-                potential_entities_data, all_current_unique_ids
+                rules, rule_type_key, entity_class, potential_entities_data, all_current_unique_ids
             )
 
         # Special handling for LED-capable devices
         await self._process_devices_for_discovery(
-            new_data.get("devices", []), entity_classes.get("UnifiLedToggleSwitch"),
-            potential_entities_data, all_current_unique_ids
+            new_data.get("devices", []),
+            entity_classes.get("UnifiLedToggleSwitch"),
+            potential_entities_data,
+            all_current_unique_ids,
         )
 
         # Clean up stale known IDs that are no longer present
@@ -99,16 +101,16 @@ class CoordinatorEntityManager:
         await self._create_and_add_entities(potential_entities_data, entity_classes)
 
     async def _process_entity_type_for_discovery(
-        self, 
-        rules: List[Any], 
-        rule_type_key: str, 
+        self,
+        rules: list[Any],
+        rule_type_key: str,
         entity_class: type,
-        potential_entities_data: Dict[str, Dict[str, Any]],
-        all_current_unique_ids: Set[str]
+        potential_entities_data: dict[str, dict[str, Any]],
+        all_current_unique_ids: set[str],
     ) -> None:
         """Process a specific entity type for discovery."""
         entity_registry = async_get_entity_registry(self.hass)
-        
+
         for rule in rules:
             try:
                 rule_id = get_rule_id(rule)
@@ -116,11 +118,11 @@ class CoordinatorEntityManager:
                     continue
 
                 all_current_unique_ids.add(rule_id)
-                
+
                 # Only consider if not already known and not already in HA registry
                 if rule_id not in self.coordinator.known_unique_ids:
                     existing_entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, rule_id)
-                    
+
                     if existing_entity_id:
                         # Entity exists in registry but not in tracking - add to known_unique_ids
                         LOGGER.debug("Found existing entity in registry: %s, adding to tracking", rule_id)
@@ -135,15 +137,17 @@ class CoordinatorEntityManager:
                         LOGGER.debug("Discovered potential new entity: %s (%s)", rule_id, rule_type_key)
 
                 # Special handling for Traffic Routes Kill Switch
-                if rule_type_key == "traffic_routes" and hasattr(rule, 'raw') and "kill_switch_enabled" in rule.raw:
+                if rule_type_key == "traffic_routes" and hasattr(rule, "raw") and "kill_switch_enabled" in rule.raw:
                     kill_switch_id = get_child_unique_id(rule_id, "kill_switch")
                     all_current_unique_ids.add(kill_switch_id)
-                    
+
                     if kill_switch_id not in self.coordinator.known_unique_ids:
                         existing_kill_switch = entity_registry.async_get_entity_id("switch", DOMAIN, kill_switch_id)
-                        
+
                         if existing_kill_switch:
-                            LOGGER.debug("Found existing kill switch in registry: %s, adding to tracking", kill_switch_id)
+                            LOGGER.debug(
+                                "Found existing kill switch in registry: %s, adding to tracking", kill_switch_id
+                            )
                             self.coordinator.known_unique_ids.add(kill_switch_id)
                         else:
                             # Import kill switch class
@@ -154,32 +158,34 @@ class CoordinatorEntityManager:
                                     "rule_type": rule_type_key,
                                     "entity_class": kill_switch_class,
                                 }
-                                LOGGER.debug("Discovered potential new kill switch: %s (for parent %s)", kill_switch_id, rule_id)
-                            
+                                LOGGER.debug(
+                                    "Discovered potential new kill switch: %s (for parent %s)", kill_switch_id, rule_id
+                                )
+
             except Exception as err:
                 LOGGER.warning("Error processing rule during discovery: %s", err)
 
     async def _process_devices_for_discovery(
-        self, 
-        devices: List[Any], 
+        self,
+        devices: list[Any],
         led_switch_class: type,
-        potential_entities_data: Dict[str, Dict[str, Any]],
-        all_current_unique_ids: Set[str]
+        potential_entities_data: dict[str, dict[str, Any]],
+        all_current_unique_ids: set[str],
     ) -> None:
         """Process LED-capable devices for discovery."""
         if not devices or not led_switch_class:
             return
-            
+
         entity_registry = async_get_entity_registry(self.hass)
-        
+
         for device in devices:
             try:
                 device_unique_id = f"unr_device_{device.mac}_led"
                 all_current_unique_ids.add(device_unique_id)
-                
+
                 if device_unique_id not in self.coordinator.known_unique_ids:
                     existing_led_switch = entity_registry.async_get_entity_id("switch", DOMAIN, device_unique_id)
-                    
+
                     if existing_led_switch:
                         LOGGER.debug("Found existing LED switch in registry: %s, adding to tracking", device_unique_id)
                         self.coordinator.known_unique_ids.add(device_unique_id)
@@ -193,7 +199,7 @@ class CoordinatorEntityManager:
             except Exception as err:
                 LOGGER.warning("Error processing device during discovery: %s", err)
 
-    async def _cleanup_stale_known_ids(self, all_current_unique_ids: Set[str]) -> None:
+    async def _cleanup_stale_known_ids(self, all_current_unique_ids: set[str]) -> None:
         """Remove known IDs that are no longer present in current data."""
         stale_known_ids = self.coordinator.known_unique_ids - all_current_unique_ids
         if stale_known_ids:
@@ -204,9 +210,7 @@ class CoordinatorEntityManager:
                 self.hass.async_create_task(self._remove_entity_async(stale_id))
 
     async def _create_and_add_entities(
-        self, 
-        potential_entities_data: Dict[str, Dict[str, Any]], 
-        entity_classes: Dict[str, type]
+        self, potential_entities_data: dict[str, dict[str, Any]], entity_classes: dict[str, type]
     ) -> None:
         """Create and add new entities to Home Assistant."""
         if not potential_entities_data:
@@ -214,7 +218,7 @@ class CoordinatorEntityManager:
             return
 
         LOGGER.debug("Creating instances for %d discovered potential new entities...", len(potential_entities_data))
-        
+
         entities_to_add = []
         added_ids_this_run = set()
         entity_map = {}  # Store created entities to link parents/children
@@ -224,20 +228,23 @@ class CoordinatorEntityManager:
             if unique_id in self.coordinator.known_unique_ids or unique_id in added_ids_this_run:
                 LOGGER.warning("Skipping entity creation for %s as it's already known or added.", unique_id)
                 continue
-                
+
             try:
                 entity_class = data["entity_class"]
                 entity = entity_class(
                     self.coordinator,  # Pass coordinator
                     data["rule_data"],
                     data["rule_type"],
-                    self.coordinator.config_entry.entry_id if self.coordinator.config_entry else None
+                    self.coordinator.config_entry.entry_id if self.coordinator.config_entry else None,
                 )
 
                 # Sanity check unique ID
                 if entity.unique_id != unique_id:
-                    LOGGER.error("Mismatch! Expected unique_id %s but created entity has %s. Skipping.", 
-                               unique_id, entity.unique_id)
+                    LOGGER.error(
+                        "Mismatch! Expected unique_id %s but created entity has %s. Skipping.",
+                        unique_id,
+                        entity.unique_id,
+                    )
                     continue
 
                 entities_to_add.append(entity)
@@ -257,22 +264,22 @@ class CoordinatorEntityManager:
         else:
             LOGGER.debug("No new entities to add dynamically in this cycle.")
 
-    async def _establish_parent_child_links(self, entity_map: Dict[str, Any], entity_classes: Dict[str, type]) -> None:
+    async def _establish_parent_child_links(self, entity_map: dict[str, Any], entity_classes: dict[str, type]) -> None:
         """Establish parent/child relationships for newly created entities."""
         if not entity_map:
             return
-            
+
         LOGGER.debug("Establishing parent/child links for %d newly created entities...", len(entity_map))
-        
+
         kill_switch_class = entity_classes.get("UnifiTrafficRouteKillSwitch")
         route_switch_class = entity_classes.get("UnifiTrafficRouteSwitch")
-        
+
         for unique_id, entity in entity_map.items():
             # If it's a kill switch, find its parent
-            if kill_switch_class and isinstance(entity, kill_switch_class) and hasattr(entity, 'linked_parent_id'):
+            if kill_switch_class and isinstance(entity, kill_switch_class) and hasattr(entity, "linked_parent_id"):
                 parent_id = entity.linked_parent_id
                 parent_entity = entity_map.get(parent_id)
-                
+
                 # If parent wasn't created in this run, look it up in Home Assistant
                 if not parent_entity:
                     parent_entity_id_in_hass = None
@@ -284,11 +291,11 @@ class CoordinatorEntityManager:
                         if parent_entity_state:
                             LOGGER.debug("Found parent entity '%s' state for kill switch", parent_entity_id_in_hass)
                             entity.parent_entity_id = parent_entity_id_in_hass
-                            LOGGER.debug("Linked new child %s to parent state %s", 
-                                       unique_id, parent_entity_id_in_hass)
+                            LOGGER.debug("Linked new child %s to parent state %s", unique_id, parent_entity_id_in_hass)
                         else:
-                            LOGGER.warning("Could not find parent entity state %s for new kill switch %s", 
-                                         parent_id, unique_id)
+                            LOGGER.warning(
+                                "Could not find parent entity state %s for new kill switch %s", parent_id, unique_id
+                            )
 
                 if parent_entity and route_switch_class and isinstance(parent_entity, route_switch_class):
                     parent_entity.register_child_entity(unique_id)
@@ -297,10 +304,10 @@ class CoordinatorEntityManager:
                 elif not parent_entity:
                     LOGGER.warning("Could not find parent entity %s for new kill switch %s", parent_id, unique_id)
 
-    async def _add_entities_to_home_assistant(self, entities_to_add: List[Any], added_ids_this_run: Set[str]) -> None:
+    async def _add_entities_to_home_assistant(self, entities_to_add: list[Any], added_ids_this_run: set[str]) -> None:
         """Add entities to Home Assistant and update tracking."""
         LOGGER.info("Dynamically adding %d new entities to Home Assistant.", len(entities_to_add))
-        
+
         try:
             if self.coordinator.async_add_entities_callback:
                 try:
@@ -311,41 +318,58 @@ class CoordinatorEntityManager:
             else:
                 LOGGER.error("async_add_entities_callback is not set, cannot add entities")
                 return
-                
+
             # Update known IDs after successful addition
             self.coordinator.known_unique_ids.update(added_ids_this_run)
-            LOGGER.debug("Added %d new IDs to known_unique_ids (Total: %d)",
-                         len(added_ids_this_run), len(self.coordinator.known_unique_ids))
-                         
+            LOGGER.debug(
+                "Added %d new IDs to known_unique_ids (Total: %d)",
+                len(added_ids_this_run),
+                len(self.coordinator.known_unique_ids),
+            )
+
         except Exception as add_err:
             LOGGER.error("Failed to dynamically add entities: %s", add_err)
 
-    def check_for_deleted_rules(self, new_data: Dict[str, List[Any]]) -> None:
+    def check_for_deleted_rules(self, new_data: dict[str, list[Any]]) -> None:
         """Check for rules previously known but not in the new data, and trigger their removal.
-        
+
         Args:
             new_data: The current data from API fetch
         """
         # Safety checks - prevent premature deletion
         if not self.coordinator._initial_update_done or not self.coordinator.known_unique_ids:
-            LOGGER.debug("Skipping deletion check: Initial update done=%s, Known IDs=%s",
-                         self.coordinator._initial_update_done, bool(self.coordinator.known_unique_ids))
+            LOGGER.debug(
+                "Skipping deletion check: Initial update done=%s, Known IDs=%s",
+                self.coordinator._initial_update_done,
+                bool(self.coordinator.known_unique_ids),
+            )
             return
 
-        LOGGER.debug("Starting deletion check against known_unique_ids (current size: %d)", 
-                     len(self.coordinator.known_unique_ids))
+        LOGGER.debug(
+            "Starting deletion check against known_unique_ids (current size: %d)",
+            len(self.coordinator.known_unique_ids),
+        )
 
         current_known_ids = set(self.coordinator.known_unique_ids)  # Take a snapshot
 
         # Gather ALL unique IDs present in the new data
         all_current_unique_ids = set()
         all_rule_sources_types = [
-            "port_forwards", "traffic_routes", "static_routes", "nat_rules",
-            "firewall_policies", "traffic_rules", "legacy_firewall_rules",
-            "qos_rules", "wlans", "vpn_clients", "vpn_servers",
-            "port_profiles", "networks",
+            "port_forwards",
+            "traffic_routes",
+            "static_routes",
+            "nat_rules",
+            "firewall_policies",
+            "traffic_rules",
+            "legacy_firewall_rules",
+            "qos_rules",
+            "wlans",
+            "vpn_clients",
+            "vpn_servers",
+            "port_profiles",
+            "networks",
         ]
-        
+
         for rule_type in all_rule_sources_types:
             rules = new_data.get(rule_type, [])
             if rules:
@@ -355,7 +379,11 @@ class CoordinatorEntityManager:
                         if rule_id:
                             all_current_unique_ids.add(rule_id)
                             # Add kill switch ID if applicable
-                            if rule_type == "traffic_routes" and hasattr(rule, 'raw') and "kill_switch_enabled" in rule.raw:
+                            if (
+                                rule_type == "traffic_routes"
+                                and hasattr(rule, "raw")
+                                and "kill_switch_enabled" in rule.raw
+                            ):
                                 kill_switch_id = get_child_unique_id(rule_id, "kill_switch")
                                 all_current_unique_ids.add(kill_switch_id)
                     except Exception as e:
@@ -372,8 +400,12 @@ class CoordinatorEntityManager:
 
         # Find IDs that are known but NOT in the current data
         deleted_unique_ids = current_known_ids - all_current_unique_ids
-        LOGGER.debug("Deletion Check: Known IDs: %d, Current IDs: %d, To Delete: %d",
-                     len(current_known_ids), len(all_current_unique_ids), len(deleted_unique_ids))
+        LOGGER.debug(
+            "Deletion Check: Known IDs: %d, Current IDs: %d, To Delete: %d",
+            len(current_known_ids),
+            len(all_current_unique_ids),
+            len(deleted_unique_ids),
+        )
 
         if deleted_unique_ids:
             self._process_deleted_rules("various_orphaned", deleted_unique_ids, len(self.coordinator.known_unique_ids))
@@ -396,8 +428,10 @@ class CoordinatorEntityManager:
             LOGGER.warning(
                 "Large number of %s deletions detected (%d of %d, %.1f%%). "
                 "This could be an API connection issue rather than actual deletions.",
-                rule_type, len(deleted_ids), total_previous_count,
-                (len(deleted_ids) / total_previous_count) * 100
+                rule_type,
+                len(deleted_ids),
+                total_previous_count,
+                (len(deleted_ids) / total_previous_count) * 100,
             )
             # For major deletions, only process a few at a time to be cautious
             if len(deleted_ids) > 10:
@@ -414,14 +448,14 @@ class CoordinatorEntityManager:
 
     async def _remove_entity_async(self, unique_id: str) -> None:
         """Asynchronously remove an entity by its unique ID using direct registry removal.
-        
+
         Args:
             unique_id: The unique ID of the entity to remove
         """
         LOGGER.debug("Attempting asynchronous removal for unique_id: %s", unique_id)
 
         # 1. Remove from coordinator tracking IMMEDIATELY
-        if hasattr(self.coordinator, 'known_unique_ids'):
+        if hasattr(self.coordinator, "known_unique_ids"):
             self.coordinator.known_unique_ids.discard(unique_id)
             LOGGER.debug("Removed unique_id '%s' from coordinator known_unique_ids.", unique_id)
 
@@ -430,13 +464,16 @@ class CoordinatorEntityManager:
         if not entity_registry:
             LOGGER.warning("Could not get entity registry for removal of %s", unique_id)
             return
-            
+
         entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, unique_id)
 
         # 3. Remove directly from the entity registry if entity_id found
         if entity_id:
-            LOGGER.debug("Found current entity_id '%s' for unique_id '%s'. Proceeding with registry removal.", 
-                       entity_id, unique_id)
+            LOGGER.debug(
+                "Found current entity_id '%s' for unique_id '%s'. Proceeding with registry removal.",
+                entity_id,
+                unique_id,
+            )
 
             # Perform the removal
             if entity_registry.async_get(entity_id):  # Check if it still exists before removing
@@ -450,32 +487,32 @@ class CoordinatorEntityManager:
         else:
             LOGGER.warning("Could not find entity_id for unique_id '%s' in registry. Cannot remove.", unique_id)
 
-    def _import_entity_classes(self) -> Dict[str, type]:
+    def _import_entity_classes(self) -> dict[str, type]:
         """Import entity classes dynamically to avoid circular imports.
-        
+
         Returns:
             Dictionary mapping class names to their actual classes
         """
         try:
             from ..switches import (
-                UnifiPortForwardSwitch,
-                UnifiTrafficRuleSwitch,
                 UnifiFirewallPolicySwitch,
-                UnifiTrafficRouteSwitch,
-                UnifiLegacyFirewallRuleSwitch,
-                UnifiQoSRuleSwitch,
-                UnifiWlanSwitch,
-                UnifiTrafficRouteKillSwitch,
                 UnifiLedToggleSwitch,
-                UnifiStaticRouteSwitch,
+                UnifiLegacyFirewallRuleSwitch,
                 UnifiNATRuleSwitch,
-                UnifiPortProfileSwitch,
                 UnifiNetworkSwitch,
+                UnifiOONPolicySwitch,
+                UnifiPortForwardSwitch,
+                UnifiPortProfileSwitch,
+                UnifiQoSRuleSwitch,
+                UnifiStaticRouteSwitch,
+                UnifiTrafficRouteKillSwitch,
+                UnifiTrafficRouteSwitch,
+                UnifiTrafficRuleSwitch,
                 UnifiVPNClientSwitch,
                 UnifiVPNServerSwitch,
-                UnifiOONPolicySwitch,
+                UnifiWlanSwitch,
             )
-            
+
             return {
                 "UnifiPortForwardSwitch": UnifiPortForwardSwitch,
                 "UnifiTrafficRuleSwitch": UnifiTrafficRuleSwitch,

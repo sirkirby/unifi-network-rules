@@ -1,23 +1,22 @@
 """System services for UniFi Network Rules integration."""
+
 from __future__ import annotations
 
-from typing import Dict
-
-import voluptuous as vol
 import re
 
+import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers import config_validation as cv
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from ..const import DOMAIN, LOGGER
+from ..utils.remote_lists import parse_curated_text
 from .constants import (
     SERVICE_REFRESH,
     SERVICE_REFRESH_DATA,
     SERVICE_SYNC_REMOTE_CURATED,
 )
-from ..utils.remote_lists import parse_curated_text
 
 # Schema for refresh service
 REFRESH_DATA_SCHEMA = vol.Schema(
@@ -26,16 +25,18 @@ REFRESH_DATA_SCHEMA = vol.Schema(
     }
 )
 
-async def async_refresh_service(hass: HomeAssistant, coordinators: Dict, call: ServiceCall) -> None:
+
+async def async_refresh_service(hass: HomeAssistant, coordinators: dict, call: ServiceCall) -> None:
     """Service to refresh UniFi data."""
     # Refresh all coordinators
     for coordinator in coordinators.values():
         await coordinator.async_refresh()
 
-async def async_refresh_data(hass: HomeAssistant, coordinators: Dict, call: ServiceCall) -> None:
+
+async def async_refresh_data(hass: HomeAssistant, coordinators: dict, call: ServiceCall) -> None:
     """Handle the refresh service call."""
     entry_id = call.data.get("entry_id")
-    
+
     if entry_id:
         # Refresh specific coordinator
         if entry_id in coordinators:
@@ -51,27 +52,21 @@ async def async_refresh_data(hass: HomeAssistant, coordinators: Dict, call: Serv
             await coordinator.async_refresh()
 
 
-async def async_setup_system_services(hass: HomeAssistant, coordinators: Dict) -> None:
+async def async_setup_system_services(hass: HomeAssistant, coordinators: dict) -> None:
     """Set up system-related services."""
-    
+
     # Handle the refresh service
     async def handle_refresh(call: ServiceCall) -> None:
         await async_refresh_service(hass, coordinators, call)
-        
+
     # Handle the refresh data service
     async def handle_refresh_data(call: ServiceCall) -> None:
         await async_refresh_data(hass, coordinators, call)
-        
-    
+
     # Register services
-    hass.services.async_register(
-        DOMAIN, SERVICE_REFRESH, handle_refresh, schema=REFRESH_DATA_SCHEMA
-    )
-    
-    hass.services.async_register(
-        DOMAIN, SERVICE_REFRESH_DATA, handle_refresh_data, schema=REFRESH_DATA_SCHEMA
-    )
-    
+    hass.services.async_register(DOMAIN, SERVICE_REFRESH, handle_refresh, schema=REFRESH_DATA_SCHEMA)
+
+    hass.services.async_register(DOMAIN, SERVICE_REFRESH_DATA, handle_refresh_data, schema=REFRESH_DATA_SCHEMA)
 
     # Remote curated file sync
     async def handle_sync_remote_curated(call: ServiceCall) -> None:
@@ -90,9 +85,7 @@ async def async_setup_system_services(hass: HomeAssistant, coordinators: Dict) -
         if not url_list:
             raise HomeAssistantError("'urls' must contain at least one valid http(s) URL")
 
-        targets = (
-            {entry_id: coordinators.get(entry_id)} if entry_id and entry_id in coordinators else coordinators
-        )
+        targets = {entry_id: coordinators.get(entry_id)} if entry_id and entry_id in coordinators else coordinators
         for _entry, coord in targets.items():
             if not coord:
                 continue
@@ -104,7 +97,9 @@ async def async_setup_system_services(hass: HomeAssistant, coordinators: Dict) -
                     session = async_get_clientsession(hass)
                     async with session.get(raw_url) as resp:
                         if resp.status != 200:
-                            raise HomeAssistantError(f"Failed to fetch remote list '{raw_url}': {resp.status} {await resp.text()}")
+                            raise HomeAssistantError(
+                                f"Failed to fetch remote list '{raw_url}': {resp.status} {await resp.text()}"
+                            )
                         content = await resp.text()
 
                     payload = parse_curated_text(content)
@@ -124,11 +119,13 @@ async def async_setup_system_services(hass: HomeAssistant, coordinators: Dict) -
                     if name in existing_by_name:
                         obj = existing_by_name[name]
                         to_update = obj.to_dict()
-                        to_update.update({
-                            "description": payload.get("description", to_update.get("description")),
-                            "type": obj_type,
-                            "members": payload.get("members", to_update.get("members", [])),
-                        })
+                        to_update.update(
+                            {
+                                "description": payload.get("description", to_update.get("description")),
+                                "type": obj_type,
+                                "members": payload.get("members", to_update.get("members", [])),
+                            }
+                        )
                         await api.update_object(to_update)
                     else:
                         await api.add_object(payload)
@@ -139,8 +136,10 @@ async def async_setup_system_services(hass: HomeAssistant, coordinators: Dict) -
         DOMAIN,
         SERVICE_SYNC_REMOTE_CURATED,
         handle_sync_remote_curated,
-        schema=vol.Schema({
-            vol.Optional("entry_id"): cv.string,
-            vol.Required("urls"): vol.Any(cv.ensure_list(cv.string), cv.string),
-        }),
+        schema=vol.Schema(
+            {
+                vol.Optional("entry_id"): cv.string,
+                vol.Required("urls"): vol.Any(cv.ensure_list(cv.string), cv.string),
+            }
+        ),
     )

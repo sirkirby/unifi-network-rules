@@ -1,14 +1,17 @@
 """Tests for the UniFi Network Rules Static Routes functionality."""
-import pytest
-from unittest.mock import Mock, AsyncMock, patch
 
+import asyncio
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+
+from custom_components.unifi_network_rules.coordinator import UnifiRuleUpdateCoordinator
 from custom_components.unifi_network_rules.models.static_route import (
     StaticRoute,
     StaticRouteRequest,
 )
-from custom_components.unifi_network_rules.udm.routes import RoutesMixin
 from custom_components.unifi_network_rules.switch import UnifiStaticRouteSwitch
-from custom_components.unifi_network_rules.coordinator import UnifiRuleUpdateCoordinator
+from custom_components.unifi_network_rules.udm.routes import RoutesMixin
 
 
 @pytest.fixture
@@ -25,7 +28,7 @@ def static_route_data():
         "gateway_type": "default",
         "static-route_type": "interface-route",
         "type": "static-route",
-        "static-route_distance": 1
+        "static-route_distance": 1,
     }
 
 
@@ -38,7 +41,7 @@ def static_route_data_minimal():
         "gateway_device": "192.168.1.1",
         "gateway_type": "default",
         "static-route_type": "static-route",
-        "type": "static-route"
+        "type": "static-route",
     }
 
 
@@ -56,7 +59,7 @@ class TestStaticRouteModel:
     def test_static_route_initialization(self, static_route_data):
         """Test StaticRoute initialization with complete data."""
         route = StaticRoute(static_route_data)
-        
+
         assert route.id == "67507951234567890abcdef0"
         assert route.name == "Guest Network Route"
         assert route.enabled is True
@@ -71,7 +74,7 @@ class TestStaticRouteModel:
     def test_static_route_initialization_minimal(self, static_route_data_minimal):
         """Test StaticRoute initialization with minimal data."""
         route = StaticRoute(static_route_data_minimal)
-        
+
         assert route.id == "67507951234567890abcdef1"
         assert route.name == "Route 10.0.100.0/24"  # Generated name
         assert route.enabled is True  # Default value
@@ -84,13 +87,10 @@ class TestStaticRouteModel:
 
     def test_static_route_defaults(self):
         """Test StaticRoute applies proper defaults."""
-        minimal_data = {
-            "_id": "test123",
-            "static-route_network": "172.16.0.0/16"
-        }
-        
+        minimal_data = {"_id": "test123", "static-route_network": "172.16.0.0/16"}
+
         route = StaticRoute(minimal_data)
-        
+
         assert route.enabled is True
         assert route.name == "Route 172.16.0.0/16"
         assert route.raw["type"] == "static-route"
@@ -98,12 +98,12 @@ class TestStaticRouteModel:
     def test_static_route_string_representation(self, static_route_data):
         """Test StaticRoute string representations."""
         route = StaticRoute(static_route_data)
-        
+
         str_repr = str(route)
         assert "Guest Network Route" in str_repr
         assert "192.168.2.0/24" in str_repr
         assert "60:60:60:60:60:60" in str_repr
-        
+
         repr_str = repr(route)
         assert "StaticRoute" in repr_str
         assert "67507951234567890abcdef0" in repr_str
@@ -116,7 +116,7 @@ class TestStaticRouteRequest:
     def test_create_get_request(self):
         """Test creating GET request for static routes."""
         request = StaticRouteRequest.create_get_request()
-        
+
         assert request.method == "get"
         assert request.path == "/rest/routing"
         assert request.data is None
@@ -125,7 +125,7 @@ class TestStaticRouteRequest:
         """Test creating PUT request to update static route."""
         route = StaticRoute(static_route_data)
         request = StaticRouteRequest.create_update_request(route)
-        
+
         assert request.method == "put"
         assert request.path == "/rest/routing/67507951234567890abcdef0"
         assert request.data == route.raw
@@ -137,14 +137,11 @@ class TestRoutesMixinStaticRoutes:
     @pytest.mark.asyncio
     async def test_get_static_routes_success(self, routes_mixin, static_route_data):
         """Test successful retrieval of static routes."""
-        api_response = {
-            "meta": {"rc": "ok"},
-            "data": [static_route_data]
-        }
+        api_response = {"meta": {"rc": "ok"}, "data": [static_route_data]}
         routes_mixin.controller.request.return_value = api_response
-        
+
         routes = await routes_mixin.get_static_routes()
-        
+
         assert len(routes) == 1
         assert isinstance(routes[0], StaticRoute)
         assert routes[0].id == "67507951234567890abcdef0"
@@ -156,9 +153,9 @@ class TestRoutesMixinStaticRoutes:
         """Test handling empty response from API."""
         api_response = {"meta": {"rc": "ok"}, "data": []}
         routes_mixin.controller.request.return_value = api_response
-        
+
         routes = await routes_mixin.get_static_routes()
-        
+
         assert routes == []
 
     @pytest.mark.asyncio
@@ -166,18 +163,18 @@ class TestRoutesMixinStaticRoutes:
         """Test handling response without data key."""
         api_response = {"meta": {"rc": "ok"}}
         routes_mixin.controller.request.return_value = api_response
-        
+
         routes = await routes_mixin.get_static_routes()
-        
+
         assert routes == []
 
     @pytest.mark.asyncio
     async def test_get_static_routes_api_error(self, routes_mixin):
         """Test handling API errors."""
         routes_mixin.controller.request.side_effect = Exception("API Error")
-        
+
         routes = await routes_mixin.get_static_routes()
-        
+
         assert routes == []
 
     @pytest.mark.asyncio
@@ -185,9 +182,9 @@ class TestRoutesMixinStaticRoutes:
         """Test successful static route update."""
         route = StaticRoute(static_route_data)
         routes_mixin.controller.request.return_value = {"meta": {"rc": "ok"}}
-        
+
         result = await routes_mixin.update_static_route(route)
-        
+
         assert result is True
         routes_mixin.controller.request.assert_called_once()
         call_args = routes_mixin.controller.request.call_args[0][0]
@@ -199,9 +196,9 @@ class TestRoutesMixinStaticRoutes:
         """Test handling API errors during update."""
         route = StaticRoute(static_route_data)
         routes_mixin.controller.request.side_effect = Exception("Update failed")
-        
+
         result = await routes_mixin.update_static_route(route)
-        
+
         assert result is False
 
     @pytest.mark.asyncio
@@ -211,9 +208,9 @@ class TestRoutesMixinStaticRoutes:
         static_route_data["enabled"] = False
         route = StaticRoute(static_route_data)
         routes_mixin.controller.request.return_value = {"meta": {"rc": "ok"}}
-        
+
         result = await routes_mixin.toggle_static_route(route)
-        
+
         assert result is True
         routes_mixin.controller.request.assert_called_once()
         call_args = routes_mixin.controller.request.call_args[0][0]
@@ -226,9 +223,9 @@ class TestRoutesMixinStaticRoutes:
         static_route_data["enabled"] = True
         route = StaticRoute(static_route_data)
         routes_mixin.controller.request.return_value = {"meta": {"rc": "ok"}}
-        
+
         result = await routes_mixin.toggle_static_route(route)
-        
+
         assert result is True
         routes_mixin.controller.request.assert_called_once()
         call_args = routes_mixin.controller.request.call_args[0][0]
@@ -239,9 +236,9 @@ class TestRoutesMixinStaticRoutes:
         """Test handling API errors during toggle."""
         route = StaticRoute(static_route_data)
         routes_mixin.controller.request.side_effect = Exception("Toggle failed")
-        
+
         result = await routes_mixin.toggle_static_route(route)
-        
+
         assert result is False
 
 
@@ -256,53 +253,55 @@ class TestUnifiStaticRouteSwitch:
         coordinator.hass = Mock()
         # Add required attributes for helper functions
         coordinator.firewall_zones = []
+
+        # Properly handle async_create_task to prevent coroutine warnings
+        def mock_async_create_task(coro):
+            if asyncio.iscoroutine(coro):
+                try:
+                    loop = asyncio.get_running_loop()
+                    return loop.create_task(coro)
+                except RuntimeError:
+                    coro.close()
+                    return Mock()
+            return Mock()
+
+        coordinator.hass.async_create_task = mock_async_create_task
         return coordinator
 
     def test_static_route_switch_initialization(self, mock_coordinator, static_route_data):
         """Test StaticRouteSwitch initialization."""
         route = StaticRoute(static_route_data)
-        
+
         switch = UnifiStaticRouteSwitch(
-            coordinator=mock_coordinator,
-            rule_data=route,
-            rule_type="static_routes",
-            entry_id="test_entry"
+            coordinator=mock_coordinator, rule_data=route, rule_type="static_routes", entry_id="test_entry"
         )
-        
+
         assert switch._attr_icon == "mdi:map-marker-path"
         assert switch.coordinator == mock_coordinator
 
     def test_static_route_switch_properties(self, mock_coordinator, static_route_data):
         """Test static route switch has correct properties."""
         route = StaticRoute(static_route_data)
-        
-        switch = UnifiStaticRouteSwitch(
-            coordinator=mock_coordinator,
-            rule_data=route,
-            rule_type="static_routes"
-        )
-        
+
+        switch = UnifiStaticRouteSwitch(coordinator=mock_coordinator, rule_data=route, rule_type="static_routes")
+
         # Test that the switch has the expected properties
-        assert hasattr(switch, 'coordinator')
+        assert hasattr(switch, "coordinator")
         assert switch.coordinator == mock_coordinator
-        assert hasattr(switch, '_rule_type')
+        assert hasattr(switch, "_rule_type")
         assert switch._rule_type == "static_routes"
-        assert hasattr(switch, '_rule_data')
+        assert hasattr(switch, "_rule_data")
         assert isinstance(switch._rule_data, StaticRoute)
 
     def test_static_route_switch_api_integration(self, mock_coordinator, static_route_data):
         """Test static route switch integrates with API properly."""
         route = StaticRoute(static_route_data)
         mock_coordinator.api.toggle_static_route = Mock()
-        
-        UnifiStaticRouteSwitch(
-            coordinator=mock_coordinator,
-            rule_data=route,
-            rule_type="static_routes"
-        )
-        
+
+        UnifiStaticRouteSwitch(coordinator=mock_coordinator, rule_data=route, rule_type="static_routes")
+
         # Test that the API method exists and is accessible
-        assert hasattr(mock_coordinator.api, 'toggle_static_route')
+        assert hasattr(mock_coordinator.api, "toggle_static_route")
         assert callable(mock_coordinator.api.toggle_static_route)
 
 
@@ -312,14 +311,14 @@ class TestStaticRoutesIntegration:
     @pytest.mark.asyncio
     async def test_coordinator_static_routes_update(self):
         """Test coordinator updates static routes collection."""
-        with patch('custom_components.unifi_network_rules.coordination.coordinator.UDMAPI') as mock_api_class:
+        with patch("custom_components.unifi_network_rules.coordination.coordinator.UDMAPI") as mock_api_class:
             mock_api = AsyncMock()
             mock_api.get_static_routes.return_value = [
                 StaticRoute({"_id": "route1", "static-route_network": "192.168.1.0/24"}),
-                StaticRoute({"_id": "route2", "static-route_network": "10.0.0.0/8"})
+                StaticRoute({"_id": "route2", "static-route_network": "10.0.0.0/8"}),
             ]
             mock_api_class.return_value = mock_api
-            
+
             # Test that coordinator would call the API method
             result = await mock_api.get_static_routes()
             assert len(result) == 2
@@ -327,12 +326,12 @@ class TestStaticRoutesIntegration:
 
     def test_static_routes_trigger_integration(self):
         """Test static routes are included in trigger system."""
-        from custom_components.unifi_network_rules.unified_trigger import VALID_CHANGE_TYPES
         from custom_components.unifi_network_rules.unified_change_detector import UnifiedChangeDetector
-        
+        from custom_components.unifi_network_rules.unified_trigger import VALID_CHANGE_TYPES
+
         # Test "route" is in valid change types
         assert "route" in VALID_CHANGE_TYPES
-        
+
         # Test change detector has static routes mapping
         mock_hass = Mock()
         mock_coordinator = Mock()
@@ -342,10 +341,8 @@ class TestStaticRoutesIntegration:
 
     def test_static_routes_backup_integration(self):
         """Test static routes are included in backup service mapping."""
-        from custom_components.unifi_network_rules.services.backup_services import (
-            async_backup_rules_service
-        )
-        
+        from custom_components.unifi_network_rules.services.backup_services import async_backup_rules_service
+
         # This tests that the backup service would handle static routes
         # The actual rule_type_map is defined within the should_restore function
         # We test that the functionality exists by checking the pattern
@@ -354,7 +351,7 @@ class TestStaticRoutesIntegration:
     def test_switch_rule_types_includes_static_routes(self):
         """Test RULE_TYPES includes static routes."""
         from custom_components.unifi_network_rules.switch import RULE_TYPES
-        
+
         assert "static_routes" in RULE_TYPES
         assert RULE_TYPES["static_routes"] == "Static Route"
 
@@ -368,7 +365,7 @@ class TestStaticRoutesErrorHandling:
         # Test with missing required fields
         invalid_data = {"name": "Invalid Route"}
         route = StaticRoute(invalid_data)
-        
+
         # Should handle gracefully with defaults
         assert route.id == ""
         assert route.destination == ""
@@ -377,9 +374,8 @@ class TestStaticRoutesErrorHandling:
     @pytest.mark.asyncio
     async def test_api_timeout_handling(self, routes_mixin):
         """Test handling of API timeouts."""
-        import asyncio
-        routes_mixin.controller.request.side_effect = asyncio.TimeoutError("Request timeout")
-        
+        routes_mixin.controller.request.side_effect = TimeoutError("Request timeout")
+
         routes = await routes_mixin.get_static_routes()
         assert routes == []
 
@@ -388,7 +384,7 @@ class TestStaticRoutesErrorHandling:
         """Test handling of malformed API responses."""
         # Test with malformed JSON-like response
         routes_mixin.controller.request.return_value = {"invalid": "structure"}
-        
+
         routes = await routes_mixin.get_static_routes()
         assert routes == []
 
@@ -396,8 +392,9 @@ class TestStaticRoutesErrorHandling:
     async def test_network_error_handling(self, routes_mixin):
         """Test handling of network-related errors."""
         import aiohttp
+
         routes_mixin.controller.request.side_effect = aiohttp.ClientError("Network error")
-        
+
         result = await routes_mixin.get_static_routes()
         assert result == []
 
@@ -411,20 +408,22 @@ class TestStaticRoutesPerformance:
         # Generate a large number of static routes
         large_route_data = []
         for i in range(100):
-            large_route_data.append({
-                "_id": f"route_{i:03d}",
-                "name": f"Route {i}",
-                "static-route_network": f"10.{i}.0.0/24",
-                "gateway_device": "192.168.1.1",
-                "enabled": i % 2 == 0,  # Alternate enabled/disabled
-                "type": "static-route"
-            })
-        
+            large_route_data.append(
+                {
+                    "_id": f"route_{i:03d}",
+                    "name": f"Route {i}",
+                    "static-route_network": f"10.{i}.0.0/24",
+                    "gateway_device": "192.168.1.1",
+                    "enabled": i % 2 == 0,  # Alternate enabled/disabled
+                    "type": "static-route",
+                }
+            )
+
         api_response = {"meta": {"rc": "ok"}, "data": large_route_data}
         routes_mixin.controller.request.return_value = api_response
-        
+
         routes = await routes_mixin.get_static_routes()
-        
+
         assert len(routes) == 100
         assert all(isinstance(route, StaticRoute) for route in routes)
         # Test that enabled states are preserved
@@ -435,11 +434,11 @@ class TestStaticRoutesPerformance:
         """Test that StaticRoute objects are memory efficient."""
         # Create multiple route objects and ensure they don't duplicate data unnecessarily
         routes = [StaticRoute(static_route_data.copy()) for _ in range(10)]
-        
+
         # Each route should have its own raw data copy
         for i, route in enumerate(routes):
             route.raw["test_field"] = f"unique_{i}"
-        
+
         # Verify data isolation
         unique_values = {route.raw.get("test_field") for route in routes}
         assert len(unique_values) == 10

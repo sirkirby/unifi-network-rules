@@ -1,11 +1,12 @@
-from typing import TypedDict, Self, Any
 from dataclasses import dataclass
+from typing import Any, Self, TypedDict
 
 from aiounifi.models.api import ApiItem, ApiRequestV2
 
 
 class TypedFirewallRule(TypedDict):
     """Traffic rule type definition."""
+
     _id: str
     action: str
     dst_address: str
@@ -98,7 +99,7 @@ class FirewallRule(ApiItem):
     @staticmethod
     def ensure_complete_data(rule_data: dict[str, Any]) -> TypedFirewallRule:
         """Ensure the rule data has all required fields with defaults.
-        
+
         This prevents errors when converting raw API data to FirewallRule objects.
         """
         # Create a base rule with default values for all required fields
@@ -128,13 +129,11 @@ class FirewallRule(ApiItem):
             "state_established": False,
             "state_invalid": False,
             "state_new": False,
-            "state_related": False
+            "state_related": False,
         }
-        
+
         # Update with actual values from the rule_data
         for key, value in rule_data.items():
             base_rule[key] = value
-            
-        return base_rule
 
-    
+        return base_rule
