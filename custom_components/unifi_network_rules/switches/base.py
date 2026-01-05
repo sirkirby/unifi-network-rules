@@ -17,7 +17,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from ..const import DOMAIN, MANUFACTURER, SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS
 from ..coordinator import UnifiRuleUpdateCoordinator
-
 from ..helpers.rule import (
     get_object_id,
     get_rule_enabled,
@@ -547,9 +546,7 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                     # if the change was confirmed by the trigger system (which consumes the
                     # HA-initiated operation flag). If not, it forces a refresh.
                     async def delayed_verification():
-                        await asyncio.sleep(
-                            SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS
-                        )  # Wait for smart polling update
+                        await asyncio.sleep(SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS)  # Wait for smart polling update
                         if self.coordinator.check_and_consume_ha_initiated_operation(self._rule_id):
                             # If the flag was still present, it means the trigger system
                             # did NOT get a change event. We must refresh.
@@ -655,7 +652,9 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
             # Add the completion callback
             future.add_done_callback(lambda f: self.hass.async_create_task(handle_operation_complete(f)))
 
-            LOGGER.debug("Successfully queued toggle operation for rule %s with target state: %s", self._rule_id, enable)
+            LOGGER.debug(
+                "Successfully queued toggle operation for rule %s with target state: %s", self._rule_id, enable
+            )
         except Exception as err:
             LOGGER.error("Failed to queue toggle operation for rule %s: %s", self._rule_id, err)
             # Remove from pending operations if queueing failed

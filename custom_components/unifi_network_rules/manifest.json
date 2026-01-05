@@ -15,5 +15,5 @@
         "aiounifi>=87.0.0",
         "orjson>=3.8.0"
     ],
-    "version": "4.3.0"
+    "version": "4.4.0"
 }
