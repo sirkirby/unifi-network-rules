@@ -82,32 +82,38 @@ class RoutesMixin:
             LOGGER.error("Failed to update traffic route: %s", str(err))
             return False
 
-    async def toggle_traffic_route(self, route: Any) -> bool:
-        """Toggle a traffic route on/off."""
-        LOGGER.debug("Toggling traffic route state")
+    async def toggle_traffic_route(self, route: Any, target_state: bool) -> bool:
+        """Set a traffic route to a specific enabled/disabled state.
+
+        Args:
+            route: The TrafficRoute object to modify
+            target_state: The desired state (True=enabled, False=disabled)
+
+        Returns:
+            bool: True if the operation was successful, False otherwise
+        """
+        LOGGER.debug("Setting traffic route state")
         try:
             # Ensure the route is a proper TrafficRoute object
             if not isinstance(route, TrafficRoute):
                 LOGGER.error("Expected TrafficRoute object but got %s", type(route))
                 return False
 
-            # Toggle the current state
-            new_state = not route.enabled
-            LOGGER.debug("Toggling route %s to %s", route.id, new_state)
+            LOGGER.debug("Setting route %s to %s", route.id, target_state)
 
             # Create a route dictionary with updated state - this is needed because TrafficRouteSaveRequest
             # operates on the dictionary directly, not on the TrafficRoute object
             route_dict = route.raw.copy()
 
             # The TrafficRouteSaveRequest.create method can take both the dictionary and an enable flag
-            request = TrafficRouteSaveRequest.create(route_dict, new_state)
+            request = TrafficRouteSaveRequest.create(route_dict, target_state)
 
             # Execute the API call
             await self.controller.request(request)
-            LOGGER.debug("Traffic route %s toggled successfully to %s", route.id, new_state)
+            LOGGER.debug("Traffic route %s set successfully to %s", route.id, target_state)
             return True
         except Exception as err:
-            LOGGER.error("Failed to toggle traffic route: %s", str(err))
+            LOGGER.error("Failed to set traffic route state: %s", str(err))
             return False
 
     async def remove_traffic_route(self, route_id: str) -> bool:
@@ -126,34 +132,40 @@ class RoutesMixin:
             LOGGER.error("Failed to remove traffic route: %s", str(err))
             return False
 
-    async def toggle_traffic_route_kill_switch(self, route: Any) -> bool:
-        """Toggle a traffic route's kill switch on/off."""
-        LOGGER.debug("Toggling traffic route kill switch state")
+    async def toggle_traffic_route_kill_switch(self, route: Any, target_state: bool) -> bool:
+        """Set a traffic route's kill switch to a specific enabled/disabled state.
+
+        Args:
+            route: The TrafficRoute object to modify
+            target_state: The desired state (True=enabled, False=disabled)
+
+        Returns:
+            bool: True if the operation was successful, False otherwise
+        """
+        LOGGER.debug("Setting traffic route kill switch state")
         try:
             # Ensure the route is a proper TrafficRoute object
             if not isinstance(route, TrafficRoute):
                 LOGGER.error("Expected TrafficRoute object but got %s", type(route))
                 return False
 
-            # Toggle the current kill switch state
-            new_state = not route.kill_switch_enabled
-            LOGGER.debug("Toggling kill switch for route %s to %s", route.id, new_state)
+            LOGGER.debug("Setting kill switch for route %s to %s", route.id, target_state)
 
             # Create a new TrafficRoute with updated kill switch state
             updated_route = TrafficRoute(route.raw.copy())
-            updated_route.raw["kill_switch_enabled"] = new_state
+            updated_route.raw["kill_switch_enabled"] = target_state
 
             # Send the request to update the route
-            request = TrafficRouteKillSwitchRequest.create(updated_route.raw, new_state)
+            request = TrafficRouteKillSwitchRequest.create(updated_route.raw, target_state)
             result = await self.controller.request(request)
 
             if result:
-                LOGGER.debug("Traffic route %s kill switch toggled successfully to %s", route.id, new_state)
+                LOGGER.debug("Traffic route %s kill switch set successfully to %s", route.id, target_state)
             else:
-                LOGGER.error("Failed to toggle kill switch for traffic route %s", route.id)
+                LOGGER.error("Failed to set kill switch for traffic route %s", route.id)
             return bool(result)
         except Exception as err:
-            LOGGER.error("Failed to toggle traffic route kill switch: %s", str(err))
+            LOGGER.error("Failed to set traffic route kill switch state: %s", str(err))
             return False
 
     # Static Routes Methods
@@ -201,26 +213,32 @@ class RoutesMixin:
             LOGGER.error("Failed to update static route: %s", str(err))
             return False
 
-    async def toggle_static_route(self, route: StaticRoute) -> bool:
-        """Toggle a static route on/off."""
-        LOGGER.debug("Toggling static route state")
+    async def toggle_static_route(self, route: StaticRoute, target_state: bool) -> bool:
+        """Set a static route to a specific enabled/disabled state.
+
+        Args:
+            route: The StaticRoute object to modify
+            target_state: The desired state (True=enabled, False=disabled)
+
+        Returns:
+            bool: True if the operation was successful, False otherwise
+        """
+        LOGGER.debug("Setting static route state")
         try:
-            # Toggle the current state
-            new_state = not route.enabled
-            LOGGER.debug("Toggling static route %s to %s", route.id, new_state)
+            LOGGER.debug("Setting static route %s to %s", route.id, target_state)
 
             # Create updated route with new state
             updated_route = StaticRoute(route.raw.copy())
-            updated_route.raw["enabled"] = new_state
+            updated_route.raw["enabled"] = target_state
 
             # Use the update method to apply the change
             success = await self.update_static_route(updated_route)
 
             if success:
-                LOGGER.debug("Static route %s toggled successfully to %s", route.id, new_state)
+                LOGGER.debug("Static route %s set successfully to %s", route.id, target_state)
             else:
-                LOGGER.error("Failed to toggle static route %s", route.id)
+                LOGGER.error("Failed to set static route %s", route.id)
             return success
         except Exception as err:
-            LOGGER.error("Failed to toggle static route: %s", str(err))
+            LOGGER.error("Failed to set static route state: %s", str(err))
             return False

@@ -203,13 +203,14 @@ class TestRoutesMixinStaticRoutes:
 
     @pytest.mark.asyncio
     async def test_toggle_static_route_enable(self, routes_mixin, static_route_data):
-        """Test toggling static route from disabled to enabled."""
+        """Test setting static route to enabled state."""
         # Start with disabled route
         static_route_data["enabled"] = False
         route = StaticRoute(static_route_data)
         routes_mixin.controller.request.return_value = {"meta": {"rc": "ok"}}
 
-        result = await routes_mixin.toggle_static_route(route)
+        # Explicitly set target_state to True
+        result = await routes_mixin.toggle_static_route(route, target_state=True)
 
         assert result is True
         routes_mixin.controller.request.assert_called_once()
@@ -218,13 +219,14 @@ class TestRoutesMixinStaticRoutes:
 
     @pytest.mark.asyncio
     async def test_toggle_static_route_disable(self, routes_mixin, static_route_data):
-        """Test toggling static route from enabled to disabled."""
+        """Test setting static route to disabled state."""
         # Start with enabled route
         static_route_data["enabled"] = True
         route = StaticRoute(static_route_data)
         routes_mixin.controller.request.return_value = {"meta": {"rc": "ok"}}
 
-        result = await routes_mixin.toggle_static_route(route)
+        # Explicitly set target_state to False
+        result = await routes_mixin.toggle_static_route(route, target_state=False)
 
         assert result is True
         routes_mixin.controller.request.assert_called_once()
@@ -237,7 +239,8 @@ class TestRoutesMixinStaticRoutes:
         route = StaticRoute(static_route_data)
         routes_mixin.controller.request.side_effect = Exception("Toggle failed")
 
-        result = await routes_mixin.toggle_static_route(route)
+        # Explicitly set target_state
+        result = await routes_mixin.toggle_static_route(route, target_state=True)
 
         assert result is False
 

@@ -79,28 +79,34 @@ class PortForwardMixin:
             LOGGER.error("Failed to update port forward: %s", str(err))
             return False
 
-    async def toggle_port_forward(self, forward: Any) -> bool:
-        """Toggle a port forward on/off."""
-        LOGGER.debug("Toggling port forward state")
+    async def toggle_port_forward(self, forward: Any, target_state: bool) -> bool:
+        """Set a port forward to a specific enabled/disabled state.
+
+        Args:
+            forward: The PortForward object to modify
+            target_state: The desired state (True=enabled, False=disabled)
+
+        Returns:
+            bool: True if the operation was successful, False otherwise
+        """
+        LOGGER.debug("Setting port forward state")
         try:
             # Ensure the forward is a proper PortForward object
             if not isinstance(forward, PortForward):
                 LOGGER.error("Expected PortForward object but got %s", type(forward))
                 return False
 
-            # Toggle the current state
-            new_state = not forward.enabled
-            LOGGER.debug("Toggling port forward %s to %s", forward.id, new_state)
+            LOGGER.debug("Setting port forward %s to %s", forward.id, target_state)
 
             # The PortForwardEnableRequest.create method expects both the object and the enable flag
-            request = PortForwardEnableRequest.create(forward, new_state)
+            request = PortForwardEnableRequest.create(forward, target_state)
 
             # Execute the API call
             await self.controller.request(request)
-            LOGGER.debug("Port forward %s toggled successfully to %s", forward.id, new_state)
+            LOGGER.debug("Port forward %s set successfully to %s", forward.id, target_state)
             return True
         except Exception as err:
-            LOGGER.error("Failed to toggle port forward: %s", str(err))
+            LOGGER.error("Failed to set port forward state: %s", str(err))
             return False
 
     async def remove_port_forward(self, forward_id: str) -> bool:

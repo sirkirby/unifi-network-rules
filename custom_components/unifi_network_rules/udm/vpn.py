@@ -194,21 +194,21 @@ class VPNMixin:
             LOGGER.error("Error updating VPN configuration %s: %s", config.display_name, err)
             return False
 
-    async def toggle_vpn_config(self, config: VPNConfig) -> bool:
-        """Toggle a VPN configuration.
+    async def toggle_vpn_config(self, config: VPNConfig, target_state: bool) -> bool:
+        """Set a VPN configuration to a specific enabled/disabled state.
 
         Args:
-            config: The VPN configuration to toggle
+            config: The VPN configuration to modify
+            target_state: The desired state (True=enabled, False=disabled)
 
         Returns:
             True if successful, False otherwise
         """
-        new_state = not config.enabled
-        LOGGER.debug("Toggling VPN configuration %s (%s) to %s", config.display_name, config.id, new_state)
+        LOGGER.debug("Setting VPN configuration %s (%s) to %s", config.display_name, config.id, target_state)
 
         try:
             # Update the enabled state
-            config.enabled = new_state
+            config.enabled = target_state
 
             # Create path with the network ID and execute the API request
             path = API_PATH_NETWORK_CONF_DETAIL.format(network_id=config.id)
@@ -216,16 +216,16 @@ class VPNMixin:
             response = await self.controller.request(request)
 
             if not response:
-                LOGGER.error("Failed to toggle VPN configuration %s", config.display_name)
+                LOGGER.error("Failed to set VPN configuration %s", config.display_name)
                 return False
 
             LOGGER.info(
-                "VPN configuration %s toggled to %s", config.display_name, "enabled" if new_state else "disabled"
+                "VPN configuration %s set to %s", config.display_name, "enabled" if target_state else "disabled"
             )
             return True
 
         except Exception as err:
-            LOGGER.error("Error toggling VPN configuration %s: %s", config.display_name, err)
+            LOGGER.error("Error setting VPN configuration %s: %s", config.display_name, err)
             return False
 
     async def remove_vpn_config(self, config: VPNConfig | str) -> bool:

@@ -97,20 +97,21 @@ class OONMixin:
             LOGGER.error("Failed to update OON policy %s: %s", policy_id, str(err))
             return False
 
-    async def toggle_oon_policy(self, policy: OONPolicy) -> bool:
-        """Toggle an Object-Oriented Network policy on/off.
+    async def toggle_oon_policy(self, policy: OONPolicy, target_state: bool) -> bool:
+        """Set an Object-Oriented Network policy to a specific enabled/disabled state.
 
         Args:
-            policy: OONPolicy object to toggle
+            policy: OONPolicy object to modify
+            target_state: The desired state (True=enabled, False=disabled)
 
         Returns:
-            bool: True if the toggle was successful, False otherwise
+            bool: True if the operation was successful, False otherwise
         """
-        LOGGER.debug("Toggling OON policy state")
+        LOGGER.debug("Setting OON policy state")
         try:
-            # Create a copy of the policy with toggled enabled state
+            # Create a copy of the policy with the new enabled state
             policy_dict = policy.to_api_dict()
-            policy_dict["enabled"] = not policy.enabled
+            policy_dict["enabled"] = target_state
 
             # Format API path with policy ID
             path = API_PATH_OON_POLICY_DETAIL.format(policy_id=policy.id)
@@ -120,10 +121,10 @@ class OONMixin:
 
             # Execute the API call
             await self.controller.request(request)
-            LOGGER.debug("OON policy %s toggled successfully to %s", policy.id, policy_dict["enabled"])
+            LOGGER.debug("OON policy %s set successfully to %s", policy.id, target_state)
             return True
         except Exception as err:
-            LOGGER.error("Failed to toggle OON policy: %s", str(err))
+            LOGGER.error("Failed to set OON policy state: %s", str(err))
             return False
 
     async def add_oon_policy(self, policy_data: dict[str, Any]) -> OONPolicy | None:

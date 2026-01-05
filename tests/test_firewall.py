@@ -195,12 +195,13 @@ async def test_toggle_firewall_policy(api, firewall_policy_data):
 
     policy = FirewallPolicy(firewall_policy_data)
     original_state = policy.enabled
+    target_state = not original_state
 
     # Mock the controller request method
     api.controller.request = AsyncMock(return_value={"meta": {"rc": "ok"}})
 
-    # Call the method
-    result = await api.toggle_firewall_policy(policy)
+    # Call the method with explicit target state
+    result = await api.toggle_firewall_policy(policy, target_state)
 
     # Verify controller request was called
     assert api.controller.request.called
@@ -208,9 +209,9 @@ async def test_toggle_firewall_policy(api, firewall_policy_data):
     # Get the request that was passed to controller.request
     request = api.controller.request.call_args[0][0]
 
-    # Verify the request has the toggled enabled value
+    # Verify the request has the target enabled value
     assert hasattr(request, "data")
-    assert request.data["enabled"] is not original_state
+    assert request.data["enabled"] is target_state
 
     # Verify the result is True
     assert result is True

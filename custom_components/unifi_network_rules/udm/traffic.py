@@ -79,32 +79,38 @@ class TrafficMixin:
             LOGGER.error("Failed to update traffic rule: %s", str(err))
             return False
 
-    async def toggle_traffic_rule(self, rule: Any) -> bool:
-        """Toggle a traffic rule on/off."""
-        LOGGER.debug("Toggling traffic rule state")
+    async def toggle_traffic_rule(self, rule: Any, target_state: bool) -> bool:
+        """Set a traffic rule to a specific enabled/disabled state.
+
+        Args:
+            rule: The TrafficRule object to modify
+            target_state: The desired state (True=enabled, False=disabled)
+
+        Returns:
+            bool: True if the operation was successful, False otherwise
+        """
+        LOGGER.debug("Setting traffic rule state")
         try:
             # Ensure the rule is a proper TrafficRule object
             if not isinstance(rule, TrafficRule):
                 LOGGER.error("Expected TrafficRule object but got %s", type(rule))
                 return False
 
-            # Toggle the current state
-            new_state = not rule.enabled
-            LOGGER.debug("Toggling rule %s to %s", rule.id, new_state)
+            LOGGER.debug("Setting rule %s to %s", rule.id, target_state)
 
             # Create a new TrafficRule with updated state
             updated_rule = TrafficRule(rule.raw.copy())
-            updated_rule.raw["enabled"] = new_state
+            updated_rule.raw["enabled"] = target_state
 
             # Use update method with the updated rule
             result = await self.update_traffic_rule(updated_rule)
             if result:
-                LOGGER.debug("Traffic rule %s toggled successfully to %s", rule.id, new_state)
+                LOGGER.debug("Traffic rule %s set successfully to %s", rule.id, target_state)
             else:
-                LOGGER.error("Failed to toggle traffic rule %s", rule.id)
+                LOGGER.error("Failed to set traffic rule %s", rule.id)
             return result
         except Exception as err:
-            LOGGER.error("Failed to toggle traffic rule: %s", str(err))
+            LOGGER.error("Failed to set traffic rule state: %s", str(err))
             return False
 
     async def remove_traffic_rule(self, rule_id: str) -> bool:

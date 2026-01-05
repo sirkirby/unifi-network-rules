@@ -17,6 +17,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from ..const import DOMAIN, MANUFACTURER, SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS
 from ..coordinator import UnifiRuleUpdateCoordinator
+
 from ..helpers.rule import (
     get_object_id,
     get_rule_enabled,
@@ -26,6 +27,10 @@ from ..helpers.rule import (
 from ..services.constants import SIGNAL_ENTITIES_CLEANUP
 
 LOGGER = logging.getLogger(__name__)
+
+# Per-entity toggle debounce delay in seconds
+# This prevents rapid toggles from queuing multiple operations
+TOGGLE_DEBOUNCE_DELAY: float = 0.5
 
 
 class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntity):
@@ -87,6 +92,11 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         self._optimistic_max_age = 5  # Maximum age in seconds for optimistic state
         self._operation_pending = False
         self._last_auth_failure_time = 0
+
+        # Per-entity toggle debouncing
+        # Stores the pending debounce timer handle and target state
+        self._toggle_debounce_timer: asyncio.TimerHandle | None = None
+        self._toggle_debounce_target_state: bool | None = None
 
         # Initialize linked entity tracking
         self._linked_parent_id = None  # Unique ID of parent entity, if any
@@ -433,15 +443,65 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
             asyncio.create_task(self.async_turn_off(**kwargs))
 
     async def _async_toggle_rule(self, enable: bool) -> None:
-        """Handle toggling the rule state."""
+        """Handle toggling the rule state with per-entity debouncing.
+
+        This method provides immediate UI feedback via optimistic state updates,
+        then debounces rapid toggles of the same entity. Only the final state
+        after the debounce delay will be submitted to the API.
+        """
         action_type = "Turning on" if enable else "Turning off"
-        LOGGER.debug("%s rule %s (%s)", action_type, self._rule_id, self._rule_type)
+        LOGGER.debug("%s rule %s (%s) - scheduling debounced operation", action_type, self._rule_id, self._rule_type)
 
-        # Set optimistic state first for immediate UI feedback with timestamp
+        # Set optimistic state first for immediate UI feedback
         self.mark_pending_operation(enable)
-
-        # Write state and force an update to ensure all clients receive it immediately
         self.async_write_ha_state()
+
+        # Cancel any existing debounce timer for this entity
+        if self._toggle_debounce_timer is not None:
+            self._toggle_debounce_timer.cancel()
+            LOGGER.debug(
+                "Cancelled pending toggle for %s, replacing with new target state: %s",
+                self._rule_id,
+                enable,
+            )
+
+        # Store the target state for when the debounce timer fires
+        self._toggle_debounce_target_state = enable
+
+        # Schedule the debounced operation
+        loop = asyncio.get_event_loop()
+        self._toggle_debounce_timer = loop.call_later(
+            TOGGLE_DEBOUNCE_DELAY,
+            lambda: asyncio.create_task(self._execute_toggle_operation()),
+        )
+
+        LOGGER.debug(
+            "Scheduled toggle for %s in %.1fs with target state: %s",
+            self._rule_id,
+            TOGGLE_DEBOUNCE_DELAY,
+            enable,
+        )
+
+    async def _execute_toggle_operation(self) -> None:
+        """Execute the actual toggle operation after debounce delay.
+
+        This method is called when the debounce timer fires. It uses the stored
+        target state to set the rule to the exact desired state, regardless of
+        the current state in the coordinator.
+        """
+        # Clear the timer reference
+        self._toggle_debounce_timer = None
+
+        # Get the target state that was set during debouncing
+        enable = self._toggle_debounce_target_state
+        if enable is None:
+            LOGGER.warning("Toggle operation for %s has no target state, aborting", self._rule_id)
+            return
+
+        # Clear the stored target state
+        self._toggle_debounce_target_state = None
+
+        LOGGER.debug("Executing debounced toggle for %s with target state: %s", self._rule_id, enable)
 
         # Get the current rule object
         current_rule = self._get_current_rule()
@@ -489,11 +549,11 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                     async def delayed_verification():
                         await asyncio.sleep(
                             SWITCH_DELAYED_VERIFICATION_SLEEP_SECONDS
-                        )  # Wait 7 seconds for smart polling update
+                        )  # Wait for smart polling update
                         if self.coordinator.check_and_consume_ha_initiated_operation(self._rule_id):
                             # If the flag was still present, it means the trigger system
                             # did NOT get a change event. We must refresh.
-                            LOGGER.warning(
+                            LOGGER.debug(
                                 "Delayed verification: Trigger did not receive change event for %s. Forcing refresh.",
                                 self._rule_id,
                             )
@@ -558,17 +618,15 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                 toggle_func = self.coordinator.api.toggle_oon_policy
             elif self._rule_type == "port_profiles":
 
-                async def port_profile_toggle_wrapper(profile_obj):
+                async def port_profile_toggle_wrapper(profile_obj, target_state):
                     # When enabling, provide a native_networkconf_id if missing by
                     # using coordinator.networks preference. The API function itself
                     # will also try to discover a default if needed, but we prefer
                     # to choose deterministically here.
                     native_id = None
                     try:
-                        # If current state is disabled, supply target native id
-                        current = self._get_current_rule()
-                        is_currently_on = bool(current and getattr(current, "enabled", False))
-                        if not is_currently_on and hasattr(self.coordinator, "networks"):
+                        # If enabling, supply target native id
+                        if target_state and hasattr(self.coordinator, "networks"):
                             networks = self.coordinator.networks or []
                             # Prefer corporate/LAN
                             preferred = next((n for n in networks if getattr(n, "purpose", "") == "corporate"), None)
@@ -577,7 +635,7 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                             native_id = preferred.id if preferred else None
                     except Exception:
                         native_id = None
-                    return await self.coordinator.api.toggle_port_profile(profile_obj, native_id)
+                    return await self.coordinator.api.toggle_port_profile(profile_obj, native_id, target_state)
 
                 toggle_func = port_profile_toggle_wrapper
             elif self._rule_type == "devices":
@@ -590,18 +648,14 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
             else:
                 raise ValueError(f"Unknown rule type: {self._rule_type}")
 
-            # Queue the operation (special handling for devices)
-            if self._rule_type == "devices":
-                # For LED toggles, pass the enable state as the second parameter
-                future = await self.coordinator.api.queue_api_operation(toggle_func, current_rule, enable)
-            else:
-                # For regular rules, pass just the rule object
-                future = await self.coordinator.api.queue_api_operation(toggle_func, current_rule)
+            # Queue the operation with the target state
+            # All toggle functions now accept target_state to set explicit state
+            future = await self.coordinator.api.queue_api_operation(toggle_func, current_rule, enable)
 
             # Add the completion callback
             future.add_done_callback(lambda f: self.hass.async_create_task(handle_operation_complete(f)))
 
-            LOGGER.debug("Successfully queued toggle operation for rule %s", self._rule_id)
+            LOGGER.debug("Successfully queued toggle operation for rule %s with target state: %s", self._rule_id, enable)
         except Exception as err:
             LOGGER.error("Failed to queue toggle operation for rule %s: %s", self._rule_id, err)
             # Remove from pending operations if queueing failed
@@ -615,6 +669,12 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
     async def async_will_remove_from_hass(self) -> None:
         """Handle entity cleanup when removed from Home Assistant."""
         LOGGER.debug("Entity %s cleaning up before removal from Home Assistant", self.entity_id)
+
+        # Cancel any pending debounce timer
+        if self._toggle_debounce_timer is not None:
+            self._toggle_debounce_timer.cancel()
+            self._toggle_debounce_timer = None
+            self._toggle_debounce_target_state = None
 
         # Clean up internal entity tracking dictionary
         entity_dict = self.hass.data.get(DOMAIN, {}).get("entities", {})
