@@ -187,17 +187,18 @@ class TestOONMixin:
 
     @pytest.mark.asyncio
     async def test_toggle_oon_policy_success(self, oon_policy_payload):
-        """Test toggle_oon_policy() toggles enabled state."""
+        """Test toggle_oon_policy() sets enabled state."""
         mixin = OONMixin()
         mixin.controller = AsyncMock()
         mixin.create_api_request = Mock(return_value={"method": "PUT", "path": "/test"})
         mixin.controller.request = AsyncMock(return_value={})
 
         policy = OONPolicy(oon_policy_payload)
-        result = await mixin.toggle_oon_policy(policy)
+        original_state = policy.enabled
+        target_state = not original_state
+        result = await mixin.toggle_oon_policy(policy, target_state)
         assert result is True
-        # Verify that the API call was made with toggled state
-        # The toggle method creates a dict with enabled state flipped and sends it to API
+        # Verify that the API call was made with the target state
         assert mixin.controller.request.await_count == 1
 
     @pytest.mark.asyncio

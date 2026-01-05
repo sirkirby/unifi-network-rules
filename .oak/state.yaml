@@ -4,6 +4,7 @@ migrations:
 - 2025.11.28_cleanup_old_templates
 - 2025.11.28_features_restructure
 - 2025.12.05_unify_plan_create
+- 2026.01.05_remove_oak_features_dir
 managed_assets:
   directories:
   - .claude/commands

@@ -58,13 +58,24 @@ class PortProfilesMixin:
             return False
 
     async def toggle_port_profile(
-        self, profile: dict[str, Any] | Any, native_networkconf_id: str | None = None
+        self,
+        profile: dict[str, Any] | Any,
+        native_networkconf_id: str | None,
+        target_state: bool,
     ) -> bool:
-        """Enable/disable a port profile by toggling native network assignment.
+        """Enable/disable a port profile by setting native network assignment.
 
         Behavior follows sub-issue #99 example payloads: enabling ensures
         native_networkconf_id is set and tagged_vlan_mgmt not blocking; disabling
         clears native_networkconf_id and sets tagged_vlan_mgmt to block_all.
+
+        Args:
+            profile: The port profile dict or object to modify
+            native_networkconf_id: Network ID to use when enabling (optional)
+            target_state: The desired state (True=enabled, False=disabled)
+
+        Returns:
+            bool: True if the operation was successful, False otherwise
         """
         try:
             if not isinstance(profile, dict):
@@ -78,12 +89,9 @@ class PortProfilesMixin:
             if not profile_id:
                 return False
 
-            # Determine current state and desired new state (invert)
-            has_native = bool(payload.get("native_networkconf_id"))
-            is_blocking = payload.get("tagged_vlan_mgmt") in {"block_all", "block-custom"}
-            currently_enabled = has_native and not is_blocking
+            LOGGER.debug("Setting port profile %s to %s", profile_id, target_state)
 
-            if currently_enabled:
+            if not target_state:
                 # Disable: clear native and block mgmt VLAN tagging (matches example)
                 payload["port_security_enabled"] = True
                 payload["native_networkconf_id"] = ""
@@ -119,7 +127,7 @@ class PortProfilesMixin:
             await self.controller.request(request)
             return True
         except Exception as err:
-            LOGGER.error("Failed to toggle port profile: %s", str(err))
+            LOGGER.error("Failed to set port profile state: %s", str(err))
             return False
 
 

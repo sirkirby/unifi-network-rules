@@ -60,13 +60,20 @@ class NATMixin:
             LOGGER.error("Failed to update NAT rule: %s", err)
             return False
 
-    async def toggle_nat_rule(self, rule: NATRule) -> bool:
-        """Toggle a NAT rule enabled state by flipping and updating."""
+    async def toggle_nat_rule(self, rule: NATRule, target_state: bool) -> bool:
+        """Set a NAT rule to a specific enabled/disabled state.
+
+        Args:
+            rule: The NATRule object to modify
+            target_state: The desired state (True=enabled, False=disabled)
+
+        Returns:
+            bool: True if the operation was successful, False otherwise
+        """
         try:
-            # Flip enabled state
-            current = bool(rule.raw.get("enabled", False))
-            rule.raw["enabled"] = not current
+            LOGGER.debug("Setting NAT rule %s to %s", rule.id, target_state)
+            rule.raw["enabled"] = target_state
             return await self.update_nat_rule(rule)
         except Exception as err:
-            LOGGER.error("Failed to toggle NAT rule: %s", err)
+            LOGGER.error("Failed to set NAT rule state: %s", err)
             return False

@@ -99,7 +99,8 @@ class TestNATMixin:
         mixin.controller = AsyncMock()
         rule = NATRule(nat_rule_payload)
         assert rule.enabled is False
-        ok = await mixin.toggle_nat_rule(rule)
+        # Pass explicit target_state to enable the rule
+        ok = await mixin.toggle_nat_rule(rule, target_state=True)
         assert ok is True
         assert rule.enabled is True
 

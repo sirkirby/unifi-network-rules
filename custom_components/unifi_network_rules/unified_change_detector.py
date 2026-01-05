@@ -155,6 +155,16 @@ class UnifiedChangeDetector:
                             LOGGER.debug(
                                 "[CHANGE_DETECTOR] Entity modified: %s (%s) - %s", entity_id, rule_type, change_action
                             )
+                            # For enabled/disabled changes, consume the HA-initiated flag if this
+                            # was a change initiated by Home Assistant. This prevents the delayed
+                            # verification from logging a misleading warning.
+                            if change_action in ("enabled", "disabled"):
+                                rule_id = change.rule_id
+                                if self.coordinator.check_and_consume_ha_initiated_operation(rule_id):
+                                    LOGGER.debug(
+                                        "[CHANGE_DETECTOR] Consumed HA-initiated flag for %s (change was HA-initiated)",
+                                        rule_id,
+                                    )
 
         # Check for deleted entities
         for rule_type, previous_entities in self._previous_state.items():
