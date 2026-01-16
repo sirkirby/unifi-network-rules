@@ -16,6 +16,7 @@ from aiounifi.models.wlan import Wlan
 from ..const import DOMAIN
 
 # Import our custom models
+from ..models.ether_lighting import get_ether_lighting, has_ether_lighting
 from ..models.firewall_rule import FirewallRule
 from ..models.nat_rule import NATRule
 from ..models.network import NetworkConf
@@ -60,13 +61,23 @@ def get_rule_enabled(rule: Any) -> bool:
 
     # Special handling for Device LED state
     if isinstance(rule, Device):
-        # For devices, "enabled" means LED is not overridden (default state)
-        # When led_override is "default", the LED follows normal behavior (enabled)
+        device_raw = getattr(rule, "raw", {}) if hasattr(rule, "raw") else {}
+
+        # Check for Etherlighting devices first (Pro Max switches)
+        if has_ether_lighting(device_raw):
+            ether_lighting = get_ether_lighting(device_raw)
+            if ether_lighting:
+                return ether_lighting.is_enabled
+            return True  # Default to enabled if ether_lighting exists but parsing failed
+
+        # Traditional LED devices use led_override
+        # When led_override is "default" or "on", the LED is enabled
         # When led_override is "off", the LED is disabled
-        if hasattr(rule, "raw") and "led_override" in rule.raw:
-            led_state = rule.raw.get("led_override")
+        if "led_override" in device_raw:
+            led_state = device_raw.get("led_override")
             return led_state != "off"  # True if not explicitly turned off
-        return True  # Default to enabled if no override info
+
+        return True  # Default to enabled if no LED info
 
     # Networks enabled (corporate LAN typically has 'enabled')
     if isinstance(rule, NetworkConf):

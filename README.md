@@ -26,7 +26,7 @@ UniFi Network Rules is a custom integration for Home Assistant that integrates w
 - Object-Oriented Network (OON) policies & OON Policy Kill Switch
 - OpenVPN Client and Server configurations
 - WireGuard Client and Server configurations
-- UniFi Device LEDs
+- UniFi Device LEDs (including Pro Max Etherlighting)
 - WLAN SSIDs
 - Port Profiles (switch port configurations)
 - Networks (network configurations)
@@ -177,6 +177,7 @@ See below for more automation examples using [Services with Triggers](#service-a
 | `unifi_network_rules.apply_template` | Apply a predefined rule template | `template_id`: ID of the template to apply<br>`variables`: (Optional) Variables to use in the template |
 | `unifi_network_rules.save_template` | Save a rule as a template for reuse | `rule_id`: UniFi rule ID (use `trigger.rule_id` in automations)<br>`template_id`: ID to save the template as<br>`rule_type`: (Optional) Type of rule - auto-detected if not provided |
 | `unifi_network_rules.toggle_rule` | Toggle a specific rule on or off | `rule_id`: UniFi rule ID (use `trigger.rule_id` in automations)<br>`rule_type`: (Optional) Type of the rule - auto-detected if not provided |
+| `unifi_network_rules.set_device_led` | Set device LED state with optional Etherlighting controls | `device_id`: Device MAC address<br>`enabled`: true (on) or false (off)<br>`brightness`: (Optional, Etherlighting only) 0-100<br>`mode`: (Optional, Etherlighting only) "speed" or "color"<br>`behavior`: (Optional, Etherlighting only) "solid" or "breath" |
 
 > **Note**: For `rule_types` parameter, you can specify one or more of: `policy` (firewall policies), `port_forward` (port forwarding rules), `traffic_route` (policy-based routes), `qos_rule` (quality of service rules), `port_profile` (switch port profiles), `network` (network configurations), `static_route` (static routes), `nat` (NAT rules), or `oon_policy` (Object-Oriented Network policies). While not all of these are strictly "rules," they are all toggleable configuration entities. See the "Understanding Rule Types" section for more details.
 
@@ -518,6 +519,38 @@ trigger:
   change_type: device
   entity_id: "switch.unr_device_aabbccddeeff_led"
   change_action: [enabled, disabled]
+```
+
+#### Etherlighting Control (Pro Max Switches)
+
+UniFi Pro Max switches feature Etherlighting - RGB LED lighting on Ethernet ports. The integration automatically detects these devices and exposes them as LED switches with additional attributes.
+
+**Entity Attributes for Etherlighting devices:**
+- `led_type`: "etherlighting" (vs "traditional" for standard LED devices)
+- `ether_lighting_mode`: Current mode ("speed" or "color")
+- `ether_lighting_brightness`: Current brightness (0-100)
+- `ether_lighting_behavior`: Current behavior ("solid" or "breath")
+- `ether_lighting_led_mode`: Current state ("etherlighting" or "off")
+
+**Advanced Etherlighting Control via Service:**
+
+```yaml
+# Turn on Etherlighting with breathing effect at 50% brightness
+action: unifi_network_rules.set_device_led
+data:
+  device_id: "aa:bb:cc:dd:ee:ff"
+  enabled: true
+  brightness: 50
+  behavior: "breath"
+
+# Set Etherlighting to solid speed mode at full brightness
+action: unifi_network_rules.set_device_led
+data:
+  device_id: "aa:bb:cc:dd:ee:ff"
+  enabled: true
+  brightness: 100
+  mode: "speed"
+  behavior: "solid"
 ```
 
 ### Benefits of New System

@@ -22,10 +22,12 @@ from .constants import (
     SERVICE_REFRESH_DATA,
     SERVICE_RESTORE,
     SERVICE_SAVE_TEMPLATE,
+    SERVICE_SET_DEVICE_LED,
     SERVICE_TOGGLE_RULE,
 )
 
 # Import services from service modules
+from .device_services import async_setup_device_services
 from .rule_services import async_setup_rule_services
 from .system_services import async_setup_system_services
 from .template_services import async_setup_template_services
@@ -58,6 +60,7 @@ async def async_setup_services(hass: HomeAssistant) -> bool:
     await async_setup_backup_services(hass, coordinators)
     await async_setup_system_services(hass, coordinators)
     await async_setup_cleanup_services(hass, coordinators)
+    await async_setup_device_services(hass, coordinators)
 
     # Store the register/unregister functions in the services dictionary
     if "services" not in hass.data[DOMAIN]:
@@ -85,6 +88,7 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_SAVE_TEMPLATE,
         SERVICE_FORCE_CLEANUP,
         SERVICE_FORCE_REMOVE_STALE,
+        SERVICE_SET_DEVICE_LED,
     ]
 
     for service in services_to_remove:

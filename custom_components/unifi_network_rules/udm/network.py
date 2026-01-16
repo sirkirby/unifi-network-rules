@@ -16,6 +16,12 @@ from ..const import (
     API_PATH_WLAN_DETAIL,
     LOGGER,
 )
+from ..models.ether_lighting import (
+    ETHER_LIGHTING_LED_MODE_OFF,
+    ETHER_LIGHTING_LED_MODE_ON,
+    get_ether_lighting,
+    has_ether_lighting,
+)
 from ..models.network import NetworkConf
 
 
@@ -141,6 +147,9 @@ class NetworkMixin:
     async def set_device_led(self, device: Device, enable: bool = True) -> bool:
         """Set LED status of a device (simple on/off toggle).
 
+        Supports both traditional LED devices (using led_override) and
+        Etherlighting devices (using ether_lighting.led_mode).
+
         Args:
             device: The Device object to control
             enable: True to turn LED on, False to turn off
@@ -158,22 +167,40 @@ class NetworkMixin:
         """
         try:
             device_id = device.id
-            status = "on" if enable else "off"
 
             # Get device MAC safely for logging
             device_raw = getattr(device, "raw", {}) if hasattr(device, "raw") else {}
             device_mac = device_raw.get("mac", device_raw.get("serial", "unknown"))
 
-            # Get the current device configuration (full payload)
-            device_payload = device.raw.copy() if hasattr(device, "raw") and device.raw else {}
+            # Determine if this is an Etherlighting device
+            is_etherlighting = has_ether_lighting(device_raw)
 
-            # Modify only the LED override field
-            device_payload["led_override"] = status
+            # Build the update payload based on device type
+            if is_etherlighting:
+                # Etherlighting devices use ether_lighting.led_mode
+                ether_lighting = get_ether_lighting(device_raw)
+                if ether_lighting:
+                    # Preserve existing settings, only change led_mode
+                    new_ether_lighting = ether_lighting.with_enabled(enable)
+                else:
+                    # Create minimal ether_lighting payload
+                    new_ether_lighting = {
+                        "led_mode": ETHER_LIGHTING_LED_MODE_ON if enable else ETHER_LIGHTING_LED_MODE_OFF
+                    }
+
+                # Only send the ether_lighting field for minimal payload
+                update_payload = {"ether_lighting": new_ether_lighting}
+                status_desc = f"ether_lighting.led_mode={new_ether_lighting.get('led_mode')}"
+            else:
+                # Traditional devices use led_override
+                status = "on" if enable else "off"
+                update_payload = {"led_override": status}
+                status_desc = f"led_override={status}"
 
             # Use the legacy API endpoint for device updates (not v2)
             # Path format: /rest/device/{device_id}
             path = f"/rest/device/{device_id}"
-            request = self.create_api_request("PUT", path, data=device_payload, is_v2=False)
+            request = self.create_api_request("PUT", path, data=update_payload, is_v2=False)
 
             result = await self.controller.request(request)
 
@@ -181,12 +208,13 @@ class NetworkMixin:
             if result and isinstance(result, dict):
                 meta = result.get("meta", {})
                 if meta.get("rc") == "ok":
-                    LOGGER.debug("Device %s LED set to %s", device_mac, status)
+                    LOGGER.debug("Device %s LED set: %s", device_mac, status_desc)
                     # Update the device's local state for immediate feedback
                     if hasattr(device, "raw") and device.raw:
-                        device.raw["led_override"] = status
-                    elif hasattr(device, "led_override"):
-                        device.led_override = status
+                        if is_etherlighting:
+                            device.raw["ether_lighting"] = new_ether_lighting
+                        else:
+                            device.raw["led_override"] = "on" if enable else "off"
                     return True
                 else:
                     LOGGER.error("API returned error for device %s LED update: %s", device_mac, meta)
@@ -223,23 +251,35 @@ class NetworkMixin:
                     if not mac:
                         continue
 
-                    # Only include devices that are access points or have LED override capability
+                    # Only include devices that are access points, have LED override, or have Etherlighting
                     device_type = device_data.get("type", "")
                     is_access_point = device_data.get("is_access_point", False)
                     has_led_override = "led_override" in device_data
+                    has_etherlighting = has_ether_lighting(device_data)
 
-                    # Include UAPs (type 'uap') that are access points, or any device with LED override
-                    if (device_type == "uap" and is_access_point) or has_led_override:
+                    # Include UAPs that are access points, devices with LED override, or Etherlighting devices
+                    if (device_type == "uap" and is_access_point) or has_led_override or has_etherlighting:
                         try:
                             # Create Device object directly from API data, following the pattern of converting raw API responses into typed objects
                             device = Device(device_data)
                             led_capable_devices.append(device)
-                            LOGGER.debug(
-                                "Created LED-capable device: %s (%s) - LED state: %s",
-                                device_data.get("name", "Unknown"),
-                                mac,
-                                device_data.get("led_override", "unknown"),
-                            )
+                            # Log LED state based on device type
+                            if has_etherlighting:
+                                ether_data = device_data.get("ether_lighting", {})
+                                LOGGER.debug(
+                                    "Created Etherlighting device: %s (%s) - LED mode: %s, brightness: %s",
+                                    device_data.get("name", "Unknown"),
+                                    mac,
+                                    ether_data.get("led_mode", "unknown"),
+                                    ether_data.get("brightness", "unknown"),
+                                )
+                            else:
+                                LOGGER.debug(
+                                    "Created LED-capable device: %s (%s) - LED state: %s",
+                                    device_data.get("name", "Unknown"),
+                                    mac,
+                                    device_data.get("led_override", "unknown"),
+                                )
                         except Exception as device_err:
                             LOGGER.warning(
                                 "Error creating Device object for %s (%s): %s",

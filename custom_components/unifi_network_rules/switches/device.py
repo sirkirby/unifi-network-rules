@@ -13,6 +13,12 @@ from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 
 from ..const import DOMAIN, LOG_TRIGGERS, MANUFACTURER
 from ..coordinator import UnifiRuleUpdateCoordinator
+from ..models.ether_lighting import (
+    ETHER_LIGHTING_LED_MODE_OFF,
+    ETHER_LIGHTING_LED_MODE_ON,
+    get_ether_lighting,
+    has_ether_lighting,
+)
 from .base import UnifiRuleSwitch
 
 LOGGER = logging.getLogger(__name__)
@@ -121,7 +127,24 @@ class UnifiLedToggleSwitch(UnifiRuleSwitch):
 
                 # Create new_state with optimistic LED state
                 new_device_data = current_device.raw.copy()
-                new_device_data["led_override"] = "default" if enable else "off"  # Optimistic new state
+
+                # Handle Etherlighting vs traditional LED devices
+                if has_ether_lighting(new_device_data):
+                    # Etherlighting device - update ether_lighting.led_mode
+                    ether_lighting = get_ether_lighting(new_device_data)
+                    if ether_lighting:
+                        new_device_data["ether_lighting"] = ether_lighting.with_enabled(enable)
+                    else:
+                        new_device_data["ether_lighting"] = {
+                            "led_mode": ETHER_LIGHTING_LED_MODE_ON if enable else ETHER_LIGHTING_LED_MODE_OFF
+                        }
+                    old_led_state = old_state_device.raw.get("ether_lighting", {}).get("led_mode", "unknown")
+                    new_led_state = new_device_data["ether_lighting"].get("led_mode", "unknown")
+                else:
+                    # Traditional LED device - update led_override
+                    new_device_data["led_override"] = "default" if enable else "off"
+                    old_led_state = old_state_device.raw.get("led_override", "unknown")
+                    new_led_state = new_device_data.get("led_override", "unknown")
 
                 # Create optimistic new device object using globally imported Device class
                 new_state_device = Device(new_device_data)
@@ -129,8 +152,8 @@ class UnifiLedToggleSwitch(UnifiRuleSwitch):
                 if LOG_TRIGGERS:
                     LOGGER.info(
                         "🎯 OPTIMISTIC DEVICE STATE: %s → %s",
-                        old_state_device.raw.get("led_override", "unknown"),
-                        new_state_device.raw.get("led_override", "unknown"),
+                        old_led_state,
+                        new_led_state,
                     )
             else:
                 # Fallback if device structure is unexpected
@@ -168,13 +191,25 @@ class UnifiLedToggleSwitch(UnifiRuleSwitch):
             attributes["device_model"] = raw_data.get("model", "Unknown")
             attributes["device_type"] = raw_data.get("type", "Unknown")
 
-            # Add LED-specific information
-            if "led_override" in raw_data:
-                attributes["led_override"] = raw_data["led_override"]
-            if "led_override_color" in raw_data:
-                attributes["led_override_color"] = raw_data["led_override_color"]
-            if "led_override_color_brightness" in raw_data:
-                attributes["led_brightness"] = raw_data["led_override_color_brightness"]
+            # Add LED-specific information based on device type
+            if has_ether_lighting(raw_data):
+                # Etherlighting device (Pro Max switches)
+                attributes["led_type"] = "etherlighting"
+                ether_lighting = get_ether_lighting(raw_data)
+                if ether_lighting:
+                    attributes["ether_lighting_mode"] = ether_lighting.mode
+                    attributes["ether_lighting_brightness"] = ether_lighting.brightness
+                    attributes["ether_lighting_behavior"] = ether_lighting.behavior
+                    attributes["ether_lighting_led_mode"] = ether_lighting.led_mode
+            else:
+                # Traditional LED device
+                attributes["led_type"] = "traditional"
+                if "led_override" in raw_data:
+                    attributes["led_override"] = raw_data["led_override"]
+                if "led_override_color" in raw_data:
+                    attributes["led_override_color"] = raw_data["led_override_color"]
+                if "led_override_color_brightness" in raw_data:
+                    attributes["led_brightness"] = raw_data["led_override_color_brightness"]
 
             # Add connection state
             if "state" in raw_data:

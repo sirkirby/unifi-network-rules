@@ -13,6 +13,7 @@ SERVICE_FORCE_REMOVE_STALE = "force_remove_stale"
 SERVICE_TOGGLE_RULE = "toggle_rule"
 SERVICE_REFRESH_DATA = "refresh_data"
 SERVICE_SYNC_REMOTE_CURATED = "sync_remote_curated"
+SERVICE_SET_DEVICE_LED = "set_device_led"
 
 # Schema fields
 CONF_FILENAME = "filename"
