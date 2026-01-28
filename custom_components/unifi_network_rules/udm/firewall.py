@@ -149,31 +149,6 @@ class FirewallMixin:
             LOGGER.error("Failed to set firewall policy state: %s", str(err))
             return False
 
-    async def queue_toggle_firewall_policy(self, policy: Any) -> bool:
-        """Queue toggling a firewall policy on/off.
-
-        This method ensures that toggle operations are processed sequentially
-        to avoid race conditions or API rate limiting issues.
-
-        Args:
-            policy: The FirewallPolicy object to toggle
-
-        Returns:
-            bool: True if the operation was successful, False otherwise
-        """
-        LOGGER.debug("Queueing toggle for firewall policy %s", policy.id if hasattr(policy, "id") else "unknown")
-
-        # Use the queue_api_operation method to queue the operation
-        future = await self.queue_api_operation(self.toggle_firewall_policy, policy)
-
-        # Wait for the result
-        try:
-            result = await future
-            return result
-        except Exception as err:
-            LOGGER.error("Error executing queued toggle for firewall policy: %s", str(err))
-            return False
-
     async def get_legacy_firewall_rules(self) -> list[FirewallRule]:
         """Get all legacy firewall rules and return as typed FirewallRule objects."""
         try:

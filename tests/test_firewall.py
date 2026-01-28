@@ -218,31 +218,6 @@ async def test_toggle_firewall_policy(api, firewall_policy_data):
 
 
 @pytest.mark.asyncio
-async def test_queue_toggle_firewall_policy(api, firewall_policy_data):
-    """Test queueing a toggle operation for a firewall policy."""
-    # Create a firewall policy object
-    from aiounifi.models.firewall_policy import FirewallPolicy
-
-    policy = FirewallPolicy(firewall_policy_data)
-
-    # Mock the queue_api_operation method
-    future = asyncio.Future()
-    future.set_result(True)
-    api.queue_api_operation = AsyncMock(return_value=future)
-
-    # Call the method
-    result = await api.queue_toggle_firewall_policy(policy)
-
-    # Verify queue_api_operation was called with toggle_firewall_policy
-    api.queue_api_operation.assert_called_once()
-    assert api.queue_api_operation.call_args[0][0] == api.toggle_firewall_policy
-    assert api.queue_api_operation.call_args[0][1] == policy
-
-    # Verify the result is True
-    assert result is True
-
-
-@pytest.mark.asyncio
 async def test_get_legacy_firewall_rules(api, firewall_rule_data):
     """Test retrieving legacy firewall rules."""
     # Mock the controller request method
