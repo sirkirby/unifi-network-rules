@@ -91,25 +91,34 @@ class NetworkMixin:
             LOGGER.error("Failed to update WLAN: %s", str(err))
             return False
 
-    async def toggle_wlan(self, wlan: Any) -> bool:
-        """Toggle a WLAN on/off."""
-        LOGGER.debug("Toggling WLAN state")
+    async def toggle_wlan(self, wlan: Any, target_state: bool) -> bool:
+        """Set a WLAN to a specific enabled/disabled state.
+
+        Args:
+            wlan: The Wlan object to modify
+            target_state: The desired state (True=enabled, False=disabled)
+
+        Returns:
+            bool: True if the operation was successful, False otherwise
+        """
+        LOGGER.debug("Setting WLAN state")
         try:
             # Ensure the wlan is a proper Wlan object
             if not isinstance(wlan, Wlan):
                 LOGGER.error("Expected Wlan object but got %s", type(wlan))
                 return False
 
-            new_state = not wlan.enabled
+            LOGGER.debug("Setting WLAN %s to %s", wlan.id, target_state)
+
             # Use update method with the updated Wlan
-            result = await self.controller.request(WlanEnableRequest.create(wlan.id, new_state))
+            result = await self.controller.request(WlanEnableRequest.create(wlan.id, target_state))
             if result:
-                LOGGER.debug("WLAN %s toggled successfully to %s", wlan.id, new_state)
+                LOGGER.debug("WLAN %s set successfully to %s", wlan.id, target_state)
             else:
-                LOGGER.error("Failed to toggle WLAN %s", wlan.id)
+                LOGGER.error("Failed to set WLAN %s", wlan.id)
             return result
         except Exception as err:
-            LOGGER.error("Failed to toggle WLAN: %s", str(err))
+            LOGGER.error("Failed to set WLAN state: %s", str(err))
             return False
 
     async def get_devices(self) -> list[Device]:

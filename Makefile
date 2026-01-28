@@ -66,15 +66,15 @@ fix: lint-fix format
 
 # Testing
 test:
-	$(PYTEST)
+	$(PYTEST) tests/
 
 test-cov:
-	$(PYTEST) --cov=custom_components/unifi_network_rules --cov-report=term-missing --cov-report=html
+	$(PYTEST) tests/ --cov=custom_components/unifi_network_rules --cov-report=term-missing --cov-report=html
 	@echo ""
 	@echo "Coverage report generated: htmlcov/index.html"
 
 test-watch:
-	$(PYTEST) --watch
+	$(PYTEST) tests/ --watch
 
 # Combined checks (mirrors CI)
 check: lint test

@@ -137,8 +137,11 @@ class UnifiRuleUpdateCoordinator(DataUpdateCoordinator):
 
     # Backward compatibility methods - delegate to auth manager
     def register_ha_initiated_operation(
-        self, rule_id: str, entity_id: str, change_type: str = "modified",
-        timeout: int = HA_INITIATED_OPERATION_TIMEOUT_SECONDS
+        self,
+        rule_id: str,
+        entity_id: str,
+        change_type: str = "modified",
+        timeout: int = HA_INITIATED_OPERATION_TIMEOUT_SECONDS,
     ) -> None:
         """Register that a rule change was initiated from HA."""
         self.auth_manager.register_ha_initiated_operation(rule_id, entity_id, change_type, timeout)

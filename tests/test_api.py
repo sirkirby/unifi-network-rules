@@ -11,9 +11,7 @@ from custom_components.unifi_network_rules.udm.api_base import InvalidAuth
 @pytest.fixture
 def api() -> UDMAPI:
     """Return a UDMAPI instance with mocked controller and queue."""
-    with patch(
-        "custom_components.unifi_network_rules.udm.api.ApiOperationQueue"
-    ) as mock_queue_class:
+    with patch("custom_components.unifi_network_rules.udm.api.ApiOperationQueue") as mock_queue_class:
         # Create a mock queue that doesn't start background tasks
         mock_queue = AsyncMock()
         mock_queue.stop = AsyncMock()

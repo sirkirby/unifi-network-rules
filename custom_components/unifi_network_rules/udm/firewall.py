@@ -114,22 +114,28 @@ class FirewallMixin:
             LOGGER.error("Failed to remove firewall policy: %s", str(err))
             return False
 
-    async def toggle_firewall_policy(self, policy: Any) -> bool:
-        """Toggle a firewall policy on/off."""
-        LOGGER.debug("Toggling firewall policy state")
+    async def toggle_firewall_policy(self, policy: Any, target_state: bool) -> bool:
+        """Set a firewall policy to a specific enabled/disabled state.
+
+        Args:
+            policy: The FirewallPolicy object to modify
+            target_state: The desired state (True=enabled, False=disabled)
+
+        Returns:
+            bool: True if the operation was successful, False otherwise
+        """
+        LOGGER.debug("Setting firewall policy state")
         try:
             # Ensure the policy is a proper FirewallPolicy object
             if not isinstance(policy, FirewallPolicy):
                 LOGGER.error("Expected FirewallPolicy object but got %s", type(policy))
                 return False
 
-            # Toggle the current state
-            new_state = not policy.enabled
-            LOGGER.debug("Toggling policy %s to %s", policy.id, new_state)
+            LOGGER.debug("Setting policy %s to %s", policy.id, target_state)
 
             # Get the raw dictionary from the policy
             policy_dict = policy.raw.copy()
-            policy_dict["enabled"] = new_state
+            policy_dict["enabled"] = target_state
 
             # Create the update request with the raw dictionary
             # The FirewallPolicyUpdateRequest.create() expects a dict it can access with subscript notation
@@ -137,35 +143,10 @@ class FirewallMixin:
 
             # Execute the API call
             await self.controller.request(request)
-            LOGGER.debug("Firewall policy %s toggled successfully to %s", policy.id, new_state)
+            LOGGER.debug("Firewall policy %s set successfully to %s", policy.id, target_state)
             return True
         except Exception as err:
-            LOGGER.error("Failed to toggle firewall policy: %s", str(err))
-            return False
-
-    async def queue_toggle_firewall_policy(self, policy: Any) -> bool:
-        """Queue toggling a firewall policy on/off.
-
-        This method ensures that toggle operations are processed sequentially
-        to avoid race conditions or API rate limiting issues.
-
-        Args:
-            policy: The FirewallPolicy object to toggle
-
-        Returns:
-            bool: True if the operation was successful, False otherwise
-        """
-        LOGGER.debug("Queueing toggle for firewall policy %s", policy.id if hasattr(policy, "id") else "unknown")
-
-        # Use the queue_api_operation method to queue the operation
-        future = await self.queue_api_operation(self.toggle_firewall_policy, policy)
-
-        # Wait for the result
-        try:
-            result = await future
-            return result
-        except Exception as err:
-            LOGGER.error("Error executing queued toggle for firewall policy: %s", str(err))
+            LOGGER.error("Failed to set firewall policy state: %s", str(err))
             return False
 
     async def get_legacy_firewall_rules(self) -> list[FirewallRule]:
@@ -254,24 +235,30 @@ class FirewallMixin:
             LOGGER.error("Failed to update legacy firewall rule: %s", str(err))
             return False
 
-    async def toggle_legacy_firewall_rule(self, rule: Any) -> bool:
-        """Toggle a legacy firewall rule on/off."""
-        LOGGER.debug("Toggling legacy firewall rule state")
+    async def toggle_legacy_firewall_rule(self, rule: Any, target_state: bool) -> bool:
+        """Set a legacy firewall rule to a specific enabled/disabled state.
+
+        Args:
+            rule: The FirewallRule object to modify
+            target_state: The desired state (True=enabled, False=disabled)
+
+        Returns:
+            bool: True if the operation was successful, False otherwise
+        """
+        LOGGER.debug("Setting legacy firewall rule state")
         try:
             # Ensure the rule is a proper FirewallRule object
             if not isinstance(rule, FirewallRule):
                 LOGGER.error("Expected FirewallRule object but got %s", type(rule))
                 return False
 
-            # Toggle the current state
-            new_state = not rule.enabled
-            LOGGER.debug("Toggling legacy firewall rule %s to %s", rule.id, new_state)
+            LOGGER.debug("Setting legacy firewall rule %s to %s", rule.id, target_state)
 
             # Convert rule to dictionary for update (required for API)
             rule_dict = rule.raw.copy()
 
             # Update enabled state
-            rule_dict["enabled"] = new_state
+            rule_dict["enabled"] = target_state
 
             # Create a new FirewallRule object with the updated state
             updated_rule = FirewallRule(rule_dict)
@@ -279,10 +266,10 @@ class FirewallMixin:
             # Update the rule using our standardized method
             result = await self.update_legacy_firewall_rule(updated_rule)
             if result:
-                LOGGER.debug("Legacy firewall rule %s toggled successfully to %s", rule.id, new_state)
+                LOGGER.debug("Legacy firewall rule %s set successfully to %s", rule.id, target_state)
             else:
-                LOGGER.error("Failed to toggle legacy firewall rule %s", rule.id)
+                LOGGER.error("Failed to set legacy firewall rule %s", rule.id)
             return result
         except Exception as err:
-            LOGGER.error("Failed to toggle legacy firewall rule: %s", str(err))
+            LOGGER.error("Failed to set legacy firewall rule state: %s", str(err))
             return False

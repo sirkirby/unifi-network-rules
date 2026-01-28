@@ -134,35 +134,33 @@ class QoSMixin:
             LOGGER.error("Failed to update QoS rule: %s", str(err))
             return False
 
-    async def toggle_qos_rule(self, rule: Any) -> bool:
-        """Toggle a QoS rule on/off.
+    async def toggle_qos_rule(self, rule: Any, target_state: bool) -> bool:
+        """Set a QoS rule to a specific enabled/disabled state.
 
         Args:
             rule: QoSRule object or dictionary with rule data
+            target_state: The desired state (True=enabled, False=disabled)
 
         Returns:
-            bool: True if the toggle was successful, False otherwise
+            bool: True if the operation was successful, False otherwise
         """
-        LOGGER.debug("Toggling QoS rule state")
+        LOGGER.debug("Setting QoS rule state")
         try:
             # Ensure we have a proper rule ID
             rule_id = None
-            new_state = None
 
             if isinstance(rule, QoSRule):
                 rule_id = rule.id
-                new_state = not rule.enabled
             elif isinstance(rule, dict) and "_id" in rule:
                 rule_id = rule["_id"]
-                new_state = not rule.get("enabled", False)
             else:
                 LOGGER.error("Cannot determine rule ID from provided object: %s", type(rule))
                 return False
 
-            LOGGER.debug("Toggling QoS rule %s to %s using batch API", rule_id, new_state)
+            LOGGER.debug("Setting QoS rule %s to %s using batch API", rule_id, target_state)
 
             # Create batch toggle request
-            batch_request = QoSRuleBatchToggleRequest([rule_id], new_state)
+            batch_request = QoSRuleBatchToggleRequest([rule_id], target_state)
 
             # Format API path
             path = API_PATH_QOS_RULES_BATCH
@@ -172,10 +170,10 @@ class QoSMixin:
 
             # Execute the API call
             await self.controller.request(request)
-            LOGGER.debug("QoS rule %s toggled successfully to %s", rule_id, new_state)
+            LOGGER.debug("QoS rule %s set successfully to %s", rule_id, target_state)
             return True
         except Exception as err:
-            LOGGER.error("Failed to toggle QoS rule: %s", str(err))
+            LOGGER.error("Failed to set QoS rule state: %s", str(err))
             return False
 
     async def remove_qos_rule(self, rule_id: str) -> bool:
