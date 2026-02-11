@@ -219,3 +219,7 @@ test_automations*
 
 # open-agent-kit: Issue raw JSON (local debugging only)
 oak/issue/**/context.json
+
+# open-agent-kit: Codebase Intelligence
+.oak/ci/
+.oak/config.*.yaml

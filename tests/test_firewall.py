@@ -1,6 +1,5 @@
 """Tests for the UniFi Network Rules Firewall API functionality."""
 
-import asyncio
 from unittest.mock import AsyncMock, Mock
 
 import pytest

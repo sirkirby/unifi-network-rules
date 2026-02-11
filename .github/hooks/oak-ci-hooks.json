@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "oak ci hook sessionStart --agent copilot",
+        "powershell": "oak ci hook sessionStart --agent copilot",
+        "timeoutSec": 60
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "oak ci hook sessionEnd --agent copilot",
+        "powershell": "oak ci hook sessionEnd --agent copilot",
+        "timeoutSec": 60
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "oak ci hook userPromptSubmitted --agent copilot",
+        "powershell": "oak ci hook userPromptSubmitted --agent copilot",
+        "timeoutSec": 60
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "oak ci hook postToolUse --agent copilot",
+        "powershell": "oak ci hook postToolUse --agent copilot",
+        "timeoutSec": 60
+      }
+    ],
+    "errorOccurred": [
+      {
+        "type": "command",
+        "bash": "oak ci hook errorOccurred --agent copilot",
+        "powershell": "oak ci hook errorOccurred --agent copilot",
+        "timeoutSec": 60,
+        "comment": "Maps to post-tool-use-failure endpoint"
+      }
+    ]
+  }
+}

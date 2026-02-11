@@ -5,12 +5,15 @@ migrations:
 - 2025.11.28_features_restructure
 - 2025.12.05_unify_plan_create
 - 2026.01.05_remove_oak_features_dir
+- cleanup-builtin-agent-tasks
+- cleanup-skill-generate-scripts
 managed_assets:
   directories:
   - .claude/commands
   - .codex/prompts
   - .cursor/commands
   - .github/agents
+  - oak
   created_files:
   - path: .github/agents/oak.constitution-create.agent.md
     hash: d7962c85d16283e4114b953dd56a964a7929baa65ea01b301d692af7a68ffed8
@@ -129,4 +132,23 @@ managed_assets:
   - path: CLAUDE.md
     hash: 14d0b0d5da1b31d6ca8365e682d3aa77395f440a80e93f769e9862bfa2623421
     created_at: '2025-12-28T13:52:53.121811'
+  - path: .github/agents/oak.backend-python-expert.agent.md
+    hash: 833f4c4c1606bbdc0d9b9ce9e059212bce46a1c6af9edc8758c274e533a2b304
+    created_at: '2026-02-11T11:37:22.838507'
+  - path: .cursor/commands/oak.backend-python-expert.md
+    hash: 833f4c4c1606bbdc0d9b9ce9e059212bce46a1c6af9edc8758c274e533a2b304
+    created_at: '2026-02-11T11:37:22.852299'
+  - path: .codex/prompts/oak.backend-python-expert.md
+    hash: 833f4c4c1606bbdc0d9b9ce9e059212bce46a1c6af9edc8758c274e533a2b304
+    created_at: '2026-02-11T11:37:22.866581'
+  - path: .claude/commands/oak.backend-python-expert.md
+    hash: 833f4c4c1606bbdc0d9b9ce9e059212bce46a1c6af9edc8758c274e533a2b304
+    created_at: '2026-02-11T11:37:22.881208'
+  - path: oak/daemon.port
+    hash: 966e0a376157a20ec409b64bb39eb138c5e6085e91168644e088916cd9a3db15
+    created_at: '2026-02-11T11:37:22.919164'
   modified_files: []
+initialized_features:
+- codebase-intelligence
+- rules-management
+- strategic-planning
