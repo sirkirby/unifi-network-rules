@@ -112,15 +112,11 @@ class UnifiNetworkRulesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry):
         """Get the options flow."""
-        return UnifiNetworkRulesOptionsFlowHandler(config_entry)
+        return UnifiNetworkRulesOptionsFlowHandler()
 
 
 class UnifiNetworkRulesOptionsFlowHandler(config_entries.OptionsFlow):
     """Handle options flow for UniFi Network Rules."""
-
-    def __init__(self, config_entry):
-        """Initialize options flow."""
-        self.config_entry = config_entry
 
     async def async_step_init(self, user_input=None):
         """Handle options flow."""
