@@ -7,6 +7,7 @@ migrations:
 - 2026.01.05_remove_oak_features_dir
 - cleanup-builtin-agent-tasks
 - cleanup-skill-generate-scripts
+- hooks-local-only
 managed_assets:
   directories:
   - .claude/commands
