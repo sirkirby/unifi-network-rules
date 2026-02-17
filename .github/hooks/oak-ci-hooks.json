@@ -1,45 +1,59 @@
 {
-  "version": 1,
   "hooks": {
-    "sessionStart": [
+    "SessionStart": [
       {
         "type": "command",
-        "bash": "oak ci hook sessionStart --agent copilot",
-        "powershell": "oak ci hook sessionStart --agent copilot",
-        "timeoutSec": 60
+        "command": "oak ci hook SessionStart --agent vscode-copilot",
+        "timeout": 60
       }
     ],
-    "sessionEnd": [
+    "UserPromptSubmit": [
       {
         "type": "command",
-        "bash": "oak ci hook sessionEnd --agent copilot",
-        "powershell": "oak ci hook sessionEnd --agent copilot",
-        "timeoutSec": 60
+        "command": "oak ci hook UserPromptSubmit --agent vscode-copilot",
+        "timeout": 60
       }
     ],
-    "userPromptSubmitted": [
+    "PreToolUse": [
       {
         "type": "command",
-        "bash": "oak ci hook userPromptSubmitted --agent copilot",
-        "powershell": "oak ci hook userPromptSubmitted --agent copilot",
-        "timeoutSec": 60
+        "command": "oak ci hook PreToolUse --agent vscode-copilot",
+        "timeout": 60
       }
     ],
-    "postToolUse": [
+    "PostToolUse": [
       {
         "type": "command",
-        "bash": "oak ci hook postToolUse --agent copilot",
-        "powershell": "oak ci hook postToolUse --agent copilot",
-        "timeoutSec": 60
+        "command": "oak ci hook PostToolUse --agent vscode-copilot",
+        "timeout": 60
       }
     ],
-    "errorOccurred": [
+    "PreCompact": [
       {
         "type": "command",
-        "bash": "oak ci hook errorOccurred --agent copilot",
-        "powershell": "oak ci hook errorOccurred --agent copilot",
-        "timeoutSec": 60,
-        "comment": "Maps to post-tool-use-failure endpoint"
+        "command": "oak ci hook PreCompact --agent vscode-copilot",
+        "timeout": 60
+      }
+    ],
+    "SubagentStart": [
+      {
+        "type": "command",
+        "command": "oak ci hook SubagentStart --agent vscode-copilot",
+        "timeout": 60
+      }
+    ],
+    "SubagentStop": [
+      {
+        "type": "command",
+        "command": "oak ci hook SubagentStop --agent vscode-copilot",
+        "timeout": 60
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "oak ci hook Stop --agent vscode-copilot",
+        "timeout": 60
       }
     ]
   }

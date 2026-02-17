@@ -8,6 +8,7 @@ migrations:
 - cleanup-builtin-agent-tasks
 - cleanup-skill-generate-scripts
 - hooks-local-only
+- rename-copilot-to-vscode-copilot
 managed_assets:
   directories:
   - .claude/commands

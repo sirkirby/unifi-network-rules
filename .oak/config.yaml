@@ -1,6 +1,6 @@
-version: 1.0.12
+version: 1.1.5
 agents:
-- copilot
+- vscode-copilot
 - cursor
 - codex
 - claude
@@ -19,19 +19,15 @@ skills:
   auto_install: true
 codebase_intelligence:
   agents:
-    enabled: true
-    max_turns: 50
-    timeout_seconds: 600
-    scheduler_interval_seconds: 60
-    executor_cache_size: 100
     background_processing_interval_seconds: 60
-  session_quality:
-    min_activities: 3
-    stale_timeout_seconds: 3600
+    enabled: true
+    executor_cache_size: 100
+    max_turns: 50
+    scheduler_interval_seconds: 60
+    timeout_seconds: 600
   backup:
     on_upgrade: true
-  index_on_startup: true
-  watch_files: true
+  cli_command: oak
   exclude_patterns:
   - .git
   - .git/**
@@ -115,4 +111,8 @@ codebase_intelligence:
   - '*.po'
   - '*.pot'
   - '*.mo'
-  cli_command: oak
+  index_on_startup: true
+  session_quality:
+    min_activities: 3
+    stale_timeout_seconds: 3600
+  watch_files: true
