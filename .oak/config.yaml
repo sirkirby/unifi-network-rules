@@ -1,4 +1,4 @@
-version: 1.1.6
+version: 1.1.9
 agents:
 - vscode-copilot
 - cursor
@@ -25,6 +25,7 @@ codebase_intelligence:
     max_turns: 50
     scheduler_interval_seconds: 60
     timeout_seconds: 600
+    background_processing_workers: 4
   backup:
     on_upgrade: true
   cli_command: oak
@@ -116,3 +117,8 @@ codebase_intelligence:
     min_activities: 3
     stale_timeout_seconds: 3600
   watch_files: true
+  auto_resolve:
+    enabled: true
+    similarity_threshold: 0.85
+    similarity_threshold_no_context: 0.92
+    search_limit: 5
