@@ -12,6 +12,10 @@
 
 UniFi Network Rules is a custom integration for Home Assistant that integrates with your UniFi Dream Machine/Router to both provide and help you create useful interactions and automations for your Home Lab. The goal of this integration is to simplify policy and rule management for real world use cases. I built this because I wanted to unlock the power of my UniFi firewall. From simple things like screen time and game server access controls for my kids, to more advanced like getting notified when a critical rule is changed and automatically backing up your rules. And most importantly, make all of this easy to use and share with anyone in your home or home lab. I hope you find it useful!
 
+> 📖 **[Quick Start Guide](QUICKSTART.md)** — Installation, setup, and troubleshooting
+> 🤝 **[Contributing](CONTRIBUTING.md)** — Development setup and PR workflow
+> 🔒 **[Security](SECURITY.md)** — Vulnerability reporting policy
+
 ## What this integration provides
 
 ### Switches for enabling and disabling rules and configuration
@@ -1101,28 +1105,6 @@ The UniFi Network Rules integration supports several types of rules:
 
 9. **Legacy Rules**: For older UniFi OS versions, there are also legacy_firewall and legacy_traffic rule types, which are mapped to "policy" when using the service.
 
-## Local Development
-
-### Testing
-
-To run the tests, you need to install the dependencies in the `requirements.txt` file.
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-Then run the tests:
-
-```bash
-pytest tests
-```
-
-### API Testing
-
-We've created a [Bruno](https://github.com/sirkirby/bruno-udm-api) collection to manually test the API requests. These are the same requests that the integration makes. This is a great way to verify your credentials are valid and to verify device connectivity and compatibility.
-
 ## Diagnostics and Debugging
 
 The integration includes targeted diagnostics and debugging capabilities to help troubleshoot issues while minimizing resource usage.
@@ -1177,40 +1159,7 @@ To temporarily enable API call tracing for a session:
 
 *Remember to revert this change after troubleshooting to prevent excessive logging.*
 
-## General Troubleshooting
-
-If you are having trouble getting the integration to work, please check the following:
-
-1. Ensure the UDM is running the latest version of the network application.
-2. Ensure the UDM is connected to the same network as your Home Assistant instance.
-3. Ensure you are using the IP address of the UDM, not the hostname.
-4. Verify your local account has proper admin privileges.
-
-### Verify your local account is working
-
-Run this on a computer connected to the same network as your UDM or directly on your Home Assistant instance to verify connectivity to the UDM and that your credentials are valid.
-
-```bash
-curl -k -X POST https://[UDM-IP]/api/auth/login \
--H "Content-Type: application/json" \
--d '{"username":"[USERNAME]","password":"[PASSWORD]"}' 
-```
-
-Possible responses:
-
-- 200 OK: Credentials are valid. Returns a JSON object with the user's information.
-- 401 Unauthorized: Credentials are invalid.
-- 429 Too Many Requests: The user has made too many requests in a short period of time. Wait a few minutes and try again.
-
-### Verify your account has admin privileges
-
-You can do this by logging into your UniFi device locally or via <https://UniFi.ui.com>, navigate to Settings -> Admins & Users, and checking the local user's permissions. It should be Admin or Super Admin for the network application.
-
-### Open a bug issue
-
-If you are having trouble getting the integration to work, please open an [Issue](https://github.com/sirkirby/UniFi-network-rules/issues) using the bug report template. Please enable debug logging and include the full log output in your report. Note that it may contain sensitive network information, so please review it before posting. The logs can be large, so i recommend attaching them as a file.
-
-To get the debug log, navigate Devices and Services -> UniFi Network Rules -> Enable Debug Logging. Then reload the integration and try to reproduce the issue. Finally, disable debug logging and download the log file.
+> **Having trouble?** See the [Troubleshooting section](QUICKSTART.md#troubleshooting) in the Quick Start Guide.
 
 ## Limitations
 
@@ -1218,9 +1167,11 @@ This integration uses the same core library that Home Assistant Unifi integratio
 
 This will not support all the features of the UniFi controller, for that, leverage the core integration. The focus of this integration will be home and home lab use cases to extend and differentiate from the core integration.
 
-## Contributions
+## Contributing
 
-Contributions are welcome! Please read our [Contributing Guidelines](CONTRIBUTING.md) and feel free to submit a PR.
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, the quality gate (`make check`), and the PR workflow.
+
+Report security vulnerabilities through our [Security Policy](SECURITY.md).
 
 ***
 
