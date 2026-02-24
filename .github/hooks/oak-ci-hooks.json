@@ -3,56 +3,56 @@
     "SessionStart": [
       {
         "type": "command",
-        "command": "oak ci hook SessionStart --agent vscode-copilot",
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook SessionStart --agent vscode-copilot || true",
         "timeout": 60
       }
     ],
     "UserPromptSubmit": [
       {
         "type": "command",
-        "command": "oak ci hook UserPromptSubmit --agent vscode-copilot",
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook UserPromptSubmit --agent vscode-copilot || true",
         "timeout": 60
       }
     ],
     "PreToolUse": [
       {
         "type": "command",
-        "command": "oak ci hook PreToolUse --agent vscode-copilot",
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook PreToolUse --agent vscode-copilot || true",
         "timeout": 60
       }
     ],
     "PostToolUse": [
       {
         "type": "command",
-        "command": "oak ci hook PostToolUse --agent vscode-copilot",
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook PostToolUse --agent vscode-copilot || true",
         "timeout": 60
       }
     ],
     "PreCompact": [
       {
         "type": "command",
-        "command": "oak ci hook PreCompact --agent vscode-copilot",
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook PreCompact --agent vscode-copilot || true",
         "timeout": 60
       }
     ],
     "SubagentStart": [
       {
         "type": "command",
-        "command": "oak ci hook SubagentStart --agent vscode-copilot",
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook SubagentStart --agent vscode-copilot || true",
         "timeout": 60
       }
     ],
     "SubagentStop": [
       {
         "type": "command",
-        "command": "oak ci hook SubagentStop --agent vscode-copilot",
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook SubagentStop --agent vscode-copilot || true",
         "timeout": 60
       }
     ],
     "Stop": [
       {
         "type": "command",
-        "command": "oak ci hook Stop --agent vscode-copilot",
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook Stop --agent vscode-copilot || true",
         "timeout": 60
       }
     ]

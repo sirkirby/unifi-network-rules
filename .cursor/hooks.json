@@ -3,62 +3,62 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "oak ci hook sessionStart --agent cursor"
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook sessionStart --agent cursor || true"
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "oak ci hook beforeSubmitPrompt --agent cursor"
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook beforeSubmitPrompt --agent cursor || true"
       }
     ],
     "afterFileEdit": [
       {
-        "command": "oak ci hook afterFileEdit --agent cursor"
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook afterFileEdit --agent cursor || true"
       }
     ],
     "afterAgentResponse": [
       {
-        "command": "oak ci hook afterAgentResponse --agent cursor"
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook afterAgentResponse --agent cursor || true"
       }
     ],
     "afterAgentThought": [
       {
-        "command": "oak ci hook afterAgentThought --agent cursor"
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook afterAgentThought --agent cursor || true"
       }
     ],
     "postToolUse": [
       {
-        "command": "oak ci hook postToolUse --agent cursor"
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook postToolUse --agent cursor || true"
       }
     ],
     "preCompact": [
       {
-        "command": "oak ci hook preCompact --agent cursor"
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook preCompact --agent cursor || true"
       }
     ],
     "stop": [
       {
-        "command": "oak ci hook stop --agent cursor"
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook stop --agent cursor || true"
       }
     ],
     "sessionEnd": [
       {
-        "command": "oak ci hook sessionEnd --agent cursor"
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook sessionEnd --agent cursor || true"
       }
     ],
     "postToolUseFailure": [
       {
-        "command": "oak ci hook postToolUseFailure --agent cursor"
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook postToolUseFailure --agent cursor || true"
       }
     ],
     "subagentStart": [
       {
-        "command": "oak ci hook subagentStart --agent cursor"
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook subagentStart --agent cursor || true"
       }
     ],
     "subagentStop": [
       {
-        "command": "oak ci hook subagentStop --agent cursor"
+        "command": "command -v oak >/dev/null 2>&1 && oak ci hook subagentStop --agent cursor || true"
       }
     ]
   }
