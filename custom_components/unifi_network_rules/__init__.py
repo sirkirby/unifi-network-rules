@@ -229,12 +229,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    # Only unload platforms that were successfully loaded
     if entry.entry_id in hass.data.get(DOMAIN, {}):
         entry_data = hass.data[DOMAIN][entry.entry_id]
-        loaded_platforms = entry_data.get("loaded_platforms", set())
 
-        LOGGER.debug("Unloading entry: %s with loaded platforms: %s", entry.entry_id, loaded_platforms)
+        LOGGER.debug("Unloading entry: %s with platforms: %s", entry.entry_id, PLATFORMS)
 
         # Unregister coordinator from services
         if "services" in hass.data[DOMAIN] and "unregister_coordinator" in hass.data[DOMAIN]["services"]:
@@ -242,11 +240,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             unregister_coordinator = hass.data[DOMAIN]["services"]["unregister_coordinator"]
             unregister_coordinator(entry.entry_id)
 
-        # Attempt to unload all platforms at once
         try:
-            unload_ok = await hass.config_entries.async_unload_platforms(entry, loaded_platforms)
+            unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
             if not unload_ok:
-                LOGGER.warning("Failed to unload one or more platforms: %s", loaded_platforms)
+                LOGGER.warning("Failed to unload one or more platforms: %s", PLATFORMS)
         except Exception as unload_error:
             LOGGER.exception("Error unloading platforms: %s", unload_error)
             unload_ok = False
