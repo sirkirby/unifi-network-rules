@@ -53,25 +53,16 @@ jobs:
 
           {
             printf '%s' "$PRERELEASE_BANNER"
+            printf '%s\n\n' "$AUTO_NOTES"
             cat <<'NOTES'
-          ## Install via HACS
-
-          1. Open **HACS** in Home Assistant.
-          2. Search for **UniFi Network Rules** in *Integrations*. If it's not listed, add this repository as a custom repository (category: *Integration*).
-          3. Click **Download** and select this version.
-          4. **Restart Home Assistant**.
-          5. Go to **Settings → Devices & services → Add integration** and search for *UniFi Network Rules*.
-
-          ## Manual install
-
-          1. Download the source archive from this release.
-          2. Copy `custom_components/unifi_network_rules` into your Home Assistant `config/custom_components/` directory.
-          3. Restart Home Assistant and add the integration from **Settings → Devices & services**.
-
           ---
 
+          ## Install
+
+          [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=sirkirby&repository=UniFi-network-rules&category=integration)
+
+          Or manually copy `custom_components/unifi_network_rules` from the source archive into your Home Assistant `config/custom_components/` directory and restart.
           NOTES
-            printf '%s\n' "$AUTO_NOTES"
           } > release-notes.md
 
           echo "Generated release notes:"
