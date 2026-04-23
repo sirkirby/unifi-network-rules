@@ -16,13 +16,23 @@ jobs:
   sync:
     name: Sync manifest.json version to release tag
     runs-on: ubuntu-latest
+    environment: release
     steps:
+      - name: Verify PUSH_TOKEN is configured
+        env:
+          TOKEN_SET: ${{ secrets.PUSH_TOKEN != '' }}
+        run: |
+          if [ "$TOKEN_SET" != "true" ]; then
+            echo "::error::PUSH_TOKEN secret is not set in the 'release' environment. Create a PAT with 'contents:write' from an account that can bypass the main branch ruleset, and add it as PUSH_TOKEN to the 'release' environment."
+            exit 1
+          fi
+
       - name: Checkout main
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
-          token: ${{ secrets.PUSH_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PUSH_TOKEN }}
 
       - name: Verify tag commit is in main history
         env:
