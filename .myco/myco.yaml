@@ -1,0 +1,59 @@
+version: 3
+config_version: 6
+embedding:
+  provider: ollama
+  model: bge-m3
+daemon:
+  port: 28183
+  log_level: info
+  log_retention_days: 30
+  stale_session_threshold_ms: 3600000
+capture:
+  transcript_paths: []
+  plan_dirs: []
+  ignore_plan_dirs_in_git: false
+  artifact_extensions:
+    - .md
+  buffer_max_events: 500
+agent:
+  summary_batch_interval: 5
+  scheduled_tasks_enabled: true
+  event_tasks_enabled: true
+context:
+  digest_tier: 5000
+  session_start_digest_enabled: false
+  cortex_enabled: true
+  prompt_search: true
+  prompt_max_spores: 3
+backup: {}
+maintenance:
+  auto_optimize: true
+  auto_optimize_interval_hours: 24
+team:
+  enabled: false
+  interval_minutes: 15
+skills:
+  confidence_threshold: 0.7
+  usage_stale_days: 30
+notifications:
+  enabled: true
+  system_notifications: false
+  default_mode: summary
+  domains:
+    settings:
+      enabled: true
+      mode: banner
+appearance:
+  theme: sage
+  mode: dark
+  font: default
+  density: normal
+symbionts:
+  claude-code:
+    enabled: true
+  codex:
+    enabled: true
+  cursor:
+    enabled: true
+  opencode:
+    enabled: true
