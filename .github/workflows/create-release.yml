@@ -1,0 +1,105 @@
+name: Create GitHub release from tag
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+concurrency:
+  group: create-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect prerelease
+        id: meta
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$TAG_NAME" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          IS_PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          AUTO_NOTES=$(gh api "repos/${REPO}/releases/generate-notes" \
+            -f tag_name="$TAG_NAME" \
+            --jq '.body')
+
+          PRERELEASE_BANNER=""
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            PRERELEASE_BANNER=$'> [!WARNING]\n> This is a pre-release. It may contain incomplete features or known issues — pin intentionally.\n\n'
+          fi
+
+          {
+            printf '%s' "$PRERELEASE_BANNER"
+            cat <<'NOTES'
+          ## Install via HACS
+
+          1. Open **HACS** in Home Assistant.
+          2. Search for **UniFi Network Rules** in *Integrations*. If it's not listed, add this repository as a custom repository (category: *Integration*).
+          3. Click **Download** and select this version.
+          4. **Restart Home Assistant**.
+          5. Go to **Settings → Devices & services → Add integration** and search for *UniFi Network Rules*.
+
+          ## Manual install
+
+          1. Download the source archive from this release.
+          2. Copy `custom_components/unifi_network_rules` into your Home Assistant `config/custom_components/` directory.
+          3. Restart Home Assistant and add the integration from **Settings → Devices & services**.
+
+          ---
+
+          NOTES
+            printf '%s\n' "$AUTO_NOTES"
+          } > release-notes.md
+
+          echo "Generated release notes:"
+          echo "------"
+          cat release-notes.md
+          echo "------"
+
+      - name: Create release if missing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+          IS_PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release ${TAG_NAME} already exists; skipping"
+            exit 0
+          fi
+
+          args=(
+            "$TAG_NAME"
+            --title "$TAG_NAME"
+            --notes-file release-notes.md
+            --verify-tag
+          )
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            args+=(--prerelease)
+          fi
+
+          gh release create "${args[@]}"
