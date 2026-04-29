@@ -6,6 +6,7 @@ from typing import Any
 
 from ..const import LOGGER
 from ..queue import ApiOperationQueue
+from ..utils.logger import sanitize_auth_data
 from .api_base import UDMAPI as BaseAPI
 from .api_handlers import ApiHandlerMixin
 from .authentication import AuthenticationMixin
@@ -322,19 +323,7 @@ class UDMAPI(
 
     def _sanitize_data_for_logging(self, data: Any) -> Any:
         """Remove sensitive information from data before logging."""
-        if not isinstance(data, dict):
-            return data
-
-        # Create a copy to avoid modifying the original
-        safe_data = data.copy()
-
-        # Remove sensitive fields (passwords, tokens, etc.)
-        sensitive_fields = ["password", "key", "psk", "secret", "token", "auth"]
-        for field in sensitive_fields:
-            if field in safe_data:
-                safe_data[field] = "***REDACTED***"
-
-        return safe_data
+        return sanitize_auth_data(data)
 
     async def refresh_all(self) -> None:
         """Refresh all API data from the controller."""

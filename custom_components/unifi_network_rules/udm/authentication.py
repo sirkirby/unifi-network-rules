@@ -278,7 +278,7 @@ class AuthenticationMixin:
             )
 
             if not has_session:
-                LOGGER.warning("No valid session token, performing full login")
+                LOGGER.debug("No valid session token, performing full login")
                 login_success = await self._try_login()
 
                 # After login, ensure proxy prefix is in base path

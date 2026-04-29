@@ -55,7 +55,7 @@ class FirewallMixin:
 
     async def add_firewall_policy(self, policy_data: dict[str, Any]) -> FirewallPolicy | None:
         """Add a new firewall policy."""
-        LOGGER.debug("Adding firewall policy: %s", policy_data)
+        LOGGER.debug("Adding firewall policy: %s", policy_data.get("name", "unnamed"))
         try:
             # Using is_v2=True because this is a v2 API endpoint
             request = self.create_api_request("POST", API_PATH_FIREWALL_POLICIES, data=policy_data, is_v2=True)
@@ -193,7 +193,7 @@ class FirewallMixin:
 
     async def add_legacy_firewall_rule(self, rule_data: dict[str, Any]) -> FirewallRule | None:
         """Add a new legacy firewall rule."""
-        LOGGER.debug("Adding legacy firewall rule: %s", rule_data)
+        LOGGER.debug("Adding legacy firewall rule: %s", rule_data.get("name", "unnamed"))
         try:
             # Using the correct path constant
             request = self.create_api_request("POST", API_PATH_LEGACY_FIREWALL_RULES, data=rule_data)

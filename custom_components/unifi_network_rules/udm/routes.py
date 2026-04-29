@@ -42,7 +42,7 @@ class RoutesMixin:
 
     async def add_traffic_route(self, route_data: dict[str, Any]) -> TrafficRoute | None:
         """Add a new traffic route."""
-        LOGGER.debug("Adding traffic route: %s", route_data)
+        LOGGER.debug("Adding traffic route: %s", route_data.get("name", "unnamed"))
         try:
             # Using is_v2=True because this is a v2 API endpoint
             request = self.create_api_request("POST", API_PATH_TRAFFIC_ROUTES, data=route_data, is_v2=True)

@@ -38,7 +38,7 @@ class TrafficMixin:
 
     async def add_traffic_rule(self, rule_data: dict[str, Any]) -> TrafficRule | None:
         """Add a new traffic rule."""
-        LOGGER.debug("Adding traffic rule: %s", rule_data)
+        LOGGER.debug("Adding traffic rule: %s", rule_data.get("name", "unnamed"))
         try:
             # Using is_v2=True because this is a v2 API endpoint
             request = self.create_api_request("POST", API_PATH_LEGACY_TRAFFIC_RULES, data=rule_data, is_v2=True)
