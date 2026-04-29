@@ -164,6 +164,11 @@ async def test_sanitize_data_for_logging():
         "psk": "pre_shared_key",
         "secret": "top_secret",
         "auth": "auth_token",
+        "nested": {
+            "openvpn_password": "vpn_password",
+            "wireguard_private_key": "private_key",
+            "client": [{"mac": "aa:bb:cc:dd:ee:ff", "ip": "192.168.1.10"}],
+        },
         "safe_field": "visible_data",
     }
 
@@ -176,13 +181,18 @@ async def test_sanitize_data_for_logging():
     assert sanitized["psk"] == "***REDACTED***"
     assert sanitized["secret"] == "***REDACTED***"
     assert sanitized["auth"] == "***REDACTED***"
+    assert sanitized["username"] == "***REDACTED***"
+    assert sanitized["nested"]["openvpn_password"] == "***REDACTED***"
+    assert sanitized["nested"]["wireguard_private_key"] == "***REDACTED***"
+    assert sanitized["nested"]["client"][0]["mac"] == "***REDACTED***"
+    assert sanitized["nested"]["client"][0]["ip"] == "***REDACTED***"
 
     # Safe fields should be unchanged
-    assert sanitized["username"] == "admin"
     assert sanitized["safe_field"] == "visible_data"
 
     # Original data should be unchanged
     assert data["password"] == "secret_password"
+    assert data["nested"]["client"][0]["ip"] == "192.168.1.10"
 
     # Test with non-dict data
     assert api._sanitize_data_for_logging("string_data") == "string_data"

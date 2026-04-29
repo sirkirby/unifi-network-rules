@@ -32,6 +32,7 @@ from .const import (
     LOGGER,
 )
 from .udm import UDMAPI, CannotConnect, InvalidAuth
+from .utils.logger import install_aiounifi_log_redaction
 
 # Display the update interval in minutes for better UX
 DEFAULT_UPDATE_INTERVAL_MINUTES = DEFAULT_UPDATE_INTERVAL // 60
@@ -52,6 +53,8 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> None:
     """Validate the user input allows us to connect."""
+    install_aiounifi_log_redaction()
+
     api = UDMAPI(
         data[CONF_HOST],
         data[CONF_USERNAME],

@@ -38,7 +38,7 @@ class PortForwardMixin:
 
     async def add_port_forward(self, forward_data: dict[str, Any]) -> PortForward | None:
         """Add a new port forward."""
-        LOGGER.debug("Adding port forward: %s", forward_data)
+        LOGGER.debug("Adding port forward: %s", forward_data.get("name", "unnamed"))
         try:
             # Using the path constant from const.py
             request = self.create_api_request("POST", API_PATH_PORT_FORWARDS, data=forward_data)

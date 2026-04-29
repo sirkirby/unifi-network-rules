@@ -73,7 +73,7 @@ class QoSMixin:
         Returns:
             QoSRule object if successful, None otherwise
         """
-        LOGGER.debug("Adding QoS rule: %s", rule_data)
+        LOGGER.debug("Adding QoS rule: %s", rule_data.get("name", "unnamed"))
         try:
             # Using is_v2=True because this is a v2 API endpoint
             request = self.create_api_request("POST", API_PATH_QOS_RULES, data=rule_data, is_v2=True)

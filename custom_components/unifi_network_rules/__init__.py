@@ -30,12 +30,15 @@ from .services import async_setup_services
 
 # Import the modular API implementation
 from .udm.api import UDMAPI
+from .utils.logger import install_aiounifi_log_redaction
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up UniFi Network Rules component."""
+    install_aiounifi_log_redaction()
+
     # Initialize domain data if not already done
     hass.data.setdefault(DOMAIN, {})
     # Store shared data
@@ -52,6 +55,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up UniFi Network Rules from a config entry."""
+    install_aiounifi_log_redaction()
+
     try:
         # Initialize API
         api = UDMAPI(

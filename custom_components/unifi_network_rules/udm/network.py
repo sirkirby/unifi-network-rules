@@ -235,16 +235,12 @@ class NetworkMixin:
                             device = Device(device_data)
                             led_capable_devices.append(device)
                             LOGGER.debug(
-                                "Created LED-capable device: %s (%s) - LED state: %s",
-                                device_data.get("name", "Unknown"),
-                                mac,
+                                "Created LED-capable device - LED state: %s",
                                 device_data.get("led_override", "unknown"),
                             )
                         except Exception as device_err:
                             LOGGER.warning(
-                                "Error creating Device object for %s (%s): %s",
-                                device_data.get("name", "unknown"),
-                                mac,
+                                "Error creating Device object: %s",
                                 str(device_err),
                             )
                             continue
