@@ -1,8 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(oak:*)",
-      "Bash(oak *)"
+      "Bash(myco *)",
+      "Bash(myco-dev:*)",
+      "Bash(myco:*)",
+      "Bash(myco-dev *)"
     ]
   },
   "hooks": {
@@ -14,6 +16,15 @@
             "type": "command",
             "command": "command -v oak >/dev/null 2>&1 && oak ci hook SessionStart --agent claude || true",
             "timeout": 60
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && node .agents/myco-run.cjs hook session-start --symbiont claude-code",
+            "timeout": 10
           }
         ]
       }
@@ -28,16 +39,13 @@
             "timeout": 60
           }
         ]
-      }
-    ],
-    "PreToolUse": [
+      },
       {
-        "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "command -v oak >/dev/null 2>&1 && oak ci hook PreToolUse --agent claude || true",
-            "timeout": 60
+            "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && node .agents/myco-run.cjs hook user-prompt-submit --symbiont claude-code",
+            "timeout": 5
           }
         ]
       }
@@ -48,20 +56,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "command -v oak >/dev/null 2>&1 && oak ci hook PostToolUse --agent claude || true",
+            "command": "command -v oak >/dev/null 2>&1 && oak ci hook PreToolUse --agent claude || true",
             "timeout": 60
           }
         ]
-      }
-    ],
-    "PreCompact": [
+      },
       {
-        "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "command -v oak >/dev/null 2>&1 && oak ci hook PreCompact --agent claude || true",
-            "timeout": 60
+            "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && node .agents/myco-run.cjs hook post-tool-use --symbiont claude-code",
+            "timeout": 5
           }
         ]
       }
@@ -76,28 +81,13 @@
             "timeout": 60
           }
         ]
-      }
-    ],
-    "SessionEnd": [
+      },
       {
-        "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "command -v oak >/dev/null 2>&1 && oak ci hook SessionEnd --agent claude || true",
-            "timeout": 60
-          }
-        ]
-      }
-    ],
-    "PostToolUseFailure": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "command -v oak >/dev/null 2>&1 && oak ci hook PostToolUseFailure --agent claude || true",
-            "timeout": 60
+            "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && node .agents/myco-run.cjs hook stop --symbiont claude-code",
+            "timeout": 30
           }
         ]
       }
@@ -112,6 +102,15 @@
             "timeout": 60
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && node .agents/myco-run.cjs hook subagent-start --symbiont claude-code",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "SubagentStop": [
@@ -122,6 +121,93 @@
             "type": "command",
             "command": "command -v oak >/dev/null 2>&1 && oak ci hook SubagentStop --agent claude || true",
             "timeout": 60
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && node .agents/myco-run.cjs hook subagent-stop --symbiont claude-code",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && node .agents/myco-run.cjs hook pre-tool-use --symbiont claude-code",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && node .agents/myco-run.cjs hook post-tool-use-failure --symbiont claude-code",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && node .agents/myco-run.cjs hook session-end --symbiont claude-code",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && node .agents/myco-run.cjs hook stop-failure --symbiont claude-code",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && node .agents/myco-run.cjs hook task-completed --symbiont claude-code",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && node .agents/myco-run.cjs hook pre-compact --symbiont claude-code",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"${CLAUDE_PROJECT_DIR:-.}\" && node .agents/myco-run.cjs hook post-compact --symbiont claude-code",
+            "timeout": 5
           }
         ]
       }

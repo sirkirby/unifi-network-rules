@@ -1,22 +1,7 @@
-notify = [
-    "oak",
-    "ci",
-    "notify",
-    "--agent",
-    "codex",
-]
+[mcp_servers.myco]
+command = "myco-run"
+args = ["mcp"]
+cwd = "."
 
-[otel]
-environment = "dev"
-log_user_prompt = true
-
-[otel.exporter.otlp-http]
-endpoint = "http://127.0.0.1:38567/v1/logs"
-protocol = "json"
-
-[mcp_servers.oak-ci]
-command = "oak"
-args = [
-    "ci",
-    "mcp",
-]
+[features]
+codex_hooks = true

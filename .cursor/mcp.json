@@ -1,9 +1,9 @@
 {
   "mcpServers": {
-    "oak-ci": {
-      "command": "oak",
+    "myco": {
+      "type": "stdio",
+      "command": "myco-run",
       "args": [
-        "ci",
         "mcp"
       ]
     }

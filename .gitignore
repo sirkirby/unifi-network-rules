@@ -224,3 +224,8 @@ oak/issue/**/context.json
 .oak/config.*.yaml
 
 .claude/settings.local.json
+
+# Myco managed (machine-specific)
+.agents/skills/myco-rules
+.agents/skills/myco
+.wrangler/

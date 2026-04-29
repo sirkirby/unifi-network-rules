@@ -4,11 +4,21 @@
     "sessionStart": [
       {
         "command": "command -v oak >/dev/null 2>&1 && oak ci hook sessionStart --agent cursor || true"
+      },
+      {
+        "command": "node .agents/myco-run.cjs hook session-start --symbiont cursor",
+        "type": "command",
+        "timeout": 10
       }
     ],
     "beforeSubmitPrompt": [
       {
         "command": "command -v oak >/dev/null 2>&1 && oak ci hook beforeSubmitPrompt --agent cursor || true"
+      },
+      {
+        "command": "node .agents/myco-run.cjs hook user-prompt-submit --symbiont cursor",
+        "type": "command",
+        "timeout": 5
       }
     ],
     "afterFileEdit": [
@@ -29,36 +39,65 @@
     "postToolUse": [
       {
         "command": "command -v oak >/dev/null 2>&1 && oak ci hook postToolUse --agent cursor || true"
-      }
-    ],
-    "preCompact": [
+      },
       {
-        "command": "command -v oak >/dev/null 2>&1 && oak ci hook preCompact --agent cursor || true"
+        "command": "node .agents/myco-run.cjs hook post-tool-use --symbiont cursor",
+        "type": "command",
+        "timeout": 5
       }
     ],
     "stop": [
       {
         "command": "command -v oak >/dev/null 2>&1 && oak ci hook stop --agent cursor || true"
+      },
+      {
+        "command": "node .agents/myco-run.cjs hook stop --symbiont cursor",
+        "type": "command",
+        "timeout": 30
       }
     ],
     "sessionEnd": [
       {
         "command": "command -v oak >/dev/null 2>&1 && oak ci hook sessionEnd --agent cursor || true"
-      }
-    ],
-    "postToolUseFailure": [
+      },
       {
-        "command": "command -v oak >/dev/null 2>&1 && oak ci hook postToolUseFailure --agent cursor || true"
+        "command": "node .agents/myco-run.cjs hook session-end --symbiont cursor",
+        "type": "command",
+        "timeout": 10
       }
     ],
     "subagentStart": [
       {
         "command": "command -v oak >/dev/null 2>&1 && oak ci hook subagentStart --agent cursor || true"
+      },
+      {
+        "command": "node .agents/myco-run.cjs hook subagent-start --symbiont cursor",
+        "type": "command",
+        "timeout": 5
       }
     ],
     "subagentStop": [
       {
         "command": "command -v oak >/dev/null 2>&1 && oak ci hook subagentStop --agent cursor || true"
+      },
+      {
+        "command": "node .agents/myco-run.cjs hook subagent-stop --symbiont cursor",
+        "type": "command",
+        "timeout": 10
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "node .agents/myco-run.cjs hook post-tool-use-failure --symbiont cursor",
+        "type": "command",
+        "timeout": 5
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "node .agents/myco-run.cjs hook pre-compact --symbiont cursor",
+        "type": "command",
+        "timeout": 5
       }
     ]
   }
