@@ -1,4 +1,4 @@
-homeassistant==2026.9.0
+homeassistant==2026.9.4
 aiofiles==25.1.0
 aiohttp==3.14.3
 aiounifi==95
