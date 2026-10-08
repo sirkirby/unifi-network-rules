@@ -11,8 +11,8 @@
     "loggers": ["aiounifi"],
     "quality_scale": "custom",
     "requirements": [
-        "aiofiles==25.1.0",
-        "aiounifi==95"
+        "aiofiles>=25.1.0",
+        "aiounifi>=95"
     ],
     "version": "4.4.8"
 }
