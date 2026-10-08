@@ -1,5 +1,6 @@
 """Tests for the UniFi Network Rules Firewall API functionality."""
 
+import logging
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -241,6 +242,57 @@ async def test_get_legacy_firewall_rules(api, firewall_rule_data):
     assert rule.id == "987654321"
     assert rule.name == "Legacy Rule"
     assert rule.enabled is True
+
+
+INVALID_OBJECT_RESPONSE = {"meta": {"rc": "error", "msg": "api.err.InvalidObject"}, "data": []}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_mock",
+    [
+        AsyncMock(return_value=INVALID_OBJECT_RESPONSE),
+        AsyncMock(side_effect=Exception("api.err.InvalidObject")),
+    ],
+    ids=["error_response", "raised_error"],
+)
+async def test_legacy_firewall_invalid_object_on_zone_based_site_is_quiet(api, request_mock, caplog):
+    """InvalidObject on a site with firewall zones is the expected zone-based case."""
+    api.controller.request = request_mock
+    api.create_api_request = Mock(return_value="mock_request")
+    api.get_firewall_zones = AsyncMock(return_value=[Mock()])
+
+    with caplog.at_level(logging.DEBUG):
+        assert await api.get_legacy_firewall_rules() == []
+        assert await api.get_legacy_firewall_rules() == []
+
+    api.get_firewall_zones.assert_awaited_once()
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_mock",
+    [
+        AsyncMock(return_value=INVALID_OBJECT_RESPONSE),
+        AsyncMock(side_effect=Exception("api.err.InvalidObject")),
+    ],
+    ids=["error_response", "raised_error"],
+)
+async def test_legacy_firewall_invalid_object_without_zones_warns_once(api, request_mock, caplog):
+    """InvalidObject on a legacy site points at account permissions and warns once."""
+    api.controller.request = request_mock
+    api.create_api_request = Mock(return_value="mock_request")
+    api.get_firewall_zones = AsyncMock(return_value=[])
+
+    with caplog.at_level(logging.DEBUG):
+        assert await api.get_legacy_firewall_rules() == []
+        assert await api.get_legacy_firewall_rules() == []
+
+    api.get_firewall_zones.assert_awaited_once()
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "non-owner" in warnings[0].getMessage()
 
 
 @pytest.mark.asyncio
