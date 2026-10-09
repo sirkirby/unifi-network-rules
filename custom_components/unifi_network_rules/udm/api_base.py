@@ -51,6 +51,7 @@ class UDMAPI:
         self._config = None  # Store config for delayed controller creation
         self._capabilities = None  # Store capabilities
         self._ws_message_handler = None
+        self._legacy_firewall_unavailable_reason: str | None = None
 
         # Rate limiting protection
         self._rate_limited = False

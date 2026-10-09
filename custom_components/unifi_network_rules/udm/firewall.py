@@ -158,15 +158,13 @@ class FirewallMixin:
             # Create a request to the legacy endpoint
             response = await self.controller.request(request)
 
-            # Check for both success response and the specific zone-based firewall "error" case
             if response and "data" in response:
-                # For devices migrated to zone-based firewalls, this is a known response
                 if (
                     "meta" in response
                     and response["meta"].get("rc") == "error"
                     and response["meta"].get("msg") == "api.err.InvalidObject"
                 ):
-                    LOGGER.debug("Legacy firewall rules not available - device likely using zone-based firewalls")
+                    await self._log_legacy_firewall_unavailable()
                     return []
 
                 # Convert raw dictionary data to FirewallRule objects - use model's static method
@@ -184,12 +182,39 @@ class FirewallMixin:
 
             # Check if this is the "api.err.InvalidObject" error
             if "api.err.InvalidObject" in err_str:
-                LOGGER.debug("Legacy firewall rules not available - device likely using zone-based firewalls")
+                await self._log_legacy_firewall_unavailable()
                 return []
 
             # Log other errors
             LOGGER.error("Get legacy firewall rules failed: %s", err_str)
             return []
+
+    async def _log_legacy_firewall_unavailable(self) -> None:
+        """Explain why the legacy firewall rules endpoint returned api.err.InvalidObject.
+
+        The controller answers both zone-based sites and accounts that cannot read
+        legacy rules (such as invited, non-owner admins) with this error, so the
+        presence of firewall zones decides which one applies. The verdict is cached
+        so the zone lookup and warning happen once per API instance.
+        """
+        if self._legacy_firewall_unavailable_reason is None:
+            zones = await self.get_firewall_zones()
+            if zones:
+                self._legacy_firewall_unavailable_reason = "zone_based"
+            else:
+                self._legacy_firewall_unavailable_reason = "access_denied"
+                LOGGER.warning(
+                    "Legacy firewall rules endpoint returned api.err.InvalidObject, but no firewall zones were "
+                    "found, so this site appears to use legacy firewall rules. The configured UniFi account may "
+                    "not be allowed to read them (seen with invited, non-owner admin accounts). Legacy firewall "
+                    "rule switches will be unavailable; use the site owner account to manage them."
+                )
+                return
+
+        if self._legacy_firewall_unavailable_reason == "zone_based":
+            LOGGER.debug("Legacy firewall rules not available - controller uses zone-based firewall")
+        else:
+            LOGGER.debug("Legacy firewall rules not readable by this account (api.err.InvalidObject)")
 
     async def add_legacy_firewall_rule(self, rule_data: dict[str, Any]) -> FirewallRule | None:
         """Add a new legacy firewall rule."""
