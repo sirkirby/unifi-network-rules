@@ -666,6 +666,18 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
             self.mark_pending_operation(not enable)
             self.async_write_ha_state()
 
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Opt in to in-place entity_id changes (HA 2026.11+).
+
+        Home Assistant keeps the remove-and-re-add behavior for integration classes that define
+        lifecycle methods (this class does) unless they define this hook. Nothing here is keyed
+        on entity_id (tracking uses unique_id), so no work is needed beyond opting in. The base
+        method does not exist on older Home Assistant versions, hence the guard.
+        """
+        if hasattr(super(), "async_entity_id_changed"):
+            super().async_entity_id_changed(old_entity_id)
+
     async def async_will_remove_from_hass(self) -> None:
         """Handle entity cleanup when removed from Home Assistant."""
         LOGGER.debug("Entity %s cleaning up before removal from Home Assistant", self.entity_id)
@@ -678,8 +690,8 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
 
         # Clean up internal entity tracking dictionary
         entity_dict = self.hass.data.get(DOMAIN, {}).get("entities", {})
-        if self.entity_id in entity_dict:
-            del entity_dict[self.entity_id]
+        if self.unique_id in entity_dict:
+            del entity_dict[self.unique_id]
             LOGGER.debug("Removed %s from internal entity tracking.", self.entity_id)
 
         # Clean up global _CREATED_UNIQUE_IDS set (if still used)
@@ -735,11 +747,8 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
         if self._linked_child_ids:
             children_to_remove = list(self._linked_child_ids)
             for child_unique_id in children_to_remove:
-                child_entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, child_unique_id)
-                child_entity = None
-                if child_entity_id:
-                    # Look up child entity instance from hass.data
-                    child_entity = self.hass.data.get(DOMAIN, {}).get("entities", {}).get(child_entity_id)
+                # Entities are keyed by unique_id, which survives in-place entity_id changes
+                child_entity = self.hass.data.get(DOMAIN, {}).get("entities", {}).get(child_unique_id)
 
                 if child_entity and hasattr(child_entity, "async_initiate_self_removal"):
                     try:
@@ -749,12 +758,13 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
                             "%s(%s): Error requesting self-removal for child entity %s (%s): %s",
                             type(self).__name__,
                             entity_id_for_log,
-                            child_entity_id or child_unique_id,
+                            getattr(child_entity, "entity_id", None) or child_unique_id,
                             child_unique_id,
                             child_err,
                         )
                 else:
                     # Fallback: Child object not found or doesn't have the method. Remove directly from registry.
+                    child_entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, child_unique_id)
                     if child_entity_id and entity_registry.async_get(child_entity_id):
                         try:
                             entity_registry.async_remove(child_entity_id)
@@ -825,7 +835,7 @@ class UnifiRuleSwitch(CoordinatorEntity[UnifiRuleUpdateCoordinator], SwitchEntit
             self.hass.data[DOMAIN] = {}
         if "entities" not in self.hass.data[DOMAIN]:
             self.hass.data[DOMAIN]["entities"] = {}
-        self.hass.data[DOMAIN]["entities"][self.entity_id] = self
+        self.hass.data[DOMAIN]["entities"][self.unique_id] = self
         LOGGER.debug("Stored entity %s in hass.data[%s]['entities']", self.entity_id, DOMAIN)
 
         # Perform global unique ID tracking here
