@@ -3,7 +3,7 @@ from homeassistant.core import HomeAssistant
 
 
 @pytest.fixture
-async def hass(event_loop):
+async def hass():
     """Fixture to provide a test instance of Home Assistant."""
     hass = HomeAssistant(config_dir="/tmp")
     hass.config.components.add("unifi_network_rules")
